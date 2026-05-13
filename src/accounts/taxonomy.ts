@@ -1,0 +1,207 @@
+export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
+
+export type InstitutionKind =
+  | "bank"
+  | "card_issuer"
+  | "wallet"
+  | "payment_rail"
+  | "broker"
+  | "crypto_exchange"
+  | "insurer"
+  | "gov"
+  | "telco"
+  | "utility";
+
+export interface ThaiInstitution {
+  code: string;
+  label: string;
+  kind: InstitutionKind;
+  /** Optional disambiguating note for the AI (mergers, rebrands, regulatory status). */
+  notes?: string;
+}
+
+export const THAI_BANKS: ThaiInstitution[] = [
+  { code: "KBANK", label: "Kasikornbank", kind: "bank" },
+  { code: "SCB", label: "Siam Commercial Bank", kind: "bank" },
+  { code: "BBL", label: "Bangkok Bank", kind: "bank" },
+  { code: "KTB", label: "Krungthai Bank", kind: "bank", notes: "State-owned." },
+  { code: "BAY", label: "Krungsri (Bank of Ayudhya)", kind: "bank" },
+  { code: "TTB", label: "TMBThanachart Bank", kind: "bank", notes: "Result of TMB + Thanachart merger." },
+  { code: "UOB-TH", label: "UOB Thailand", kind: "bank", notes: "Absorbed Citi Thailand's consumer banking (incl. cards) in Nov 2022." },
+  { code: "CIMB-TH", label: "CIMB Thai", kind: "bank" },
+  { code: "GHB", label: "Government Housing Bank", kind: "bank", notes: "State-owned, mortgage focus." },
+  { code: "GSB", label: "Government Savings Bank", kind: "bank", notes: "State-owned." },
+  { code: "LH-BANK", label: "Land and Houses Bank", kind: "bank" },
+  { code: "KKP", label: "Kiatnakin Phatra Bank", kind: "bank", notes: "Merged 2020 from KK + Phatra." },
+  { code: "TISCO", label: "TISCO Bank", kind: "bank" },
+  { code: "IBT", label: "Islamic Bank of Thailand", kind: "bank", notes: "State-owned; serves all customers." },
+  { code: "ICBC-TH", label: "ICBC (Thai)", kind: "bank", notes: "Subsidiary of ICBC China." },
+  { code: "BAAC", label: "Bank for Agriculture and Agricultural Cooperatives", kind: "bank", notes: "State-owned, rural finance." },
+];
+
+export const THAI_CARD_ISSUERS: ThaiInstitution[] = [
+  { code: "KTC", label: "Krungthai Card", kind: "card_issuer", notes: "Listed subsidiary of KTB." },
+  { code: "AEON", label: "AEON Thana Sinsap", kind: "card_issuer" },
+  { code: "FIRSTCHOICE", label: "Krungsri First Choice", kind: "card_issuer" },
+  { code: "CITI-TH", label: "Citibank Thailand", kind: "card_issuer", notes: "Consumer cards migrated to UOB-TH in Nov 2022; only historical statements still reference Citi." },
+  { code: "AMEX-TH", label: "American Express Thailand", kind: "card_issuer" },
+  { code: "CARDX", label: "CardX", kind: "card_issuer", notes: "SCB X consumer-card spinoff; issues cards previously branded SCB." },
+  { code: "DINERS", label: "Diners Club Thailand", kind: "card_issuer" },
+  { code: "UOB-TH", label: "UOB Thailand (Cards)", kind: "card_issuer", notes: "Same legal entity as the bank UOB-TH; now issues both its own card line (UOB Yolo, UOB Premier) and the migrated Citi consumer cards." },
+];
+
+export const THAI_WALLETS: ThaiInstitution[] = [
+  { code: "TRUEMONEY", label: "TrueMoney Wallet", kind: "wallet" },
+  { code: "LINEPAY", label: "Rabbit LINE Pay", kind: "wallet" },
+  { code: "SHOPEEPAY", label: "ShopeePay", kind: "wallet" },
+  { code: "GRABPAY", label: "GrabPay (Thailand)", kind: "wallet" },
+  { code: "DOLFIN", label: "Dolfin Wallet", kind: "wallet", notes: "Central Group + JD.com joint venture." },
+  { code: "MPAY", label: "mPay", kind: "wallet", notes: "AIS-operated." },
+  { code: "PAOTANG", label: "Paotang", kind: "wallet", notes: "Krungthai-operated; government-benefits and tax e-wallet." },
+];
+
+export const THAI_PAYMENT_RAILS: ThaiInstitution[] = [
+  { code: "PROMPTPAY", label: "PromptPay", kind: "payment_rail", notes: "National 24/7 interbank rail; appears on transfer slips, not an issuer." },
+];
+
+export const THAI_BROKERS: ThaiInstitution[] = [
+  { code: "INNOVESTX", label: "InnovestX Securities", kind: "broker", notes: "Former SCBS; SCBX subsidiary." },
+  { code: "BLS", label: "Bualuang Securities", kind: "broker", notes: "BBL subsidiary." },
+  { code: "KS", label: "Kasikorn Securities", kind: "broker", notes: "KBANK subsidiary." },
+  { code: "KGI-TH", label: "KGI Securities (Thailand)", kind: "broker" },
+  { code: "MAYBANK-SEC", label: "Maybank Securities (Thailand)", kind: "broker" },
+  { code: "ASP", label: "Asia Plus Securities", kind: "broker" },
+  { code: "TISCO-SEC", label: "TISCO Securities", kind: "broker" },
+  { code: "KSS", label: "Krungsri Securities", kind: "broker", notes: "BAY subsidiary." },
+  { code: "KKPS", label: "Kiatnakin Phatra Securities", kind: "broker", notes: "KKP subsidiary." },
+  { code: "LH-SEC", label: "Land and Houses Securities", kind: "broker" },
+  { code: "FINANSIA", label: "Finansia Syrus Securities", kind: "broker" },
+  { code: "YUANTA-TH", label: "Yuanta Securities (Thailand)", kind: "broker" },
+  { code: "DBSVICKERS", label: "DBS Vickers Securities (Thailand)", kind: "broker" },
+  { code: "KTBST", label: "Krungthai Xspring Securities", kind: "broker", notes: "Formerly KTBST; KTB-affiliated." },
+];
+
+export const THAI_CRYPTO_EXCHANGES: ThaiInstitution[] = [
+  { code: "BITKUB", label: "Bitkub Exchange", kind: "crypto_exchange", notes: "SEC-licensed; dominant market share." },
+  { code: "UPBIT-TH", label: "Upbit Thailand", kind: "crypto_exchange", notes: "SEC-licensed; subsidiary of South Korean Upbit." },
+  { code: "ORBIX", label: "Orbix Trade", kind: "crypto_exchange", notes: "Former Satang Pro; rebranded under KBank ownership." },
+  { code: "GULF-BINANCE", label: "Binance Thailand (Gulf Binance)", kind: "crypto_exchange", notes: "Binance + Gulf Innova JV; SEC-licensed." },
+  { code: "KUCOIN-TH", label: "KuCoin Thailand", kind: "crypto_exchange", notes: "Former ERX; rebranded 2025 after KuCoin acquisition." },
+  { code: "WAANX", label: "WaanX", kind: "crypto_exchange", notes: "SEC-licensed." },
+  { code: "TDX", label: "Thai Digital Assets Exchange", kind: "crypto_exchange", notes: "SET Group subsidiary." },
+  { code: "GMO-Z-EX", label: "Z.com EX (GMO-Z.com)", kind: "crypto_exchange", notes: "Japanese GMO subsidiary." },
+  { code: "ZIPMEX", label: "Zipmex", kind: "crypto_exchange", notes: "Defunct since Nov 2023; statements only appear in historical files." },
+];
+
+export const THAI_INSURERS: ThaiInstitution[] = [
+  // Life
+  { code: "AIA-TH", label: "AIA Thailand", kind: "insurer", notes: "Life; market leader." },
+  { code: "MUANG-THAI-LIFE", label: "Muang Thai Life Insurance", kind: "insurer", notes: "Life." },
+  { code: "THAI-LIFE", label: "Thai Life Insurance", kind: "insurer", notes: "Life; listed (TLI)." },
+  { code: "FWD-TH", label: "FWD Thailand", kind: "insurer", notes: "Life." },
+  { code: "ALLIANZ-AYUDHYA-LIFE", label: "Allianz Ayudhya Assurance", kind: "insurer", notes: "Life; Allianz + BAY JV." },
+  { code: "KTAXA", label: "Krungthai-AXA Life", kind: "insurer", notes: "Life; KTB + AXA JV." },
+  { code: "BANGKOK-LIFE", label: "Bangkok Life Assurance", kind: "insurer", notes: "Life." },
+  { code: "CHUBB-SAMAGGI", label: "Chubb Samaggi Insurance", kind: "insurer", notes: "Life and non-life." },
+  { code: "GENERALI-TH", label: "Generali Thailand", kind: "insurer", notes: "Life." },
+  // Non-life
+  { code: "DHIPAYA", label: "Dhipaya Insurance", kind: "insurer", notes: "Non-life." },
+  { code: "BANGKOK-INS", label: "Bangkok Insurance", kind: "insurer", notes: "Non-life." },
+  { code: "ALLIANZ-AYUDHYA-GENERAL", label: "Allianz Ayudhya General Insurance", kind: "insurer", notes: "Non-life." },
+  { code: "VIRIYAH", label: "Viriyah Insurance", kind: "insurer", notes: "Non-life; #1 motor insurer." },
+  { code: "TOKIO-MARINE", label: "Tokio Marine (Thailand)", kind: "insurer", notes: "Non-life." },
+];
+
+export const THAI_GOV: ThaiInstitution[] = [
+  { code: "REVDEPT", label: "Revenue Department (กรมสรรพากร)", kind: "gov", notes: "Income tax, VAT, excise." },
+  { code: "SSO", label: "Social Security Office (สำนักงานประกันสังคม)", kind: "gov", notes: "Employee + self-employed social security contributions." },
+  { code: "BOT", label: "Bank of Thailand", kind: "gov", notes: "Central bank; rarely on consumer statements outside of regulatory letters." },
+  { code: "MOF", label: "Ministry of Finance", kind: "gov" },
+  { code: "LDT", label: "Department of Lands (กรมที่ดิน)", kind: "gov", notes: "Land registration, property tax." },
+  { code: "CUSTOMS", label: "Customs Department (กรมศุลกากร)", kind: "gov", notes: "Import/export duties." },
+];
+
+export const THAI_UTILITIES: ThaiInstitution[] = [
+  { code: "MEA", label: "Metropolitan Electricity Authority (กฟน.)", kind: "utility", notes: "Electricity for Bangkok, Nonthaburi, Samut Prakan." },
+  { code: "PEA", label: "Provincial Electricity Authority (กฟภ.)", kind: "utility", notes: "Electricity for the rest of Thailand outside MEA's area." },
+  { code: "MWA", label: "Metropolitan Waterworks Authority (กปน.)", kind: "utility", notes: "Water for Bangkok, Nonthaburi, Samut Prakan." },
+  { code: "PWA", label: "Provincial Waterworks Authority (กปภ.)", kind: "utility", notes: "Water for the rest of Thailand." },
+  { code: "EGAT", label: "Electricity Generating Authority of Thailand (กฟผ.)", kind: "utility", notes: "Power generation; rarely appears on consumer bills directly." },
+];
+
+export const THAI_TELCOS: ThaiInstitution[] = [
+  { code: "AIS", label: "Advanced Info Service (AIS)", kind: "telco" },
+  { code: "TRUE-CORP", label: "True Corporation", kind: "telco", notes: "Merged entity of True + dtac since March 2023." },
+  { code: "TRUEMOVE", label: "TrueMove H", kind: "telco", notes: "Brand retained under TRUE-CORP per NBTC ruling." },
+  { code: "DTAC", label: "dtac", kind: "telco", notes: "Brand retained under TRUE-CORP per NBTC ruling." },
+  { code: "NT", label: "National Telecom (NT)", kind: "telco", notes: "Former TOT; state-owned, minimal consumer presence." },
+];
+
+export const ALL_THAI_INSTITUTIONS: ThaiInstitution[] = [
+  ...THAI_BANKS,
+  ...THAI_CARD_ISSUERS,
+  ...THAI_WALLETS,
+  ...THAI_PAYMENT_RAILS,
+  ...THAI_BROKERS,
+  ...THAI_CRYPTO_EXCHANGES,
+  ...THAI_INSURERS,
+  ...THAI_GOV,
+  ...THAI_TELCOS,
+  ...THAI_UTILITIES,
+];
+
+export const ACCOUNT_TYPE_DESCRIPTIONS: Record<AccountType, string> = {
+  asset: "Bank accounts, cash, prepaid wallets, receivables.",
+  liability: "Credit cards, loans, mortgages, money the user owes.",
+  income: "Salary, side income, dividends, refunds.",
+  expense: "Spending categories (food, transport, utilities, etc.).",
+  equity: "Owner's equity / opening balance equity (for reconciliation).",
+};
+
+export const SUGGESTED_ASSET_SUBTYPES = [
+  "bank",
+  "cash",
+  "wallet",
+  "prepaid_card",
+  "brokerage",
+  "crypto",
+  "receivable",
+];
+
+export const SUGGESTED_LIABILITY_SUBTYPES = [
+  "credit_card",
+  "home_loan",
+  "auto_loan",
+  "personal_loan",
+  "student_loan",
+  "revolving",
+  "deferred_income",
+];
+
+export const SUGGESTED_EXPENSE_SUBTYPES = [
+  "food",
+  "transport",
+  "utilities",
+  "rent",
+  "housing",
+  "healthcare",
+  "entertainment",
+  "shopping",
+  "subscriptions",
+  "education",
+  "travel",
+  "fees_and_interest",
+  "tax",
+  "insurance",
+  "other",
+];
+
+export const SUGGESTED_INCOME_SUBTYPES = [
+  "salary",
+  "bonus",
+  "freelance",
+  "interest",
+  "dividend",
+  "refund",
+  "other",
+];

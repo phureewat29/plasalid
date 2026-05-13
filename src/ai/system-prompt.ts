@@ -4,7 +4,7 @@ import { getMemories } from "./memory.js";
 import { readContext } from "./context.js";
 import { stripControls } from "./sanitize.js";
 import { getAccountBalances } from "../db/queries/account_balance.js";
-import { getThaiTaxonomyHint } from "./thai-taxonomy-hint.js";
+import { getThaiTaxonomyHint } from "../accounts/taxonomy.js";
 
 function chatPersona(name: string): string {
   return `You are Plasalid, ${name}'s local-first data layer for personal finance. You answer ${name}'s questions about their own financial data — what's in the encrypted local database that Plasalid's scan pipeline built from their statements, and what ${name} has told you about themselves in the personal context block below.

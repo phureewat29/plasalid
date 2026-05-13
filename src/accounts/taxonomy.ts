@@ -205,3 +205,23 @@ export const SUGGESTED_INCOME_SUBTYPES = [
   "refund",
   "other",
 ];
+
+/**
+ * Stringified Thai taxonomy block for the scan/reconcile system prompts.
+ * Lists known Thai institutions and suggested subtypes so the model picks
+ * consistent `bank_name` and `subtype` values across statements.
+ */
+export function getThaiTaxonomyHint(): string {
+  const institutions = ALL_THAI_INSTITUTIONS
+    .map(i => `${i.code} (${i.label}, ${i.kind})${i.notes ? ` — ${i.notes}` : ""}`)
+    .join("\n");
+  return [
+    `Known Thai institutions:`,
+    institutions,
+    ``,
+    `Suggested asset subtypes: ${SUGGESTED_ASSET_SUBTYPES.join(", ")}`,
+    `Suggested liability subtypes: ${SUGGESTED_LIABILITY_SUBTYPES.join(", ")}`,
+    `Suggested expense subtypes: ${SUGGESTED_EXPENSE_SUBTYPES.join(", ")}`,
+    `Suggested income subtypes: ${SUGGESTED_INCOME_SUBTYPES.join(", ")}`,
+  ].join("\n");
+}

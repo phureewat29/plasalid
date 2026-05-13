@@ -7,14 +7,11 @@
   "keywords": [
     "finance",
     "personal-finance",
-    "data-layer",
     "aggregator",
     "parser",
     "cli",
     "ai",
-    "bookkeeping",
-    "double-entry",
-    "local-first"
+    "local"
   ],
   "engines": {
     "node": ">=18"

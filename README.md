@@ -5,28 +5,34 @@
 </p>
 
 <p align="center">
-  <em>Turn the financial documents you already receive into a queryable dataset.</em>
+  Turn the financial documents into a queryable dataset.
 </p>
 
 
 <br />
 
-Plasalid turns the financial documents you already receive — bank statements, credit-card statements — into a queryable, double-entry database on your own machine. Drop PDFs into a directory, run `plasalid scan`, Plasalid will scans each file into balanced journal entries. So you can query, chat with, or feed as harness to other intelligence tools.
+Plasalid turns the financial documents you already receive — bank statements, credit-card statements — into a queryable, double-entry database on your own machine. Drop PDFs into a directory, run `plasalid scan`, and Plasalid extracts each file into balanced journal entries. From there, query it, chat with it, or hand it off to other AI tools as a data harness to build on.
 
-Plasalid exists because in markets like Thailand there's no data aggregator platform likePlaid: financial data is locked inside banks and government agencies. Hence, Thai fintech can't move forward when the underlying data layer is closed. Until that infrastructure opens up, Plasalid lets individuals be their own aggregator — locally, from the artifacts they already control.
+Plasalid exists because in markets like Thailand there's no Plaid: financial data is locked inside banks and government agencies. Fintech can't move forward when the underlying data layer is closed — and AI agents can't help you with money they can't see. Until that infrastructure opens up, Plasalid lets individuals be their own aggregator: locally, from the artifacts they already control, and feeds the result to whatever AI tools they want.
 
 ## Features
+
+### A data harness AI can plug into
+
+- **The missing aggregator** — In markets without Plaid, there's no bank API that easy to access. Plasalid turns the documents you already receive into a database that machine can read, so the data layer stops being the blocker.
+- **Composable substrate** — Plasalid's local SQLite is plain, queryable double-entry data. Any tool that can read SQLite — Claude Code, MCP servers, your own scripts, dashboards — can build automations, alerts, exporters, or personalized analyses on top, with no further integration work.
+- **No vendor lock, no rate limits** — Standard accounts and journal lines, your encryption key, your machine. Nothing to revoke, throttle, or paywall.
 
 ### Drop documents in, get structured data out
 
 - **Encrypted PDFs handled inline** — Statement password-protected? Plasalid prompts you once, then remembers the password (encrypted at rest) under a filename pattern so the next month's statement unlocks silently.
-- **Asks instead of guessing** — Ambiguous row? The scanner pauses and prompts you back for clarity.
+- **Asks instead of guessing** — Ambiguous row? The scanner pauses and prompts you.
 - **Idempotent scan** — Files are hashed; re-running `plasalid scan` skips what it already scanned. `--force` cascade-deletes prior records before re-scanning.
 - **Learns your statements** — Per-bank scanning hints persist across runs (the AI saves them in a local memory table) so each new statement scans more accurately than the last.
 
 ### Correctness, not vibes
 
-- **Double-entry bookkeeping** — Every transaction balances. Enforced in code and financial standards.
+- **Double-entry bookkeeping** — Every transaction balances enforced by standard double-entry accounting.
 - **Account metadata preserved** — Bank, masked number, statement day, due day, points.
 - **Dates normalized** — ISO Gregorian; Buddhist-Era dates converted automatically.
 - **Reconcile pass** — `plasalid reconcile` surfaces duplicate entries, similar accounts, and unused accounts; merges, renames, and deletes happen only after explicit confirmation. `--dry-run` previews without writing.
@@ -141,7 +147,7 @@ PLASALID_DATA_DIR=            # Default: ~/.plasalid/data
 ## Contributing
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/phureewat29/plasalid
 cd plasalid
 npm install
 npm run build

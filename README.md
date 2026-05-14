@@ -72,7 +72,7 @@ plasalid setup
 
 Then:
 
-1. Drop any PDFs anywhere under `~/.plasalid/data/`. Subfolders are allowed but not interpreted — the AI infers account type from the document.
+1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
 2. Run `plasalid scan` and answer any clarifying questions inline.
 3. Run `plasalid` to chat with what was scanned.
 

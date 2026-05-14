@@ -13,9 +13,9 @@
 
 Plasalid lets you actually *talk* to your money. Drop your bank and credit-card statement PDFs into a folder. Plasalid scans every transaction, every balance, every late fee into a double-entry database on your own machine. Then you chat with it — an AI that's read every line and tells you, sharply and proactively, what's going on. Local, private, yours.
 
-Plasalid exists because in markets like Thailand there's no Plaid. In the US, a single API gives apps a live view of every balance and transaction across all your accounts — one complete picture of your money. In Thailand, knowing where you stand means logging into five different bank apps in sequence and opening password-protected statement PDFs one by one. Most people just don't bother. And most people can't afford a financial advisor to do it for them either.
+Plasalid exists because in markets like Thailand there's no Plaid. In the US, a single API gives apps a live view of every balance and transaction across all your accounts — one complete picture of your money. In Thailand, knowing where you stand means logging into five different bank apps in sequence one by one. Most people just don't bother. And most people can't afford a financial advisor to do it for them either. The result is people fly blind with their own money — and grow careless with it. Bills slip past, small leaks compound, and the first real look tends to come after something has already gone wrong.
 
-Personal finance isn't taught well in Thai schools. Fee-based advisors are out of reach for most households. The loudest "advice" channels are bank salespeople pitching their employer's products. The result: over **5 million Thais** are already flagged as non-performing borrowers, and a generation that wants to manage money better has nowhere accessible to learn how. Plasalid's bet is that capable AI changes that. The same intelligence that reads your statements can explain what the numbers mean. It flags what's about to go wrong. It coaches you through real decisions — debt, budget, savings.
+In addition, personal finance isn't taught well in Thai schools. Fee-based advisors are out of reach for most households. The loudest "advice" channels are bank salespeople pitching their employer's products. The result: over **5 million Thais** are already flagged as non-performing borrowers, and a generation that wants to manage money better has nowhere accessible to learn how. Plasalid's bet is that capable AI changes that. The same intelligence that reads your statements can explain what the numbers mean. It flags what's about to go wrong. It coaches you through real decisions — debt, budget, savings.
 
 And when survival isn't the question anymore, the same Plasalid can scales up with you. Saving for a trip. Building an emergency fund. Choosing investments. Planning a down payment or retirement. Working toward the freedom to walk away from a bad job. From getting out of debt to financial freedom, Plasalid grows with you.
 
@@ -46,7 +46,7 @@ And when survival isn't the question anymore, the same Plasalid can scales up wi
 
 - **Double-entry bookkeeping** — Every transaction balances enforced by standard double-entry accounting.
 - **Account metadata preserved** — Bank, masked number, statement day, due day, points.
-- **Dates normalized** — ISO Gregorian; Buddhist-Era dates converted automatically.
+- **Dates normalized** — ISO Gregorian; Localization dates converted automatically.
 - **Reconcile pass** — `plasalid reconcile` surfaces duplicate entries, similar accounts, and unused accounts; merges, renames, and deletes happen only after explicit confirmation. `--dry-run` previews without writing.
 
 ### Your data never leaves your machine

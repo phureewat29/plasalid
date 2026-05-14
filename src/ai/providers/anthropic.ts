@@ -13,6 +13,7 @@ export function createAnthropicProvider(opts: {
 
   return {
     name: "anthropic",
+    supportsThinking: true,
 
     async sendMessage(params: SendMessageParams): Promise<NormalizedResponse> {
       const apiParams: any = {

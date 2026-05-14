@@ -6,6 +6,9 @@ import { homedir } from "os";
 export interface PlasalidConfig {
   anthropicKey: string;
   model: string;
+  providerType: "anthropic" | "openai-compatible";
+  openaiCompatibleKey: string;
+  openaiCompatibleBaseURL: string;
   displayLocale: string;
   displayCurrency: string;
   dbPath: string;
@@ -41,14 +44,22 @@ function loadFileConfig(): Partial<PlasalidConfig> {
 
 function buildConfig(): PlasalidConfig {
   const file = loadFileConfig();
+  // Precedence: env > file > default. Env is checked first so a shell-exported
+  // override always wins over whatever is in ~/.plasalid/config.json.
   return {
-    anthropicKey: file.anthropicKey || process.env.ANTHROPIC_API_KEY || "",
-    model: file.model || process.env.PLASALID_MODEL || "claude-sonnet-4-6",
+    anthropicKey: process.env.ANTHROPIC_API_KEY || file.anthropicKey || "",
+    model: process.env.PLASALID_MODEL || file.model || "claude-sonnet-4-6",
+    providerType:
+      (process.env.PLASALID_PROVIDER as PlasalidConfig["providerType"]) ||
+      (file.providerType as PlasalidConfig["providerType"]) ||
+      "anthropic",
+    openaiCompatibleKey: process.env.OPENAI_COMPATIBLE_API_KEY || file.openaiCompatibleKey || "",
+    openaiCompatibleBaseURL: process.env.OPENAI_COMPATIBLE_BASE_URL || file.openaiCompatibleBaseURL || "",
     displayLocale: file.displayLocale || "th-TH",
     displayCurrency: file.displayCurrency || "THB",
-    dbPath: file.dbPath || process.env.PLASALID_DB_PATH || resolve(PLASALID_DIR, "db.sqlite"),
-    dbEncryptionKey: file.dbEncryptionKey || process.env.PLASALID_DB_ENCRYPTION_KEY || "",
-    dataDir: file.dataDir || process.env.PLASALID_DATA_DIR || resolve(PLASALID_DIR, "data"),
+    dbPath: process.env.PLASALID_DB_PATH || file.dbPath || resolve(PLASALID_DIR, "db.sqlite"),
+    dbEncryptionKey: process.env.PLASALID_DB_ENCRYPTION_KEY || file.dbEncryptionKey || "",
+    dataDir: process.env.PLASALID_DATA_DIR || file.dataDir || resolve(PLASALID_DIR, "data"),
     userName: file.userName || "User",
     thinkingBudget: file.thinkingBudget ?? 8000,
   };
@@ -57,6 +68,9 @@ function buildConfig(): PlasalidConfig {
 export const config = buildConfig();
 
 export function isConfigured(): boolean {
+  if (config.providerType === "openai-compatible") {
+    return !!config.openaiCompatibleBaseURL;
+  }
   return !!config.anthropicKey;
 }
 

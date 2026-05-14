@@ -19,7 +19,7 @@ export async function startChat(): Promise<void> {
   if (accountCount.n === 0) {
     console.log(
       chalk.yellow(
-        "No accounts scanned yet. Run `plasalid data` to open the data folder, drop PDFs in, then run `plasalid scan`.",
+        "No accounts scanned yet. Run `plasalid data` to drop your bank/credit card statements in, then run `plasalid scan`.",
       ),
     );
     console.log("");

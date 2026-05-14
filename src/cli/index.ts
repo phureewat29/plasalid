@@ -115,12 +115,12 @@ program
   });
 
 program
-  .command("undo <regex>")
+  .command("revert <regex>")
   .description("Delete scanned files matching <regex> and all their journal entries")
   .action(async (regex) => {
     ensureConfigured();
-    const { runUndoCommand } = await import("./commands/undo.js");
-    await runUndoCommand(regex);
+    const { runRevertCommand } = await import("./commands/revert.js");
+    await runRevertCommand(regex);
   });
 
 program.configureHelp({
@@ -132,7 +132,7 @@ program.configureHelp({
     { name: "transactions", desc: "List journal lines (filter by account/date/text)" },
     { name: "scan", desc: "Scan new PDFs (optionally by regex; --force to re-scan)" },
     { name: "reconcile", desc: "Review and fix existing journal entries / accounts" },
-    { name: "undo", desc: "Delete scanned files matching <regex> and their journal entries" },
+    { name: "revert", desc: "Delete scanned files matching <regex> and their journal entries" },
   ]),
 });
 

@@ -22,10 +22,6 @@ const provider = createProvider();
 
 const MAX_TOOL_STEPS = 20;
 
-function supportsThinking(model: string): boolean {
-  return /sonnet-4|opus-4/i.test(model);
-}
-
 export type ProgressCallback = (event: {
   phase: "tool" | "responding";
   toolName?: string;
@@ -62,7 +58,7 @@ async function runAgent({
   maxToolSteps,
 }: RunAgentArgs): Promise<{ text: string; messages: NormalizedMessage[] }> {
   const messages: NormalizedMessage[] = [...initialMessages];
-  const useThinking = config.thinkingBudget > 0 && supportsThinking(config.model);
+  const useThinking = config.thinkingBudget > 0 && provider.supportsThinking;
   const throwIfAborted = () => {
     if (signal?.aborted) throw new AbortedError();
   };

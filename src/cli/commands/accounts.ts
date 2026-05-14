@@ -2,10 +2,16 @@ import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
 import { getAccountBalances } from "../../db/queries/account_balance.js";
 import { formatCurrencyAmount } from "../../currency.js";
-import type { AccountBalance, AccountType } from "../../db/queries/account_balance.js";
+import type {
+  AccountBalance,
+  AccountType,
+} from "../../db/queries/account_balance.js";
 
 function fmtSigned(n: number): string {
-  const body = formatCurrencyAmount(n, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const body = formatCurrencyAmount(n, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
   return n < 0 ? `-${body}` : body;
 }
 
@@ -16,16 +22,20 @@ function visibleLength(s: string): number {
 }
 
 const TYPE_TAG: Record<AccountType, string> = {
-  asset:     "asset",
+  asset: "asset",
   liability: "liab",
-  income:    "income",
-  expense:   "expense",
-  equity:    "equity",
+  income: "income",
+  expense: "expense",
+  equity: "equity",
 };
 const TYPE_TAG_WIDTH = 8;
 
 const TYPE_RANK: Record<AccountType, number> = {
-  asset: 0, liability: 1, income: 2, expense: 3, equity: 4,
+  asset: 0,
+  liability: 1,
+  income: 2,
+  expense: 3,
+  equity: 4,
 };
 
 function compactMeta(a: AccountBalance): string[] {
@@ -47,25 +57,33 @@ export function showAccounts(): void {
     return t !== 0 ? t : a.name.localeCompare(b.name);
   });
   if (accounts.length === 0) {
-    console.log(chalk.yellow("No accounts yet. Drop PDFs into ~/.plasalid/data/ and run `plasalid scan`."));
+    console.log(
+      chalk.yellow(
+        "No accounts yet. Drop your bank/credit card statements into ~/.plasalid/data/ and run `plasalid scan`.",
+      ),
+    );
     return;
   }
 
-  const balanceWidth = Math.max(...accounts.map(a => fmtSigned(a.balance).length));
-  const nameWidth = Math.max(...accounts.map(a => a.name.length));
+  const balanceWidth = Math.max(
+    ...accounts.map((a) => fmtSigned(a.balance).length),
+  );
+  const nameWidth = Math.max(...accounts.map((a) => a.name.length));
 
   for (const a of accounts) {
     const tag = chalk.dim(TYPE_TAG[a.type].padEnd(TYPE_TAG_WIDTH));
     const name = chalk.bold(a.name) + " ".repeat(nameWidth - a.name.length);
     const rawBalance = fmtSigned(a.balance);
     const coloredBalance = a.balance < 0 ? chalk.red(rawBalance) : rawBalance;
-    const paddedBalance = " ".repeat(balanceWidth - visibleLength(coloredBalance)) + coloredBalance;
+    const paddedBalance =
+      " ".repeat(balanceWidth - visibleLength(coloredBalance)) + coloredBalance;
     const meta = compactMeta(a);
     const metaStr = meta.length ? `   ${chalk.dim(meta.join(" · "))}` : "";
     console.log(`  ${tag}  ${name}   ${paddedBalance}${metaStr}`);
   }
 
-  let assets = 0, liabilities = 0;
+  let assets = 0,
+    liabilities = 0;
   for (const a of accounts) {
     if (a.type === "asset") assets += a.balance;
     else if (a.type === "liability") liabilities += a.balance;
@@ -74,10 +92,10 @@ export function showAccounts(): void {
   console.log("");
   console.log(
     "  " +
-    chalk.dim(`Assets ${fmtSigned(assets)}`) +
-    chalk.dim("   ·   ") +
-    chalk.dim(`Liabilities ${fmtSigned(liabilities)}`) +
-    chalk.dim("   ·   ") +
-    chalk.bold(`Net worth ${fmtSigned(netWorth)}`),
+      chalk.dim(`Assets ${fmtSigned(assets)}`) +
+      chalk.dim("   ·   ") +
+      chalk.dim(`Liabilities ${fmtSigned(liabilities)}`) +
+      chalk.dim("   ·   ") +
+      chalk.bold(`Net worth ${fmtSigned(netWorth)}`),
   );
 }

@@ -22,6 +22,7 @@ Plasalid exists because in markets like Thailand there's no Plaid: financial dat
 - **The missing aggregator** — In markets without Plaid, there's no bank API that easy to access. Plasalid turns the documents you already receive into a database that machine can read, so the data layer stops being the blocker.
 - **Composable substrate** — Plasalid's local SQLite is plain, queryable double-entry data. Any tool that can read SQLite — Claude Code, MCP servers, your own scripts, dashboards — can build automations, alerts, exporters, or personalized analyses on top, with no further integration work.
 - **No vendor lock, no rate limits** — Standard accounts and journal lines, your encryption key, your machine. Nothing to revoke, throttle, or paywall.
+- **BYO model** — Pick Anthropic (Claude) or any OpenAI-compatible server (Ollama, OpenAI, LM Studio, vLLM, …) at setup time. Local models keep the conversation 100% on your machine.
 
 ### Drop documents in, get structured data out
 
@@ -69,23 +70,23 @@ Other day-to-day commands:
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
 - `plasalid reconcile --dry-run` — periodically surface duplicate entries and similar accounts; re-run without `--dry-run` to apply fixes interactively.
-- `plasalid undo <regex>` — delete scanned files matching the regex and every journal entry derived from them.
+- `plasalid revert <regex>` — delete scanned files matching the regex and every journal entry derived from them.
 
 ## Commands
 
 Run `plasalid --help` to see all available commands.
 
-| Command | Description |
-|---------|-------------|
-| `plasalid` | Interactive TUI chat with your local data |
-| `plasalid setup` | Configure API key, encryption, and data directory |
-| `plasalid data` | Open the Plasalid data folder in your OS file explorer |
-| `plasalid accounts` | Show the chart of accounts with balances |
-| `plasalid status` | Net worth and this-month income/expense totals |
-| `plasalid transactions [--account] [--from] [--to] [--query] [--limit]` | List journal lines, optionally filtered |
-| `plasalid scan [regex] [--force]` | Scan new PDFs; `--force` cascade-deletes prior records before re-scanning |
-| `plasalid reconcile [--account] [--from] [--to] [--dry-run]` | Review the existing journal: surface duplicates, similar accounts, and unused accounts; apply fixes after confirmation |
-| `plasalid undo <regex>` | Delete scanned files matching `<regex>` and their journal entries |
+```bash
+plasalid                            # Interactive TUI chat with your local data
+plasalid setup                      # Configure API key, encryption, and data directory
+plasalid data                       # Open the Plasalid data folder in your OS file explorer
+plasalid accounts                   # Show the chart of accounts with balances
+plasalid status                     # Net worth and this-month income/expense totals
+plasalid transactions               # List journal lines (filter by --account, --from, --to, --query, --limit)
+plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
+plasalid revert <regex>             # Delete scanned files matching <regex> and their journal entries
+plasalid reconcile [--dry-run]      # Review the journal: duplicates, similar accounts, unused accounts (--account, --from, --to also accepted)
+```
 
 ## How It Works
 
@@ -137,8 +138,11 @@ Plasalid stores everything in `~/.plasalid/`:
 ### Environment Variables
 
 ```bash
-ANTHROPIC_API_KEY=            # Anthropic API key (required)
-PLASALID_MODEL=               # Default: claude-sonnet-4-6
+ANTHROPIC_API_KEY=            # Anthropic API key (required when provider is anthropic)
+PLASALID_MODEL=               # Model name; default for Anthropic: claude-sonnet-4-6
+PLASALID_PROVIDER=            # anthropic | openai-compatible. Default: anthropic
+OPENAI_COMPATIBLE_BASE_URL=   # e.g. http://localhost:11434/v1 (Ollama)
+OPENAI_COMPATIBLE_API_KEY=    # API key for the OpenAI-compatible server (often unused)
 PLASALID_DB_ENCRYPTION_KEY=   # DB encryption passphrase
 PLASALID_DB_PATH=             # Default: ~/.plasalid/db.sqlite
 PLASALID_DATA_DIR=            # Default: ~/.plasalid/data
@@ -153,3 +157,9 @@ npm install
 npm run build
 npm link # makes 'plasalid' available globally
 ```
+
+## License
+
+Plasalid is released under the [Apache License 2.0 with the Commons Clause](./LICENSE).
+
+You're free to use, copy, modify, distribute, and fork it. The Commons Clause adds one restriction: **you may not Sell the Software** — that is, you may not provide a paid product or service whose value derives entirely or substantially from Plasalid's functionality (including paid hosting or support). For commercial-resale rights, contact the copyright holder to negotiate a separate license.

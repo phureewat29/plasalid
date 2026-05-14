@@ -66,5 +66,6 @@ export interface SendMessageParams {
 
 export interface Provider {
   name: string;
+  supportsThinking: boolean;
   sendMessage(params: SendMessageParams): Promise<NormalizedResponse>;
 }

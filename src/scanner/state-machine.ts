@@ -6,7 +6,7 @@ import type { StoredPassword } from "./password-store.js";
  * encodes the transition logic so it can be exhaustively unit-tested.
  */
 
-export const MAX_PASSWORD_ATTEMPTS = 3;
+export const MAX_PASSWORD_ATTEMPTS = 10;
 
 export type UnlockOutcome =
   | { kind: "plaintext" }

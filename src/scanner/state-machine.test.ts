@@ -79,7 +79,7 @@ describe("unlock state machine", () => {
     );
     expect(next.kind).toBe("failed");
     if (next.kind === "failed") {
-      expect(next.reason).toMatch(/3 attempts/);
+      expect(next.reason).toMatch(new RegExp(`${MAX_PASSWORD_ATTEMPTS} attempts`));
     }
   });
 

@@ -13,6 +13,7 @@ import {
 import {
   transition,
   isTerminal,
+  MAX_PASSWORD_ATTEMPTS,
   type UnlockState,
   type UnlockEvent,
   type UnlockOutcome,
@@ -96,7 +97,7 @@ async function stepUnlock(
         spinner.succeed("Decrypted.");
         return { kind: "UNLOCK_OK", decrypted: result.decrypted, password };
       }
-      spinner.fail(`Incorrect password (attempt ${state.attempt}/3).`);
+      spinner.fail(`Incorrect password (attempt ${state.attempt}/${MAX_PASSWORD_ATTEMPTS}).`);
       return { kind: "UNLOCK_FAIL" };
     }
 
@@ -141,7 +142,7 @@ async function promptForPassword(
   const message =
     attempt === 1
       ? `This PDF is encrypted. Password for ${fileName}:`
-      : `Password for ${fileName} (attempt ${attempt}/3):`;
+      : `Password for ${fileName} (attempt ${attempt}/${MAX_PASSWORD_ATTEMPTS}):`;
   const { password } = await inquirer.prompt([
     { type: "password", name: "password", mask: "*", message },
   ]);

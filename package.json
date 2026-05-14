@@ -1,6 +1,6 @@
 {
   "name": "plasalid",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A local-first AI that reads every line of your transactions and coaches you the best move.",
   "keywords": [
     "finance",

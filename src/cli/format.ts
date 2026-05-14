@@ -50,10 +50,7 @@ export function formatError(error: any, context?: string): string {
 }
 
 export function banner(): string {
-  return (
-    chalk.bold("Plasalid") +
-    chalk.dim("  ·  The local-first data layer for personal finance")
-  );
+  return chalk.bold("Plasalid") + chalk.dim("  ·  Talk to your money");
 }
 
 function stripAnsi(str: string): string {
@@ -74,7 +71,7 @@ function box(label: string, lines: string[]): string {
 }
 
 const DISCLAIMER =
-  "Plasalid is a data-query tool, not a financial advisor. It only summarizes scanned documents — verify amounts against your statements before relying on them.";
+  "Plasalid is an assistant, not a financial advisor. It only summarizes financial statements — verify amounts against your statements before relying on them.";
 
 export function helpScreen(commands: { name: string; desc: string }[]): string {
   const sections: string[] = [

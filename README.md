@@ -1,21 +1,32 @@
 <h1 align="center">Plasalid</h1>
 
 <p align="center">
-  <strong>The local-first data layer for personal finance</strong>
+  <strong>Talk to your money</strong>
 </p>
 
 <p align="center">
-  Turn the financial documents into a queryable dataset.
+  A local-first AI that reads every line of your transactions and coaches you the best move.
 </p>
 
 
 <br />
 
-Plasalid turns the financial documents you already receive — bank statements, credit-card statements — into a queryable, double-entry database on your own machine. Drop PDFs into a directory, run `plasalid scan`, and Plasalid extracts each file into balanced journal entries. From there, query it, chat with it, or hand it off to other AI tools as a data harness to build on.
+Plasalid lets you actually *talk* to your money. Drop the bank and credit-card statements you already receive into a folder; Plasalid scans them into a queryable, double-entry database on your own machine. Then chat with it — an AI partner that has read every line and tells you, sharply and proactively, what's going on with your money. Local, private, yours.
 
-Plasalid exists because in markets like Thailand there's no Plaid: financial data is locked inside banks and government agencies. Fintech can't move forward when the underlying data layer is closed — and AI agents can't help you with money they can't see. Until that infrastructure opens up, Plasalid lets individuals be their own aggregator: locally, from the artifacts they already control, and feeds the result to whatever AI tools they want.
+Plasalid exists because in markets like Thailand there's no Plaid: bank data is locked behind statement PDFs, and most people can't afford a real financial advisor either. Plasalid closes both gaps. Your statements become a database, and an AI that knows that database becomes the money coach you'd otherwise have to hire. Your machine, your encryption key, your data.
+
+In Thailand, personal finance isn't taught in school. Fee-based advisors are out of reach for most households. The loudest "advice" channels are bank salespeople pitching their employer's products. Over 5 million people are already flagged as non-performing borrowers, and a generation that wants to manage money better has nowhere accessible to learn how. Plasalid's bet is that capable AI changes this — the same intelligence that can read a statement can also explain what the numbers mean, surface what's about to go wrong, and coach someone through real decisions about debt, budget, and savings. At zero marginal cost, in your language, on your own machine.
+
+Plasalid can also scales upward in case financial survival isn't your question — help you setup a goal for vacation trip, building an emergency fund, choosing investments, planning a down payment or retirement, working toward the freedom to walk away from a bad job. From getting out of debt to financial freedom, Plasalid grows with you.
 
 ## Features
+
+### Your personal money coach
+
+- **Sees every balance, every transaction** — Plasalid's chat reads from your bank and credit-card statements, not generic categories. "Where did ฿14k go in March?" gets a specific answer.
+- **Sharp and proactive** — Leads with the insight, not the breakdown. Flags concerning patterns (overdraft trajectory, unusual spending, payments due soon) even if you didn't ask.
+- **Has a point of view** — When you ask "what should I do?", you get a recommendation, not a list of options.
+- **Remembers what matters** — Persists biographical context (family, employer, goals) and per-statement scanning hints across sessions, so each conversation starts smarter than the last.
 
 ### A data harness AI can plug into
 

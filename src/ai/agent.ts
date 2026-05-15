@@ -3,9 +3,9 @@ import { config } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
-  buildReconcileSystemPrompt,
+  buildReviewSystemPrompt,
   type ScanPromptOptions,
-  type ReconcilePromptOptions,
+  type ReviewPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
 import { getConversationHistory, saveMessage } from "./memory.js";
@@ -204,22 +204,23 @@ export async function runScanAgent(opts: {
 }
 
 /**
- * Reconcile-time agent loop. Walks the existing journal with the reconcile
- * tool profile (read tools + write/merge/delete primitives).
+ * Review-time agent loop. Surveys the existing journal with the review
+ * tool profile (read tools + write/merge/delete primitives + recurrence
+ * detection/recording).
  */
-export async function runReconcileAgent(opts: {
+export async function runReviewAgent(opts: {
   db: Database.Database;
   initialMessages: NormalizedMessage[];
-  prompt: ReconcilePromptOptions;
+  prompt: ReviewPromptOptions;
   agentCtx: AgentExecutionContext;
   onProgress?: ProgressCallback;
   signal?: AbortSignal;
 }): Promise<string> {
-  const systemPrompt = redact(buildReconcileSystemPrompt(opts.db, opts.prompt));
+  const systemPrompt = redact(buildReviewSystemPrompt(opts.db, opts.prompt));
   const { text } = await runAgent({
     db: opts.db,
     systemPrompt,
-    tools: getToolDefinitions("reconcile"),
+    tools: getToolDefinitions("review"),
     initialMessages: opts.initialMessages,
     agentCtx: opts.agentCtx,
     onProgress: opts.onProgress,

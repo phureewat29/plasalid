@@ -100,6 +100,11 @@ program
     "-f, --force",
     "Re-scan matching files (cascade-deletes prior records)",
   )
+  .option(
+    "-p, --parallel <n>",
+    "Number of files to scan concurrently (default 3, max 8). Override env PLASALID_SCAN_CONCURRENCY.",
+    (v) => parseInt(v, 10),
+  )
   .action(async (regexes: string[], opts) => {
     ensureConfigured();
     if (regexes.length > 1) {
@@ -117,16 +122,18 @@ program
       console.error(`  ${chalk.cyan("plasalid scan 'KBank|SCB'")}`);
       process.exit(1);
     }
+    const envParallel = parseInt(process.env.PLASALID_SCAN_CONCURRENCY ?? "", 10);
+    const parallel = Number.isFinite(opts.parallel) ? opts.parallel : (Number.isFinite(envParallel) ? envParallel : undefined);
     const { runScanCommand } = await import("./commands/scan.js");
-    await runScanCommand({ regex: regexes[0], force: !!opts.force });
+    await runScanCommand({ regex: regexes[0], force: !!opts.force, parallel });
   });
 
 program
-  .command("reconcile")
+  .command("review")
   .description(
-    "Revisit the existing journal: find duplicate entries, similar accounts, and unused accounts; apply fixes after user confirmation",
+    "See the whole picture — connect related transactions across statements, learn the rhythm of your recurring money, and clear up anything that's still in question.",
   )
-  .option("-a, --account <id>", "Limit reconciliation to a single account")
+  .option("-a, --account <id>", "Limit review to a single account")
   .option(
     "--from <date>",
     "Only consider entries on or after this date (YYYY-MM-DD)",
@@ -138,8 +145,8 @@ program
   .option("-d, --dry-run", "Surface findings without applying any change")
   .action(async (opts) => {
     ensureConfigured();
-    const { runReconcileCommand } = await import("./commands/reconcile.js");
-    await runReconcileCommand({
+    const { runReviewCommand } = await import("./commands/review.js");
+    await runReviewCommand({
       accountId: opts.account,
       from: opts.from,
       to: opts.to,
@@ -180,8 +187,8 @@ program.configureHelp({
         desc: "Scan new PDFs (optionally by regex; --force to re-scan)",
       },
       {
-        name: "reconcile",
-        desc: "Review and fix existing journal entries / accounts",
+        name: "review",
+        desc: "Connect the dots and learn your recurring rhythms",
       },
       {
         name: "revert",

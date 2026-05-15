@@ -1,7 +1,12 @@
 import type Database from "libsql";
-import { randomUUID } from "crypto";
 import { findAccountById } from "../../db/queries/account_balance.js";
 import { recordJournalEntry } from "../../db/queries/journal.js";
+import {
+  getConcernTarget,
+  recordConcern,
+  resolveConcern,
+} from "../../db/queries/concerns.js";
+import { runExclusive as runAccountExclusive } from "../../scanner/account_mutex.js";
 import { sanitizeForPrompt } from "../sanitize.js";
 import {
   ALL_THAI_INSTITUTIONS,
@@ -11,7 +16,14 @@ import type { AgentExecutionContext, ToolDefinition, ToolModule } from "./types.
 
 const ACCOUNT_TYPES = Object.keys(ACCOUNT_TYPE_DESCRIPTIONS);
 
-const DEFS: ToolDefinition[] = [
+// ── Scan-side tool definitions ──────────────────────────────────────────────
+// These tools are exposed during both `plasalid scan` and `plasalid review`:
+// scan uses them to post the initial picture; review uses the same primitives
+// to fix mistakes (re-create a botched account, post a corrected entry, etc.).
+// `note_concern` belongs here too — it records a clarification without ever
+// prompting the user, which is what scan needs.
+
+const SCAN_DEFS: ToolDefinition[] = [
   {
     name: "create_account",
     description:
@@ -80,17 +92,28 @@ const DEFS: ToolDefinition[] = [
     },
   },
   {
-    name: "ask_user",
+    name: "note_concern",
     description:
-      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively when running `plasalid scan` or `plasalid reconcile`.",
+      "Record a clarification request without pausing the run. Use during scan when a row is ambiguous (post your best-guess journal entry first, then call this with the entry's id), when a row is unparseable (skip the entry, call this with no entry_id), or when you have a concern about an account itself (pass account_id). The reviewer picks these up later with the full picture.",
     input_schema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "The question to ask in plain language." },
+        prompt: {
+          type: "string",
+          description: "The question or concern in a complete sentence, with date, ฿-formatted amount, and human account names. Never reference internal ids.",
+        },
         options: {
           type: "array",
-          description: "Optional list of candidate answers.",
+          description: "Optional list of candidate answers the reviewer can offer the user.",
           items: { type: "string" },
+        },
+        entry_id: {
+          type: "string",
+          description: "Id of the journal entry this concern relates to (returned by record_journal_entry). Omit for file-level concerns about an unparseable row.",
+        },
+        account_id: {
+          type: "string",
+          description: "Id of the account this concern relates to. Set when the statement's bank name, currency, statement_day, due_day, or other metadata disagrees with the stored account, or when you suspect a new account you're about to create duplicates an existing one. Can be combined with entry_id.",
         },
       },
       required: ["prompt"],
@@ -98,14 +121,14 @@ const DEFS: ToolDefinition[] = [
   },
 ];
 
-const LABELS: Record<string, string> = {
+const SCAN_LABELS: Record<string, string> = {
   create_account: "Creating account",
   update_account_metadata: "Updating account metadata",
   record_journal_entry: "Posting journal entry",
-  ask_user: "Asking for clarification",
+  note_concern: "Noting concern",
 };
 
-async function execute(
+async function scanExecute(
   db: Database.Database,
   name: string,
   input: any,
@@ -117,94 +140,105 @@ async function execute(
       if (!ACCOUNT_TYPES.includes(input.type)) {
         return `Invalid type "${input.type}". Allowed: ${ACCOUNT_TYPES.join(", ")}.`;
       }
-      const knownCodes = new Set(ALL_THAI_INSTITUTIONS.map(i => i.code));
       const bank = input.bank_name ? String(input.bank_name).toUpperCase() : null;
-      if (bank && !knownCodes.has(bank)) {
-        // Allow unknown institutions; taxonomy is a hint, not a hard list.
-      }
-      try {
-        db.prepare(
-          `INSERT INTO accounts (id, name, type, subtype, bank_name, account_number_masked, currency, due_day, statement_day, metadata_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          input.id,
-          input.name,
-          input.type,
-          input.subtype || null,
-          bank,
-          input.account_number_masked || null,
-          input.currency || "THB",
-          input.due_day ?? null,
-          input.statement_day ?? null,
-          input.metadata ? JSON.stringify(input.metadata) : null,
-        );
-        return `Account created: ${input.id} (${input.name}, ${input.type}).`;
-      } catch (err: any) {
-        if (String(err.message).includes("UNIQUE")) {
-          return `Account "${input.id}" already exists. Use update_account_metadata to modify it.`;
+      // Account writes serialize across concurrent scan agents so the next
+      // list_accounts call (from any agent) sees this row.
+      return await runAccountExclusive(() => {
+        try {
+          db.prepare(
+            `INSERT INTO accounts (id, name, type, subtype, bank_name, account_number_masked, currency, due_day, statement_day, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.id,
+            input.name,
+            input.type,
+            input.subtype || null,
+            bank,
+            input.account_number_masked || null,
+            input.currency || "THB",
+            input.due_day ?? null,
+            input.statement_day ?? null,
+            input.metadata ? JSON.stringify(input.metadata) : null,
+          );
+          return `Account created: ${input.id} (${input.name}, ${input.type}).`;
+        } catch (err: any) {
+          if (String(err.message).includes("UNIQUE")) {
+            return `Account "${input.id}" already exists. Use update_account_metadata to modify it.`;
+          }
+          throw err;
         }
-        throw err;
-      }
+      });
     }
 
     case "update_account_metadata": {
       if (ctx?.dryRun) return `Would update metadata for ${input.account_id}: ${JSON.stringify(input)}`;
-      const acct = findAccountById(db, input.account_id);
-      if (!acct) return `Account "${input.account_id}" not found.`;
-      const updates: string[] = [];
-      const params: any[] = [];
-      if (input.due_day !== undefined) { updates.push("due_day = ?"); params.push(input.due_day); }
-      if (input.statement_day !== undefined) { updates.push("statement_day = ?"); params.push(input.statement_day); }
-      if (input.points_balance !== undefined) { updates.push("points_balance = ?"); params.push(input.points_balance); }
-      if (input.account_number_masked !== undefined) { updates.push("account_number_masked = ?"); params.push(input.account_number_masked); }
-      if (input.bank_name !== undefined) { updates.push("bank_name = ?"); params.push(String(input.bank_name).toUpperCase()); }
-      if (input.metadata) {
-        const existing = acct.metadata_json ? JSON.parse(acct.metadata_json) : {};
-        const merged = { ...existing, ...input.metadata };
-        updates.push("metadata_json = ?");
-        params.push(JSON.stringify(merged));
-      }
-      if (updates.length === 0) return "Nothing to update.";
-      params.push(input.account_id);
-      db.prepare(`UPDATE accounts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
-      return `Updated ${input.account_id}.`;
+      return await runAccountExclusive(() => {
+        const acct = findAccountById(db, input.account_id);
+        if (!acct) return `Account "${input.account_id}" not found.`;
+        const updates: string[] = [];
+        const params: any[] = [];
+        if (input.due_day !== undefined) { updates.push("due_day = ?"); params.push(input.due_day); }
+        if (input.statement_day !== undefined) { updates.push("statement_day = ?"); params.push(input.statement_day); }
+        if (input.points_balance !== undefined) { updates.push("points_balance = ?"); params.push(input.points_balance); }
+        if (input.account_number_masked !== undefined) { updates.push("account_number_masked = ?"); params.push(input.account_number_masked); }
+        if (input.bank_name !== undefined) { updates.push("bank_name = ?"); params.push(String(input.bank_name).toUpperCase()); }
+        if (input.metadata) {
+          const existing = acct.metadata_json ? JSON.parse(acct.metadata_json) : {};
+          const merged = { ...existing, ...input.metadata };
+          updates.push("metadata_json = ?");
+          params.push(JSON.stringify(merged));
+        }
+        if (updates.length === 0) return "Nothing to update.";
+        params.push(input.account_id);
+        db.prepare(`UPDATE accounts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+        return `Updated ${input.account_id}.`;
+      });
     }
 
     case "record_journal_entry": {
       if (!ctx) return "record_journal_entry is only available inside an agent session.";
       if (ctx.dryRun) return `Would post journal entry "${input.description}" on ${input.date}.`;
+      const entryInput = {
+        date: input.date,
+        description: input.description,
+        source_file_id: ctx.fileId,
+        source_page: input.source_page ?? null,
+        lines: (input.lines || []).map((l: any) => ({
+          account_id: l.account_id,
+          debit: l.debit ?? 0,
+          credit: l.credit ?? 0,
+          currency: l.currency || "THB",
+          memo: l.memo ?? null,
+        })),
+      };
       try {
-        const entryId = recordJournalEntry(db, {
-          date: input.date,
-          description: input.description,
-          source_file_id: ctx.fileId,
-          source_page: input.source_page ?? null,
-          lines: (input.lines || []).map((l: any) => ({
-            account_id: l.account_id,
-            debit: l.debit ?? 0,
-            credit: l.credit ?? 0,
-            currency: l.currency || "THB",
-            memo: l.memo ?? null,
-          })),
-        });
+        const entryId = ctx.buffer
+          ? ctx.buffer.appendEntry(entryInput)
+          : recordJournalEntry(db, entryInput);
         return `Posted journal entry ${entryId} (${input.date}).`;
       } catch (err: any) {
         return `Could not post journal entry: ${err.message}`;
       }
     }
 
-    case "ask_user": {
-      if (!ctx) return "ask_user is only available inside an agent session.";
-      const id = `pq:${randomUUID()}`;
-      db.prepare(
-        `INSERT INTO pending_questions (id, file_id, prompt, options_json) VALUES (?, ?, ?, ?)`,
-      ).run(id, ctx.fileId ?? null, input.prompt, input.options ? JSON.stringify(input.options) : null);
-      if (ctx.interactive && ctx.promptUser) {
-        const answer = await ctx.promptUser(input.prompt, input.options);
-        db.prepare(`UPDATE pending_questions SET answer = ?, resolved_at = datetime('now') WHERE id = ?`).run(answer, id);
-        return `User answered: ${sanitizeForPrompt(answer)}`;
+    case "note_concern": {
+      if (!ctx) return "note_concern is only available inside an agent session.";
+      const target = {
+        entry_id: input.entry_id ?? null,
+        account_id: input.account_id ?? null,
+      };
+      if (ctx.buffer) {
+        ctx.buffer.appendConcern({ ...target, prompt: input.prompt, options: input.options });
+        return `Concern noted (buffered). Continue with the next row.`;
       }
-      return `Question recorded for later (${id}). Awaiting user input — do not act on assumptions about this answer.`;
+      const id = recordConcern(db, {
+        file_id: ctx.fileId ?? null,
+        entry_id: target.entry_id,
+        account_id: target.account_id,
+        prompt: input.prompt,
+        options: input.options,
+      });
+      return `Concern noted (${id}). Continue with the next row.`;
     }
 
     default:
@@ -212,4 +246,88 @@ async function execute(
   }
 }
 
-export const ingestTools: ToolModule = { DEFS, LABELS, execute };
+export const scanIngestTools: ToolModule = {
+  DEFS: SCAN_DEFS,
+  LABELS: SCAN_LABELS,
+  execute: scanExecute,
+};
+
+// ── Review-only tool definitions ────────────────────────────────────────────
+// `ask_user` is the only interactive primitive. Scan never reaches it (the
+// scan profile doesn't include this module), so we don't need a "scan, please
+// don't use this" guard.
+
+const REVIEW_DEFS: ToolDefinition[] = [
+  {
+    name: "ask_user",
+    description:
+      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid review`. Not exposed during `plasalid scan` — use `note_concern` instead. Pass `entry_id` / `account_id` to attach the question to the same target as a scan-noted concern. Pass `concern_id` to resolve an existing open concern in place (recommended when re-posing a scan-noted concern to the user).",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "The question to ask in plain language." },
+        options: {
+          type: "array",
+          description: "Optional list of candidate answers.",
+          items: { type: "string" },
+        },
+        entry_id: {
+          type: "string",
+          description: "Optional: journal entry this question is about. Used to clear the entry's has_concern flag once all its concerns close.",
+        },
+        account_id: {
+          type: "string",
+          description: "Optional: account this question is about. Used to clear the account's has_concern flag once all its concerns close.",
+        },
+        concern_id: {
+          type: "string",
+          description: "Optional: id of an existing open concern. If supplied, the user's answer resolves that row in place instead of creating a new one.",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
+];
+
+const REVIEW_LABELS: Record<string, string> = {
+  ask_user: "Asking for clarification",
+};
+
+async function reviewExecute(
+  db: Database.Database,
+  name: string,
+  input: any,
+  ctx: AgentExecutionContext | undefined,
+): Promise<string | undefined> {
+  if (name !== "ask_user") return undefined;
+  if (!ctx) return "ask_user is only available inside an agent session.";
+
+  // Two modes: resolve an existing concern in place (concern_id supplied),
+  // or post a fresh question that becomes its own concerns row.
+  let id: string;
+  if (input.concern_id) {
+    id = String(input.concern_id);
+    if (!getConcernTarget(db, id)) return `Concern ${id} not found.`;
+  } else {
+    id = recordConcern(db, {
+      file_id: ctx.fileId ?? null,
+      entry_id: input.entry_id ?? null,
+      account_id: input.account_id ?? null,
+      prompt: input.prompt,
+      options: input.options,
+    });
+  }
+
+  if (ctx.interactive && ctx.promptUser) {
+    const answer = await ctx.promptUser(input.prompt, input.options);
+    resolveConcern(db, id, answer);
+    return `User answered: ${sanitizeForPrompt(answer)}`;
+  }
+  return `Question recorded for later (${id}). Awaiting user input — do not act on assumptions about this answer.`;
+}
+
+export const reviewIngestTools: ToolModule = {
+  DEFS: REVIEW_DEFS,
+  LABELS: REVIEW_LABELS,
+  execute: reviewExecute,
+};

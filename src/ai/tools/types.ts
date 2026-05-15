@@ -1,7 +1,8 @@
 import type Database from "libsql";
 import type { ToolDefinition } from "../provider.js";
+import type { BufferedWriteContext } from "../../scanner/buffer.js";
 
-export type ToolProfile = "scan" | "chat" | "reconcile";
+export type ToolProfile = "scan" | "chat" | "review";
 
 export interface AgentExecutionContext {
   /** Set during scan so `record_journal_entry` can stamp `source_file_id`. */
@@ -12,8 +13,15 @@ export interface AgentExecutionContext {
   dryRun?: boolean;
   /** Synchronously prompt the user (only invoked when interactive === true). */
   promptUser?: (prompt: string, options?: string[]) => Promise<string>;
-  /** Called when the model declares the session is done (scan or reconcile). */
+  /** Called when the model declares the session is done (scan or review). */
   onComplete?: (summary: string) => void;
+  /**
+   * Scan-only: when set, journal entries and concerns are queued here instead
+   * of being written directly to the DB. Account writes still hit the DB
+   * eagerly (serialized via account_mutex) so concurrent scan agents share
+   * the same chart of accounts.
+   */
+  buffer?: BufferedWriteContext;
 }
 
 /**

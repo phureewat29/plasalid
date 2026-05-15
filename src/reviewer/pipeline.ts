@@ -1,13 +1,13 @@
 import { getDb } from "../db/connection.js";
-import { runReconcileAgent } from "../ai/agent.js";
+import { runReviewAgent } from "../ai/agent.js";
 import {
   statusSpinner,
   makePromptUser,
   makeAgentOnProgress,
 } from "../cli/ux.js";
-import { buildReconcileUserMessage, type ReconcileScope } from "./prompts.js";
+import { buildReviewUserMessage, type ReviewScope } from "./prompts.js";
 
-export interface ReconcileOptions {
+export interface ReviewOptions {
   accountId?: string;
   from?: string;
   to?: string;
@@ -15,37 +15,38 @@ export interface ReconcileOptions {
   interactive?: boolean;
 }
 
-export interface ReconcileSummary {
+export interface ReviewSummary {
   summary: string;
   dryRun: boolean;
 }
 
 /**
- * Walk the existing journal with the reconcile-profile agent: detect duplicate
- * entries, similar accounts, and unused accounts; propose fixes; apply them
- * (or print "would do X" stubs when dryRun is on) after the user confirms.
+ * Walk the existing journal with the review-profile agent: surface open
+ * concerns, detect correlated transactions and recurrences, propose fixes,
+ * apply them (or print "would do X" stubs when dryRun is on) after the user
+ * confirms one step at a time.
  */
-export async function runReconcile(opts: ReconcileOptions = {}): Promise<ReconcileSummary> {
+export async function runReview(opts: ReviewOptions = {}): Promise<ReviewSummary> {
   const db = getDb();
   const interactive = opts.interactive ?? true;
   const dryRun = !!opts.dryRun;
-  const scope: ReconcileScope = {
+  const scope: ReviewScope = {
     accountId: opts.accountId,
     from: opts.from,
     to: opts.to,
     dryRun,
   };
 
-  const spinner = statusSpinner(`Reconciling${dryRun ? " (dry-run)" : ""}...`);
+  const spinner = statusSpinner(`Reviewing${dryRun ? " (dry-run)" : ""}...`);
   const promptUser = interactive ? makePromptUser(spinner) : undefined;
 
   let summary = "";
   try {
-    await runReconcileAgent({
+    await runReviewAgent({
       db,
       prompt: scope,
       initialMessages: [
-        { role: "user", content: buildReconcileUserMessage(scope) },
+        { role: "user", content: buildReviewUserMessage(scope) },
       ],
       agentCtx: {
         interactive,
@@ -55,9 +56,9 @@ export async function runReconcile(opts: ReconcileOptions = {}): Promise<Reconci
       },
       onProgress: makeAgentOnProgress(spinner),
     });
-    spinner.succeed(dryRun ? "Reconcile complete (dry-run — no writes)." : "Reconcile complete.");
+    spinner.succeed(dryRun ? "Review complete (dry-run — no writes)." : "Review complete.");
   } catch (err: any) {
-    spinner.fail(`Reconcile failed: ${err.message}`);
+    spinner.fail(`Review failed: ${err.message}`);
     throw err;
   }
 

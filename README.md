@@ -1,59 +1,47 @@
 <h1 align="center">Plasalid</h1>
 
 <p align="center">
-  <strong>Talk to your money</strong>
+  <strong>A local-first Plaid for your bank statements</strong>
 </p>
 
 <p align="center">
-  A local-first AI that reads every line of your transactions and coaches you the best move.
+  Turn the PDFs you already receive into a structured, AI-readable journal — on your own machine.
 </p>
 
 
 <br />
 
-Plasalid lets you actually *talk* to your money. Drop your bank and credit-card statement PDFs into a folder. Plasalid scans every transaction, every balance, every late fee into a double-entry database on your own machine. Then you chat with it — an AI that's read every line and tells you, sharply and proactively, what's going on. Local, private, yours.
+In markets like Thailand there's no Plaid: no public API that gives apps a unified view of every account, no easy way to assemble a complete picture of your money. Knowing where you stand means logging into five bank apps one by one — and most people just don't bother. Plasalid is the missing layer: drop your bank and credit-card statement PDFs into a folder and Plasalid parses every transaction, balance, and fee into a double-entry SQLite database that lives on your machine. One source of truth for every account, ready for any AI to read.
 
-Plasalid exists because in markets like Thailand there's no Plaid. In the US, a single API gives apps a live view of every balance and transaction across all your accounts — one complete picture of your money. In Thailand, knowing where you stand means logging into five different bank apps in sequence one by one. Most people just don't bother. And most people can't afford a financial advisor to do it for them either. The result is people fly blind with their own money — and grow careless with it. Bills slip past, small leaks compound, and the first real look tends to come after something has already gone wrong.
-
-In addition, personal finance isn't taught well in Thai schools. Fee-based advisors are out of reach for most households. The loudest "advice" channels are bank salespeople pitching their employer's products. The result: over **5 million Thais** are already flagged as non-performing borrowers, and a generation that wants to manage money better has nowhere accessible to learn how. Plasalid's bet is that capable AI changes that. The same intelligence that reads your statements can explain what the numbers mean. It flags what's about to go wrong. It coaches you through real decisions — debt, budget, savings.
-
-And when survival isn't the question anymore, the same Plasalid can scales up with you. Saving for a trip. Building an emergency fund. Choosing investments. Planning a down payment or retirement. Working toward the freedom to walk away from a bad job. From getting out of debt to financial freedom, Plasalid grows with you.
+Plasalid ships with a built-in chat so you can start asking questions right away, but the data layer is the product. A local MCP / API server is coming next, so any AI tool — Claude Desktop, your own scripts, dashboards, automations — can read the same journal without further integration. Local, private, yours.
 
 ## Features
 
-### Your personal money coach
+Plasalid is a chain of three stages: **Scan → Review → Chat.** Today's chat is one consumer of the journal; the same data will power a local MCP / API server next.
 
-- **Sees every balance, every transaction** — Plasalid's chat reads from your bank and credit-card statements, not generic categories. "Where did ฿14k go in March?" gets a specific answer.
-- **Sharp and proactive** — Leads with the insight, not the breakdown. Flags concerning patterns (overdraft trajectory, unusual spending, payments due soon) even if you didn't ask.
-- **Has a point of view** — When you ask "what should I do?", you get a recommendation, not a list of options.
-- **Remembers what matters** — Persists biographical context (family, employer, goals) and per-statement scanning hints across sessions, so each conversation starts smarter than the last.
+### Scan — parse without blocking
 
-### A data harness AI can plug into
+- **Drop PDFs in, get a balanced journal out.** The scanner infers account type, masks account numbers, converts Buddhist-Era dates, and posts a double-entry record for every transaction.
+- **Never pauses to ask you.** Ambiguous rows post best-guess entries with a structured *concern* attached; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — review clears them up later.
+- **Encrypted PDFs handled inline.** Statement password-protected? Plasalid prompts you once, remembers the password (AES-GCM at rest) under a filename pattern, and unlocks next month's statement silently.
 
-- **The missing aggregator** — In markets without Plaid, there's no bank API that easy to access. Plasalid turns the documents you already receive into a database that machine can read, so the data layer stops being the blocker.
-- **Composable substrate** — Plasalid's local SQLite is plain, queryable double-entry data. Any tool that can read SQLite — Claude Code, MCP servers, your own scripts, dashboards — can build automations, alerts, exporters, or personalized analyses on top, with no further integration work.
-- **No vendor lock, no rate limits** — Standard accounts and journal lines, your encryption key, your machine. Nothing to revoke, throttle, or paywall.
-- **BYO model** — Pick Anthropic (Claude) or any OpenAI-compatible server (Ollama, OpenAI, LM Studio, vLLM, …) at setup time. Local models keep the conversation 100% on your machine.
+### Review — see the whole picture
 
-### Drop documents in, get structured data out
+- **Connects related transactions.** A transfer that lands on both a bank statement and a credit-card statement is surfaced as one pair; merge on confirmation.
+- **Recurrences as first-class data.** Spotify, salary, rent get their own `recurrences` rows with cadence (weekly / biweekly / monthly / annually) and next-expected dates, linked back to every member entry. Not a UI category — a fact about your money the next AI tool can read.
+- **Step-by-step clarification.** Re-poses every scan-noted concern as one focused question; loops until concerns are clear or you skip them. `--dry-run` previews everything; writes only after you confirm.
 
-- **Encrypted PDFs handled inline** — Statement password-protected? Plasalid prompts you once, then remembers the password (encrypted at rest) under a filename pattern so the next month's statement unlocks silently.
-- **Asks instead of guessing** — Ambiguous row? The scanner pauses and prompts you.
-- **Idempotent scan** — Files are hashed; re-running `plasalid scan` skips what it already scanned. `--force` cascade-deletes prior records before re-scanning.
-- **Learns your statements** — Per-bank scanning hints persist across runs (the AI saves them in a local memory table) so each new statement scans more accurately than the last.
+### Chat — ask questions about your data
 
-### Correctness, not vibes
+- **Reads your real journal lines.** Not generic categories. "Where did ฿14k go in March?" gets an answer drawn from actual entries, with figures, dates, and account names cited; nothing invented.
+- **One of many possible consumers.** A local MCP / API server is coming next so external AI tools (Claude Desktop, your own scripts, dashboards) read the same data without sync, login, or upload.
 
-- **Double-entry bookkeeping** — Every transaction balances enforced by standard double-entry accounting.
-- **Account metadata preserved** — Bank, masked number, statement day, due day, points.
-- **Dates normalized** — ISO Gregorian; Localization dates converted automatically.
-- **Reconcile pass** — `plasalid reconcile` surfaces duplicate entries, similar accounts, and unused accounts; merges, renames, and deletes happen only after explicit confirmation. `--dry-run` previews without writing.
+### Built to be plugged into
 
-### Your data never leaves your machine
-
-- **Encrypted local database** — All data stays on your machine in an AES-256 encrypted SQLite database.
-- **PII masking** — Names, national IDs, phones, full account/card numbers scrubbed before anything reaches the AI.
-- **No telemetry. No analytics.** Only outbound traffic is to your configured AI provider.
+- **Local-first.** AES-256 encrypted SQLite on your machine. No cloud sync, no third-party aggregator, no upstream account to trust.
+- **Standard double-entry.** No proprietary schema; any tool that speaks SQL can plug in. No vendor lock, no rate limits, no paywall.
+- **PII redacted on the way out.** Names, national IDs, phone numbers, and full account/card numbers are scrubbed before any prompt leaves your machine.
+- **BYO model.** Pick Anthropic (Claude) or any OpenAI-compatible server (Ollama, OpenAI, LM Studio, vLLM, …) at setup. Local models keep everything 100% on your machine.
 
 
 ## Install
@@ -73,14 +61,15 @@ plasalid setup
 Then:
 
 1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
-2. Run `plasalid scan` and answer any clarifying questions inline.
-3. Run `plasalid` to chat with what was scanned.
+2. Run `plasalid scan` — it parses your PDFs end-to-end without stopping.
+3. Run `plasalid review` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a concern.
+4. Run `plasalid` to chat with what was scanned.
 
 Other day-to-day commands:
 
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid reconcile --dry-run` — periodically surface duplicate entries and similar accounts; re-run without `--dry-run` to apply fixes interactively.
+- `plasalid review --dry-run` — preview the picture (correlated transactions, recurrences, open concerns) without writing; re-run without `--dry-run` to step through fixes interactively.
 - `plasalid revert <regex>` — delete scanned files matching the regex and every journal entry derived from them.
 
 ## Commands
@@ -96,7 +85,7 @@ plasalid status                     # Net worth and this-month income/expense to
 plasalid transactions               # List journal lines (filter by --account, --from, --to, --query, --limit)
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
 plasalid revert <regex>             # Delete scanned files matching <regex> and their journal entries
-plasalid reconcile [--dry-run]      # Review the journal: duplicates, similar accounts, unused accounts (--account, --from, --to also accepted)
+plasalid review [--dry-run]         # Connect related transactions, learn recurring rhythms, resolve open concerns (--account, --from, --to also accepted)
 ```
 
 ## How It Works
@@ -115,7 +104,7 @@ plasalid reconcile [--dry-run]      # Review the journal: duplicates, similar ac
        Claude API (PII-redacted)
                   │
        ┌──────────▼──────────┐
-       │     Encrypted DB    │◀──── plasalid reconcile
+       │     Encrypted DB    │◀──── plasalid review
        └──────────┬──────────┘       
                   │                   
         plasalid · chat               
@@ -144,7 +133,7 @@ Plasalid stores everything in `~/.plasalid/`:
   data/                # Drop any PDFs here (subfolders allowed; AI classifies)
 ```
 
-`db.sqlite` holds the journal, chart of accounts, scan history, persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
+`db.sqlite` holds the journal, chart of accounts, scan history, open concerns awaiting review, recurring transactions (Spotify, salary, rent — recognized during review and linked from each member journal entry), persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
 
 ### Environment Variables
 

@@ -6,6 +6,7 @@ import {
   getPeriodTotals,
 } from "../../db/queries/account_balance.js";
 import { listJournalLines } from "../../db/queries/journal.js";
+import { listOpenConcerns } from "../../db/queries/concerns.js";
 import { searchJournalLines } from "../../db/queries/search.js";
 import { formatCurrencyAmount } from "../../currency.js";
 import { sanitizeForPrompt, sanitizeForPromptCell } from "../sanitize.js";
@@ -69,6 +70,17 @@ const DEFS: ToolDefinition[] = [
       required: ["from", "to"],
     },
   },
+  {
+    name: "list_open_concerns",
+    description: "List clarification requests recorded by the scanner that have not been resolved yet. Each row carries the prompt, optional candidate answers, and the file/entry/account it was attached to. The reviewer uses this to drive the step-by-step clarification loop.",
+    input_schema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", default: 50 },
+      },
+      required: [],
+    },
+  },
 ];
 
 const LABELS: Record<string, string> = {
@@ -77,6 +89,7 @@ const LABELS: Record<string, string> = {
   list_journal_entries: "Listing journal entries",
   search_transactions: "Searching transactions",
   get_period_totals: "Summing period totals",
+  list_open_concerns: "Listing open concerns",
 };
 
 async function execute(
@@ -128,6 +141,23 @@ async function execute(
     case "get_period_totals": {
       const totals = getPeriodTotals(db, input.from, input.to);
       return `Income ${formatTHB(totals.income)} · Expenses ${formatTHB(totals.expenses)} · Net ${formatTHB(totals.income - totals.expenses)}`;
+    }
+    case "list_open_concerns": {
+      const rows = listOpenConcerns(db, input.limit ?? 50);
+      if (rows.length === 0) return "No open concerns. The picture is clear.";
+      return rows
+        .map(r => {
+          const targets = [
+            r.entry_id ? `entry=${r.entry_id}` : null,
+            r.account_id ? `account=${r.account_id}` : null,
+            !r.entry_id && !r.account_id && r.file_id ? `file=${r.file_id}` : null,
+          ].filter(Boolean).join(" ");
+          const options = r.options_json
+            ? ` [options: ${(JSON.parse(r.options_json) as string[]).map(o => sanitizeForPrompt(o)).join(" | ")}]`
+            : "";
+          return `${r.id} ${targets} — ${sanitizeForPrompt(r.prompt)}${options}`;
+        })
+        .join("\n");
     }
     default:
       return undefined;

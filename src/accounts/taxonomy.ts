@@ -155,7 +155,7 @@ export const ACCOUNT_TYPE_DESCRIPTIONS: Record<AccountType, string> = {
   liability: "Credit cards, loans, mortgages, money the user owes.",
   income: "Salary, side income, dividends, refunds.",
   expense: "Spending categories (food, transport, utilities, etc.).",
-  equity: "Owner's equity / opening balance equity (for reconciliation).",
+  equity: "Owner's equity / opening balance equity (for review adjustments).",
 };
 
 export const SUGGESTED_ASSET_SUBTYPES = [
@@ -207,7 +207,7 @@ export const SUGGESTED_INCOME_SUBTYPES = [
 ];
 
 /**
- * Stringified Thai taxonomy block for the scan/reconcile system prompts.
+ * Stringified Thai taxonomy block for the scan/review system prompts.
  * Lists known Thai institutions and suggested subtypes so the model picks
  * consistent `bank_name` and `subtype` values across statements.
  */

@@ -20,12 +20,13 @@ describe("migrate", () => {
 
     const expected = [
       "accounts",
+      "concerns",
       "conversation_history",
       "file_passwords",
       "journal_entries",
       "journal_lines",
       "memories",
-      "pending_questions",
+      "recurrences",
       "scanned_files",
       "settings",
     ];

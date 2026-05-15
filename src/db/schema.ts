@@ -15,6 +15,7 @@ export function migrate(db: Database.Database): void {
       points_balance REAL,
       metadata_json TEXT,
       pii_flag INTEGER NOT NULL DEFAULT 0,
+      has_concern INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -23,12 +24,28 @@ export function migrate(db: Database.Database): void {
       path TEXT NOT NULL,
       file_hash TEXT NOT NULL UNIQUE,
       mime TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('pending','scanned','needs_input','failed')),
+      status TEXT NOT NULL CHECK(status IN ('pending','scanned','failed')),
       raw_text TEXT,
       scanned_at TEXT,
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS recurrences (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      frequency TEXT NOT NULL CHECK(frequency IN ('weekly','biweekly','monthly','annually')),
+      amount_typical REAL,
+      currency TEXT NOT NULL DEFAULT 'THB',
+      first_seen_date TEXT,
+      last_seen_date TEXT,
+      next_expected_date TEXT,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS recurrences_account_idx ON recurrences(account_id);
 
     CREATE TABLE IF NOT EXISTS journal_entries (
       id TEXT PRIMARY KEY,
@@ -36,8 +53,12 @@ export function migrate(db: Database.Database): void {
       description TEXT NOT NULL,
       source_file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       source_page INTEGER,
+      recurrence_id TEXT REFERENCES recurrences(id) ON DELETE SET NULL,
+      has_concern INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE INDEX IF NOT EXISTS journal_entries_recurrence_idx ON journal_entries(recurrence_id);
 
     CREATE TABLE IF NOT EXISTS journal_lines (
       id TEXT PRIMARY KEY,
@@ -56,9 +77,11 @@ export function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS journal_entries_source_file_idx ON journal_entries(source_file_id);
     CREATE INDEX IF NOT EXISTS journal_entries_date_idx ON journal_entries(date);
 
-    CREATE TABLE IF NOT EXISTS pending_questions (
+    CREATE TABLE IF NOT EXISTS concerns (
       id TEXT PRIMARY KEY,
       file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
+      entry_id TEXT REFERENCES journal_entries(id) ON DELETE CASCADE,
+      account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
       prompt TEXT NOT NULL,
       options_json TEXT,
       answer TEXT,

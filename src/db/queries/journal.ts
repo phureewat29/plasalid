@@ -13,20 +13,13 @@ export interface JournalLineInput {
 }
 
 export interface JournalEntryInput {
+  /** Optional pre-assigned id. Used by the buffered-write path so concerns recorded mid-scan can reference the entry before commit. */
+  id?: string;
   date: string;
   description: string;
   source_file_id?: string | null;
   source_page?: number | null;
   lines: JournalLineInput[];
-}
-
-export interface JournalEntryRow {
-  id: string;
-  date: string;
-  description: string;
-  source_file_id: string | null;
-  source_page: number | null;
-  created_at: string;
 }
 
 export interface JournalLineRow {
@@ -49,6 +42,18 @@ export interface JournalLineRow {
  * a header, header never lands without lines.
  */
 export function recordJournalEntry(db: Database.Database, entry: JournalEntryInput): string {
+  const validated = validateJournalEntry(entry);
+  const tx = db.transaction((): void => { insertJournalEntryRows(db, validated); });
+  tx();
+  return validated.id;
+}
+
+/**
+ * Validate balance + invariants and assign an id. Pure (no DB writes). Used by
+ * both `recordJournalEntry` and the buffered-scan commit path; the latter
+ * already runs inside its own transaction and must not open another.
+ */
+export function validateJournalEntry(entry: JournalEntryInput): JournalEntryInput & { id: string } {
   if (!entry.lines || entry.lines.length < 2) {
     throw new Error("Journal entry must contain at least two lines.");
   }
@@ -77,40 +82,44 @@ export function recordJournalEntry(db: Database.Database, entry: JournalEntryInp
     );
   }
 
-  const entryId = `je:${randomUUID()}`;
-  const insertHeader = db.prepare(
+  return { ...entry, id: entry.id ?? `je:${randomUUID()}` };
+}
+
+/**
+ * Insert-only counterpart to `recordJournalEntry`. The caller is responsible
+ * for opening a transaction (or for accepting partial writes). Expects an
+ * already-validated entry from `validateJournalEntry`.
+ */
+export function insertJournalEntryRows(
+  db: Database.Database,
+  entry: JournalEntryInput & { id: string },
+): void {
+  db.prepare(
     `INSERT INTO journal_entries (id, date, description, source_file_id, source_page)
      VALUES (?, ?, ?, ?, ?)`,
+  ).run(
+    entry.id,
+    entry.date,
+    entry.description,
+    entry.source_file_id ?? null,
+    entry.source_page ?? null,
   );
   const insertLine = db.prepare(
     `INSERT INTO journal_lines (id, entry_id, account_id, debit, credit, currency, memo, pii_flag)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-
-  const tx = db.transaction((): void => {
-    insertHeader.run(
-      entryId,
-      entry.date,
-      entry.description,
-      entry.source_file_id ?? null,
-      entry.source_page ?? null,
+  for (const line of entry.lines) {
+    insertLine.run(
+      `jl:${randomUUID()}`,
+      entry.id,
+      line.account_id,
+      line.debit ?? 0,
+      line.credit ?? 0,
+      line.currency || "THB",
+      line.memo ?? null,
+      line.pii_flag ? 1 : 0,
     );
-    for (const line of entry.lines) {
-      insertLine.run(
-        `jl:${randomUUID()}`,
-        entryId,
-        line.account_id,
-        line.debit ?? 0,
-        line.credit ?? 0,
-        line.currency || "THB",
-        line.memo ?? null,
-        line.pii_flag ? 1 : 0,
-      );
-    }
-  });
-  tx();
-
-  return entryId;
+  }
 }
 
 export interface ListJournalLinesOptions {
@@ -210,13 +219,7 @@ export function findDuplicateEntries(
     : ``;
   const params: any[] = opts.accountId ? [opts.accountId] : [];
 
-  // Small chart of accounts → a single name lookup beats GROUP_CONCAT join
-  // hacks (account names can contain commas which break a comma-separated
-  // concat, and SQLite's GROUP_CONCAT has no robust escape mechanism).
-  const nameById = new Map<string, string>();
-  for (const row of db.prepare(`SELECT id, name FROM accounts`).all() as { id: string; name: string }[]) {
-    nameById.set(row.id, row.name);
-  }
+  const nameById = loadAccountNames(db);
 
   const rows = db.prepare(
     `SELECT je.id, je.date, je.description,
@@ -279,11 +282,161 @@ export function findDuplicateEntries(
   return groups;
 }
 
-function dayDiff(a: string, b: string): number {
+export function dayDiff(a: string, b: string): number {
   const aDate = Date.parse(a);
   const bDate = Date.parse(b);
   if (Number.isNaN(aDate) || Number.isNaN(bDate)) return Number.POSITIVE_INFINITY;
   return Math.abs(Math.round((bDate - aDate) / 86_400_000));
+}
+
+/**
+ * Load all account id → name pairs into an in-memory map. Cheap on the small
+ * charts of accounts Plasalid deals with, and avoids GROUP_CONCAT join hacks
+ * (account names can contain commas which break a comma-separated concat, and
+ * SQLite's GROUP_CONCAT has no robust escape mechanism).
+ */
+function loadAccountNames(db: Database.Database): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of db.prepare(`SELECT id, name FROM accounts`).all() as { id: string; name: string }[]) {
+    map.set(row.id, row.name);
+  }
+  return map;
+}
+
+// ── Correlations ────────────────────────────────────────────────────────────
+
+export interface CorrelatedEntryPair {
+  amount: number;
+  currency: string;
+  day_gap: number;
+  a: { id: string; date: string; description: string; account_ids: string[]; account_names: string[] };
+  b: { id: string; date: string; description: string; account_ids: string[]; account_names: string[] };
+}
+
+export interface FindCorrelatedEntriesOptions {
+  from?: string;
+  to?: string;
+  /** Max day difference between paired entries. Default 3. */
+  toleranceDays?: number;
+  /** Skip entries below this total debit. Default 0. */
+  minAmount?: number;
+}
+
+/**
+ * Heuristic: surface pairs of entries that look like the same money movement
+ * recorded against different accounts (e.g. a bank-to-card transfer that lands
+ * once on the bank statement and again on the card statement). Filters out
+ * pairs whose account-id sets overlap (those are duplicates, not correlations).
+ */
+export function findCorrelatedEntries(
+  db: Database.Database,
+  opts: FindCorrelatedEntriesOptions = {},
+): CorrelatedEntryPair[] {
+  const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 3));
+  const minAmount = opts.minAmount ?? 0;
+
+  const dateFilter: string[] = [];
+  const params: any[] = [];
+  if (opts.from) { dateFilter.push("je.date >= ?"); params.push(opts.from); }
+  if (opts.to)   { dateFilter.push("je.date <= ?"); params.push(opts.to); }
+  const where = dateFilter.length ? `WHERE ${dateFilter.join(" AND ")}` : "";
+
+  const nameById = loadAccountNames(db);
+
+  const rows = db.prepare(
+    `SELECT je.id, je.date, je.description,
+            COALESCE(SUM(jl.debit), 0) AS amount,
+            COALESCE(MAX(jl.currency), 'THB') AS currency,
+            GROUP_CONCAT(jl.account_id) AS account_ids
+     FROM journal_entries je
+     LEFT JOIN journal_lines jl ON jl.entry_id = je.id
+     ${where}
+     GROUP BY je.id`,
+  ).all(...params) as {
+    id: string;
+    date: string;
+    description: string;
+    amount: number;
+    currency: string;
+    account_ids: string | null;
+  }[];
+
+  const entries: CorrelationCandidate[] = rows
+    .filter(r => r.amount >= minAmount)
+    .map(r => {
+      const ids = (r.account_ids ?? "").split(",").filter(Boolean);
+      return {
+        id: r.id,
+        date: r.date,
+        description: r.description,
+        amount: Math.round(r.amount * 100) / 100,
+        currency: r.currency || "THB",
+        account_ids: ids,
+        account_names: ids.map(id => nameById.get(id) ?? id),
+      };
+    });
+
+  return correlatePairs(entries, { toleranceDays });
+}
+
+export interface CorrelationCandidate {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  currency: string;
+  account_ids: string[];
+  account_names: string[];
+}
+
+/**
+ * Pure pair-finder: given an array of candidates already filtered by amount
+ * and equipped with account_ids/names, return the cross-pairs that look like
+ * the same money movement on different accounts (date within toleranceDays,
+ * same amount + currency, non-overlapping account sets).
+ *
+ * Used by the DB-backed `findCorrelatedEntries` and by the scan-time
+ * coordinator that runs over buffered, not-yet-committed entries.
+ */
+export function correlatePairs(
+  entries: CorrelationCandidate[],
+  opts: { toleranceDays?: number } = {},
+): CorrelatedEntryPair[] {
+  const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 3));
+
+  // Bucket by (amount-cents, currency) so we only compare entries that could
+  // plausibly pair. O(n) bucketing + O(k²) per bucket dominates only when many
+  // entries share the same amount.
+  const buckets = new Map<string, CorrelationCandidate[]>();
+  for (const e of entries) {
+    const key = `${Math.round(e.amount * 100)}|${e.currency}`;
+    const arr = buckets.get(key) ?? [];
+    arr.push(e);
+    buckets.set(key, arr);
+  }
+
+  const pairs: CorrelatedEntryPair[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.length < 2) continue;
+    bucket.sort((x, y) => x.date.localeCompare(y.date));
+    for (let i = 0; i < bucket.length; i++) {
+      for (let j = i + 1; j < bucket.length; j++) {
+        const a = bucket[i], b = bucket[j];
+        const gap = dayDiff(a.date, b.date);
+        if (gap > toleranceDays) break; // bucket is sorted by date
+        const overlap = a.account_ids.some(id => b.account_ids.includes(id));
+        if (overlap) continue;
+        pairs.push({
+          amount: a.amount,
+          currency: a.currency,
+          day_gap: gap,
+          a: { id: a.id, date: a.date, description: a.description, account_ids: a.account_ids, account_names: a.account_names },
+          b: { id: b.id, date: b.date, description: b.description, account_ids: b.account_ids, account_names: b.account_names },
+        });
+      }
+    }
+  }
+  return pairs;
 }
 
 export function listJournalLines(db: Database.Database, opts: ListJournalLinesOptions = {}): JournalLineRow[] {

@@ -27,8 +27,10 @@ async function execute(
   ctx: AgentExecutionContext | undefined,
 ): Promise<string | undefined> {
   if (name !== "mark_file_scanned") return undefined;
-  ctx?.onComplete?.(input.summary || "");
-  return `Marked file as scanned. Summary: ${sanitizeForPrompt(input.summary || "")}`;
+  const summary = input.summary || "";
+  ctx?.buffer?.markDone(summary);
+  ctx?.onComplete?.(summary);
+  return `Marked file as scanned. Summary: ${sanitizeForPrompt(summary)}`;
 }
 
 export const scanTools: ToolModule = { DEFS, LABELS, execute };

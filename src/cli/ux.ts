@@ -1,8 +1,10 @@
 import inquirer from "inquirer";
 import ora from "ora";
+import chalk from "chalk";
 import { TOOL_LABELS } from "../ai/tools/index.js";
 import { pickThinking } from "../ai/thinking.js";
 import type { ProgressCallback } from "../ai/agent.js";
+import type { PromptUserFacts } from "../ai/tools/types.js";
 import { formatDuration } from "./format.js";
 
 /**
@@ -62,11 +64,13 @@ export function statusSpinner(text: string): SpinnerLike {
  */
 export function makePromptUser(
   spinner: SpinnerLike,
-): (prompt: string, options?: string[]) => Promise<string> {
+): (prompt: string, options?: string[], facts?: PromptUserFacts) => Promise<string> {
   const OTHER = "__plasalid_other__";
-  return async (prompt, options) => {
+  return async (prompt, options, facts) => {
     spinner.pause();
     console.log("");
+    const factsLine = facts ? formatFacts(facts) : null;
+    if (factsLine) console.log(factsLine);
     try {
       if (options && options.length > 0) {
         const choices = [
@@ -79,7 +83,18 @@ export function makePromptUser(
           { name: "Type a different answer…", value: OTHER },
         ];
         const { choice } = await inquirer.prompt([
-          { type: "list", name: "choice", message: prompt, choices },
+          {
+            type: "list",
+            name: "choice",
+            message: prompt,
+            choices,
+            // Stop the cursor at the top/bottom instead of wrapping forever —
+            // the wrap-around default makes the list feel infinite.
+            loop: false,
+            // Show every choice without paginating. Floor of 10 keeps the
+            // prompt height predictable for small option sets.
+            pageSize: Math.max(choices.length, 10),
+          },
         ]);
         if (choice === OTHER) {
           const { freeform } = await inquirer.prompt([
@@ -122,4 +137,20 @@ export function makeAgentOnProgress(
       spinner.text = `${idlePhrase}${subjectPart}${suffix}`;
     }
   };
+}
+
+/**
+ * Render the structured facts the review agent attaches to ask_user as a
+ * single colored line above the inquirer prompt. Each category has a fixed
+ * chalk color so the user's eye picks out the type without reading prose.
+ * Returns null when there's nothing to render (so the caller can skip the
+ * blank line entirely).
+ */
+function formatFacts(f: PromptUserFacts): string | null {
+  const parts: string[] = [];
+  if (f.amount)   parts.push(chalk.yellow(f.amount));
+  if (f.date)     parts.push(chalk.cyan(f.date));
+  if (f.merchant) parts.push(chalk.green(f.merchant));
+  for (const a of f.accounts ?? []) parts.push(chalk.magenta(a));
+  return parts.length ? parts.join(chalk.dim(" · ")) : null;
 }

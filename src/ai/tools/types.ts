@@ -4,6 +4,19 @@ import type { BufferedWriteContext } from "../../scanner/buffer.js";
 
 export type ToolProfile = "scan" | "chat" | "review";
 
+/**
+ * Structured highlights the review agent can pass to ask_user. The prompter
+ * renders them as a single colored header line above the question (each
+ * category gets its own chalk color), so the user can scan amount / date /
+ * merchant / accounts at a glance without parsing prose.
+ */
+export interface PromptUserFacts {
+  amount?: string;
+  date?: string;
+  merchant?: string;
+  accounts?: string[];
+}
+
 export interface AgentExecutionContext {
   /** Set during scan so `record_journal_entry` can stamp `source_file_id`. */
   fileId?: string;
@@ -12,7 +25,7 @@ export interface AgentExecutionContext {
   /** When true, mutating tools become no-ops that return a "would do X" preview. */
   dryRun?: boolean;
   /** Synchronously prompt the user (only invoked when interactive === true). */
-  promptUser?: (prompt: string, options?: string[]) => Promise<string>;
+  promptUser?: (prompt: string, options?: string[], facts?: PromptUserFacts) => Promise<string>;
   /** Called when the model declares the session is done (scan or review). */
   onComplete?: (summary: string) => void;
   /**

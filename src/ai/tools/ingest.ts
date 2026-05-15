@@ -261,7 +261,7 @@ const REVIEW_DEFS: ToolDefinition[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid review`. Not exposed during `plasalid scan` — use `note_concern` instead. Pass `entry_id` / `account_id` to attach the question to the same target as a scan-noted concern. Pass `concern_id` to resolve an existing open concern in place (recommended when re-posing a scan-noted concern to the user).",
+      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid review`. Not exposed during `plasalid scan` — use `note_concern` instead. Pass `entry_id` / `account_id` to attach the question to the same target as a scan-noted concern. Pass `concern_id` to resolve an existing open concern in place (recommended when re-posing a scan-noted concern to the user). Pass `related_concern_ids` to apply the user's single answer to a whole group of sibling concerns at once.",
     input_schema: {
       type: "object",
       properties: {
@@ -282,6 +282,25 @@ const REVIEW_DEFS: ToolDefinition[] = [
         concern_id: {
           type: "string",
           description: "Optional: id of an existing open concern. If supplied, the user's answer resolves that row in place instead of creating a new one.",
+        },
+        related_concern_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: ids of additional open concerns that share the same answer as `concern_id`. The user is prompted once; every listed concern (plus the primary) is marked resolved with the same answer. Use this for grouping duplicate questions — e.g., 12 Lazada rows that all categorize the same way — so the user isn't asked the same thing twelve times.",
+        },
+        facts: {
+          type: "object",
+          description: "Optional structured highlights rendered as a single colored header line above the question. Provide whichever fields apply; the prompter colorizes each by category (amount=yellow, date=cyan, merchant=green, accounts=magenta). Keep the `prompt` text short — the facts header carries the context.",
+          properties: {
+            amount: { type: "string", description: "฿-formatted amount, e.g. '฿1,200.00'." },
+            date: { type: "string", description: "ISO date or short range, e.g. '2026-04-15' or '2026-02-15 to 2026-05-15'." },
+            merchant: { type: "string", description: "Counterparty / merchant name, e.g. 'LAZADA TH', 'Spotify'." },
+            accounts: {
+              type: "array",
+              items: { type: "string" },
+              description: "Human account names involved. For merges, list the survivor first.",
+            },
+          },
         },
       },
       required: ["prompt"],
@@ -319,9 +338,19 @@ async function reviewExecute(
   }
 
   if (ctx.interactive && ctx.promptUser) {
-    const answer = await ctx.promptUser(input.prompt, input.options);
+    const answer = await ctx.promptUser(input.prompt, input.options, input.facts);
     resolveConcern(db, id, answer);
-    return `User answered: ${sanitizeForPrompt(answer)}`;
+    // Propagate the same answer to every sibling in the group so the user
+    // isn't asked the same thing again. Skip the primary id if the agent
+    // happened to include it.
+    const siblings: string[] = Array.isArray(input.related_concern_ids) ? input.related_concern_ids : [];
+    let propagated = 0;
+    for (const sibId of siblings) {
+      if (sibId === id) continue;
+      if (resolveConcern(db, String(sibId), answer)) propagated++;
+    }
+    const totalResolved = 1 + propagated;
+    return `User answered: ${sanitizeForPrompt(answer)}${totalResolved > 1 ? ` (applied to ${totalResolved} concern${totalResolved === 1 ? "" : "s"})` : ""}`;
   }
   return `Question recorded for later (${id}). Awaiting user input — do not act on assumptions about this answer.`;
 }

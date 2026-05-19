@@ -1,10 +1,6 @@
-<div id="user-content-toc">
-  <ul align="center" style="list-style: none;">
-    <summary>
-      <h1>&lt;°(((&gt;&lt;</h1>
-    </summary>
-  </ul>
-</div>
+<p align="center">
+  <img src="https://i.ibb.co/fdkHzmZk/plasalid-logo.png" alt="Plasalid" width="108" />
+</p>
 
 <h1 align="center">Plasalid</h1>
 

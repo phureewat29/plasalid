@@ -1,4 +1,4 @@
-<h1 align="center"><code>&lt;°(((&gt;&lt;</code></h1>
+<h1 align="center">&lt;°(((&gt;&lt;</h1>
 
 <h1 align="center">Plasalid</h1>
 

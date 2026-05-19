@@ -13,12 +13,20 @@ import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./t
 import { getConversationHistory, saveMessage } from "./memory.js";
 import { redact, unredact } from "./redactor.js";
 import { createProvider } from "./providers/index.js";
+import {
+  AbortedError,
+  ApiAuthError,
+  ApiError,
+  RateLimitError,
+} from "./errors.js";
 import type {
   NormalizedMessage,
   NormalizedToolResult,
   NormalizedContentBlock,
   ToolDefinition,
 } from "./provider.js";
+
+export { AbortedError } from "./errors.js";
 
 const provider = createProvider();
 
@@ -30,13 +38,6 @@ export type ProgressCallback = (event: {
   toolCount: number;
   elapsedMs: number;
 }) => void;
-
-export class AbortedError extends Error {
-  constructor() {
-    super("aborted");
-    this.name = "AbortedError";
-  }
-}
 
 interface RunAgentArgs {
   db: Database.Database;
@@ -162,18 +163,20 @@ export async function handleChatMessage(
     });
     saveMessage(db, "assistant", text);
     return text || "I couldn't formulate a response. Could you rephrase?";
-  } catch (error: any) {
-    if (error instanceof AbortedError || error?.name === "AbortError" || signal?.aborted) {
-      throw new AbortedError();
-    }
-    if (error.status === 401 || error.status === 403) {
+  } catch (error) {
+    if (error instanceof AbortedError) throw error;
+    if (signal?.aborted) throw new AbortedError();
+    if (error instanceof ApiAuthError) {
       return "API key was rejected. Run `plasalid setup` to reconfigure your credentials.";
     }
-    if (error.status === 429) {
+    if (error instanceof RateLimitError) {
       return "Rate limited. Wait a moment and try again.";
     }
-    const safeMessage = error.status ? `API error (${error.status}): ${error.message || ""}` : error.message || "internal error";
-    console.error("AI error:", safeMessage);
+    if (error instanceof ApiError) {
+      console.error("AI error:", `API error (${error.status ?? "?"}): ${error.message}`);
+      return "Sorry, I had trouble processing that. Could you try again?";
+    }
+    console.error("AI error:", (error as Error).message || "internal error");
     return "Sorry, I had trouble processing that. Could you try again?";
   }
 }

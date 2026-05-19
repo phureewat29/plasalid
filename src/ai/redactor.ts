@@ -6,65 +6,37 @@ interface RedactionEntry {
   token: string;
 }
 
-function buildRedactions(): RedactionEntry[] {
-  const entries: RedactionEntry[] = [];
-  const seen = new Set<string>();
-
-  function add(real: string, token: string) {
-    const trimmed = real.trim();
-    if (trimmed.length < 2 || seen.has(trimmed.toLowerCase())) return;
-    seen.add(trimmed.toLowerCase());
-    entries.push({ real: trimmed, token });
-  }
-
-  const userName = config.userName;
-  if (userName && userName !== "User") {
-    add(userName, "[USER]");
-    const parts = userName.split(/\s+/);
-    if (parts.length > 1) {
-      add(parts[0], "[USER_FIRST]");
-      add(parts[parts.length - 1], "[USER_LAST]");
-    }
-  }
-
-  const context = readContext();
-  if (context) {
-    const familyMatch = context.match(/## Family\n([\s\S]*?)(?=\n##|$)/);
-    if (familyMatch) {
-      const lines = familyMatch[1].split("\n").filter(l => l.trim().startsWith("-"));
-      for (const line of lines) {
-        const text = line.replace(/^-\s*/, "").trim();
-        if (!text || text.startsWith("(") || text.toLowerCase() === userName.toLowerCase()) continue;
-        const nameMatch = text.match(/^(?:partner|spouse|wife|husband|child|kid|son|daughter|dependent)[:\s]+(.+)/i)
-          || text.match(/^([\p{Lu}\p{Lo}][\p{L}\s]+)/u);
-        if (nameMatch) {
-          const name = nameMatch[1].replace(/\s*\(.*\)/, "").trim();
-          if (name && name.toLowerCase() !== userName.toLowerCase()) {
-            add(name, "[PARTNER]");
-          }
-        }
-      }
-    }
-
-    const incomeMatch = context.match(/## Income\n([\s\S]*?)(?=\n##|$)/);
-    if (incomeMatch) {
-      const lines = incomeMatch[1].split("\n").filter(l => l.trim().startsWith("-"));
-      for (const line of lines) {
-        const text = line.replace(/^-\s*/, "").trim();
-        if (!text || text.startsWith("(")) continue;
-        const employerMatch = text.match(/(?:employer|works? (?:at|for)|employed (?:at|by))[:\s]+([A-Z][\w\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/i)
-          || text.match(/\bfrom ([A-Z][A-Za-z\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/)
-          || text.match(/\bat ([A-Z][A-Za-z\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/);
-        if (employerMatch) {
-          add(employerMatch[1].trim(), "[EMPLOYER]");
-        }
-      }
-    }
-  }
-
-  entries.sort((a, b) => b.real.length - a.real.length);
-  return entries;
+interface SectionRule {
+  heading: string;
+  token: string;
+  patterns: RegExp[];
+  /** Trim a trailing parenthesised qualifier, e.g. "Corgi (partner)" → "Corgi". */
+  stripParen?: boolean;
+  /** Drop the match if it equals the user's name. */
+  skipIfUser?: boolean;
 }
+
+const SECTION_RULES: SectionRule[] = [
+  {
+    heading: "Family",
+    token: "[PARTNER]",
+    stripParen: true,
+    skipIfUser: true,
+    patterns: [
+      /^(?:partner|spouse|wife|husband|child|kid|son|daughter|dependent)[:\s]+(.+)/i,
+      /^([\p{Lu}\p{Lo}][\p{L}\s]+)/u,
+    ],
+  },
+  {
+    heading: "Income",
+    token: "[EMPLOYER]",
+    patterns: [
+      /(?:employer|works? (?:at|for)|employed (?:at|by))[:\s]+([A-Z][\w\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/i,
+      /\bfrom ([A-Z][A-Za-z\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/,
+      /\bat ([A-Z][A-Za-z\s&.,-]+?)(?:\s*[-–—|,;(\n]|$)/,
+    ],
+  },
+];
 
 // Patterns for numeric / identifier PII commonly found in Thai financial data.
 const NUMERIC_PII_PATTERNS: [RegExp, string][] = [
@@ -79,6 +51,67 @@ const NUMERIC_PII_PATTERNS: [RegExp, string][] = [
   // 10–12 digit account / routing numbers at a word boundary
   [/\b\d{10,12}\b(?=\s|$|[,.])/g, "[ACCT]"],
 ];
+
+function extractSectionLines(context: string, heading: string): string[] {
+  const re = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n##|$)`);
+  const match = context.match(re);
+  if (!match) return [];
+  return match[1]
+    .split("\n")
+    .filter((l) => l.trim().startsWith("-"))
+    .map((l) => l.replace(/^-\s*/, "").trim())
+    .filter((text) => text.length > 0 && !text.startsWith("("));
+}
+
+function applyRule(rule: SectionRule, context: string, userName: string, push: (real: string, token: string) => void) {
+  for (const line of extractSectionLines(context, rule.heading)) {
+    if (rule.skipIfUser && line.toLowerCase() === userName.toLowerCase()) continue;
+    for (const pattern of rule.patterns) {
+      const match = line.match(pattern);
+      if (!match) continue;
+      let name = match[1].trim();
+      if (rule.stripParen) name = name.replace(/\s*\(.*\)/, "").trim();
+      if (!name) break;
+      if (rule.skipIfUser && name.toLowerCase() === userName.toLowerCase()) break;
+      push(name, rule.token);
+      break;
+    }
+  }
+}
+
+function buildRedactions(): RedactionEntry[] {
+  const entries: RedactionEntry[] = [];
+  const seen = new Set<string>();
+
+  const push = (real: string, token: string) => {
+    const trimmed = real.trim();
+    if (trimmed.length < 2) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ real: trimmed, token });
+  };
+
+  const userName = config.userName;
+  if (userName && userName !== "User") {
+    push(userName, "[USER]");
+    const parts = userName.split(/\s+/);
+    if (parts.length > 1) {
+      push(parts[0], "[USER_FIRST]");
+      push(parts[parts.length - 1], "[USER_LAST]");
+    }
+  }
+
+  const context = readContext();
+  if (context) {
+    for (const rule of SECTION_RULES) {
+      applyRule(rule, context, userName, push);
+    }
+  }
+
+  entries.sort((a, b) => b.real.length - a.real.length);
+  return entries;
+}
 
 export function redact(text: string): string {
   const redactions = buildRedactions();

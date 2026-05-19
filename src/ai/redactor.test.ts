@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../config.js", () => ({
-  config: { userName: "Alpaca A" },
+  config: { userName: "Alpaca Beagle" },
 }));
 
 vi.mock("./context.js", () => ({
@@ -19,11 +19,11 @@ import { redact, unredact } from "./redactor.js";
 
 describe("redact", () => {
   it("redacts user full name", () => {
-    expect(redact("Alpaca sent 1,000 baht")).toBe("[USER] sent 1,000 baht");
+    expect(redact("Alpaca Beagle sent 1,000 baht")).toBe("[USER] sent 1,000 baht");
   });
 
   it("redacts user first and last names", () => {
-    expect(redact("Hi Alpaca, Mr. A")).toBe("Hi [USER_FIRST], Mr. [USER_LAST]");
+    expect(redact("Hi Alpaca, Mr. Beagle")).toBe("Hi [USER_FIRST], Mr. [USER_LAST]");
   });
 
   it("redacts partner names from context", () => {
@@ -63,6 +63,6 @@ describe("redact", () => {
 
 describe("unredact", () => {
   it("restores tokens", () => {
-    expect(unredact("Hello [USER]")).toBe("Hello Alpaca A");
+    expect(unredact("Hello [USER]")).toBe("Hello Alpaca Beagle");
   });
 });

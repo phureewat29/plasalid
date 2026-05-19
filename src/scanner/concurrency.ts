@@ -1,30 +1,31 @@
 /**
  * Run an array of async task factories with a fixed concurrency bound. Resolves
- * to an array of results in the same order as the input tasks (regardless of
- * completion order). Any rejection settles that slot with `undefined` and the
- * caller is responsible for tracking failures — but since each task is wrapped
- * in `Promise.resolve()` and pushed through `try/catch`, one task throwing
- * never aborts the rest of the run.
+ * to a `Settled<T>[]` in the same order as the input tasks. One task throwing
+ * never aborts the rest — its slot settles as `{ ok: false, error }` and the
+ * caller decides what to do.
  *
  * No new dependency. Simple worker-pool: kicks off up to `n` tasks, then each
  * worker pulls the next index from a shared cursor until the queue is drained.
  */
+export type Settled<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown };
+
 export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   n: number,
-): Promise<Array<T | { error: unknown }>> {
-  const results: Array<T | { error: unknown }> = new Array(tasks.length);
+): Promise<Settled<T>[]> {
+  const results: Settled<T>[] = new Array(tasks.length);
   const workerCount = Math.max(1, Math.min(n, tasks.length));
   let cursor = 0;
 
   async function worker(): Promise<void> {
-    while (true) {
+    while (cursor < tasks.length) {
       const index = cursor++;
-      if (index >= tasks.length) return;
       try {
-        results[index] = await tasks[index]();
+        results[index] = { ok: true, value: await tasks[index]() };
       } catch (err) {
-        results[index] = { error: err };
+        results[index] = { ok: false, error: err };
       }
     }
   }

@@ -1,10 +1,7 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 import { getDb } from "../db/connection.js";
-import {
-  countOpenConcerns,
-  recordConcern,
-} from "../db/queries/concerns.js";
+import { countOpenConcerns } from "../db/queries/concerns.js";
 import { correlatePairs, type CorrelationCandidate } from "../db/queries/transactions.js";
 import { runScanAgent } from "../ai/agent.js";
 import { buildDocumentBlock } from "./pdf.js";
@@ -105,7 +102,7 @@ export async function runScan(opts: RunScanOptions = {}): Promise<ScanSummary> {
   events?.committing?.();
   const fileResults = commitAll(db, decryptResult, scanResults);
 
-  return buildSummary(allFiles.length, fileResults, decryptResult);
+  return buildSummary(allFiles.length, fileResults);
 }
 
 /** Phase 2: parallel scan */
@@ -125,19 +122,16 @@ async function scanInParallel(
 ): Promise<ScanWorkResult[]> {
   const tasks = files.map(f => () => scanOneFile(db, f, opts.events));
   const settled = await runWithConcurrency(tasks, opts.concurrency);
-  // Worker errors are captured per-slot by runWithConcurrency. scanOneFile
-  // itself catches LLM errors and returns a ScanWorkResult with `error` set,
-  // so the `{error}` branch only fires for truly unexpected throws.
+  // scanOneFile catches LLM errors and returns ScanWorkResult with `error` set,
+  // so a !r.ok slot here only fires for truly unexpected throws.
   return settled.map((r, i) => {
-    if (r && typeof r === "object" && "error" in r && !("buffer" in r)) {
-      return {
-        decryptedFile: files[i],
-        buffer: new BufferedWriteContext(files[i].fileName),
-        error: String((r as { error: unknown }).error),
-        agentText: "",
-      };
-    }
-    return r as ScanWorkResult;
+    if (r.ok) return r.value;
+    return {
+      decryptedFile: files[i],
+      buffer: new BufferedWriteContext(files[i].fileName),
+      error: String(r.error),
+      agentText: "",
+    };
   });
 }
 
@@ -341,7 +335,7 @@ function commitAll(
 
 /** Summary assembly */
 
-function buildSummary(total: number, details: ScanFileResult[], _decrypt: DecryptQueueResult): ScanSummary {
+function buildSummary(total: number, details: ScanFileResult[]): ScanSummary {
   const summary: ScanSummary = {
     total,
     scanned: 0,
@@ -367,7 +361,7 @@ function buildAbortedSummary(total: number, decrypt: DecryptQueueResult): ScanSu
       name: f.file.name, relPath: f.file.relPath, status: "failed" as const, transactions: 0, concerns: 0, error: f.error,
     })),
   ];
-  return buildSummary(total, details, decrypt);
+  return buildSummary(total, details);
 }
 
 /** Low-level DB helpers */

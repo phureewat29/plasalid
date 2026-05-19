@@ -70,6 +70,28 @@ function insertText(buf: TextBuffer, text: string): TextBuffer {
   };
 }
 
+type Mutator = (buf: TextBuffer) => TextBuffer;
+
+function moveToBol(buf: TextBuffer): TextBuffer {
+  return { ...buf, col: 0 };
+}
+
+function moveToEol(buf: TextBuffer): TextBuffer {
+  return { ...buf, col: buf.lines[buf.row].length };
+}
+
+function killToEol(buf: TextBuffer): TextBuffer {
+  const lines = [...buf.lines];
+  lines[buf.row] = lines[buf.row].slice(0, buf.col);
+  return { lines, row: buf.row, col: buf.col };
+}
+
+function killToBol(buf: TextBuffer): TextBuffer {
+  const lines = [...buf.lines];
+  lines[buf.row] = lines[buf.row].slice(buf.col);
+  return { lines, row: buf.row, col: 0 };
+}
+
 function backspace(buf: TextBuffer): TextBuffer {
   if (buf.col > 0) {
     const lines = [...buf.lines];
@@ -139,6 +161,46 @@ function moveWordRight(buf: TextBuffer): TextBuffer {
 
 function toString(buf: TextBuffer): string {
   return buf.lines.join("\n");
+}
+
+/** Pure mutators dispatched by single keycode. Side-effecting keys (Ctrl+C, Ctrl+D,
+ *  Enter, ESC) stay inline in handleChunk because they call host callbacks or open
+ *  a sub-state-machine for escape sequences. */
+const CTRL_HANDLERS: Record<number, Mutator> = {
+  [CTRL_A]: moveToBol,
+  [CTRL_E]: moveToEol,
+  [CTRL_K]: killToEol,
+  [CTRL_U]: killToBol,
+  [CTRL_W]: deleteWordLeft,
+  [BACKSPACE]: backspace,
+  [BACKSPACE_ALT]: backspace,
+};
+
+/** CSI sequences: ESC [ ... <final>. `wordMod` runs when the parameter is one of
+ *  the word-step modifiers (Option/Ctrl/Cmd) — `1;3`, `1;5`, `1;9`. */
+const CSI_HANDLERS: Record<string, { plain: Mutator; wordMod: Mutator }> = {
+  D: { plain: moveLeft, wordMod: moveWordLeft },
+  C: { plain: moveRight, wordMod: moveWordRight },
+  A: { plain: moveUp, wordMod: moveUp },
+  B: { plain: moveDown, wordMod: moveDown },
+  H: { plain: moveToBol, wordMod: moveToBol },
+  F: { plain: moveToEol, wordMod: moveToEol },
+};
+
+/** Kitty keyboard protocol: ESC [ codepoint ; modifier u */
+function handleKittyKey(seq: string, apply: (m: Mutator) => void): void {
+  const parts = seq.split(";");
+  const codepoint = parseInt(parts[0], 10);
+  const mod = parts.length > 1 ? parseInt(parts[1], 10) : 1;
+  const hasShift = ((mod - 1) & 1) !== 0;
+  const hasCtrl = ((mod - 1) & 4) !== 0;
+  const hasCmd = ((mod - 1) & 8) !== 0;
+
+  if (codepoint === 13 && hasShift) {
+    apply((b) => insertText(b, "\n"));
+  } else if (codepoint === 127 && (hasCmd || hasCtrl)) {
+    apply(killToBol);
+  }
 }
 
 export interface UseTextInputOpts {
@@ -252,39 +314,6 @@ export function useTextInput(opts: UseTextInputOpts) {
           continue;
         }
 
-        if (code === CTRL_A) {
-          apply(b => ({ ...b, col: 0 }));
-          continue;
-        }
-
-        if (code === CTRL_E) {
-          apply(b => ({ ...b, col: b.lines[b.row].length }));
-          continue;
-        }
-
-        if (code === CTRL_K) {
-          apply(b => {
-            const lines = [...b.lines];
-            lines[b.row] = lines[b.row].slice(0, b.col);
-            return { lines, row: b.row, col: b.col };
-          });
-          continue;
-        }
-
-        if (code === CTRL_U) {
-          apply(b => {
-            const lines = [...b.lines];
-            lines[b.row] = lines[b.row].slice(b.col);
-            return { lines, row: b.row, col: 0 };
-          });
-          continue;
-        }
-
-        if (code === CTRL_W) {
-          apply(deleteWordLeft);
-          continue;
-        }
-
         if (code === ENTER) {
           optsRef.current.onSubmit(toString(bufferRef.current));
           setBuffer(EMPTY_BUFFER);
@@ -292,8 +321,9 @@ export function useTextInput(opts: UseTextInputOpts) {
           continue;
         }
 
-        if (code === BACKSPACE || code === BACKSPACE_ALT) {
-          apply(backspace);
+        const ctrlHandler = CTRL_HANDLERS[code];
+        if (ctrlHandler) {
+          apply(ctrlHandler);
           continue;
         }
 
@@ -327,39 +357,11 @@ export function useTextInput(opts: UseTextInputOpts) {
             if (i < chunk.length) {
               const final = chunk[i];
               const isWordMod = seq === "1;3" || seq === "1;5" || seq === "1;9";
-
-              if (final === "D") {
-                apply(isWordMod ? moveWordLeft : moveLeft);
-              } else if (final === "C") {
-                apply(isWordMod ? moveWordRight : moveRight);
-              } else if (final === "A") {
-                apply(moveUp);
-              } else if (final === "B") {
-                apply(moveDown);
-              } else if (final === "H") {
-                apply(b => ({ ...b, col: 0 }));
-              } else if (final === "F") {
-                apply(b => ({ ...b, col: b.lines[b.row].length }));
+              const csi = CSI_HANDLERS[final];
+              if (csi) {
+                apply(isWordMod ? csi.wordMod : csi.plain);
               } else if (final === "u") {
-                // Kitty keyboard protocol: ESC [ codepoint ; modifier u
-                const parts = seq.split(";");
-                const codepoint = parseInt(parts[0], 10);
-                const mod = parts.length > 1 ? parseInt(parts[1], 10) : 1;
-                const hasShift = ((mod - 1) & 1) !== 0;
-                const hasCtrl = ((mod - 1) & 4) !== 0;
-                const hasCmd = ((mod - 1) & 8) !== 0;
-
-                if (codepoint === 13 && hasShift) {
-                  // Shift+Enter → insert newline
-                  apply(b => insertText(b, "\n"));
-                } else if (codepoint === 127 && (hasCmd || hasCtrl)) {
-                  // Cmd/Ctrl+Backspace → delete to line start
-                  apply(b => {
-                    const lines = [...b.lines];
-                    lines[b.row] = lines[b.row].slice(b.col);
-                    return { lines, row: b.row, col: 0 };
-                  });
-                }
+                handleKittyKey(seq, apply);
               }
             }
             continue;

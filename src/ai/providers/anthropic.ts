@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { classifyProviderError } from "../errors.js";
 import type { Provider, SendMessageParams, NormalizedResponse, NormalizedContentBlock } from "../provider.js";
 
 export function createAnthropicProvider(opts: {
@@ -28,11 +29,15 @@ export function createAnthropicProvider(opts: {
         apiParams.thinking = params.thinking;
       }
 
-      const response = await client.messages.create(apiParams, {
-        signal: params.signal,
-      });
+      let response;
+      try {
+        response = await client.messages.create(apiParams, {
+          signal: params.signal,
+        });
+      } catch (e) {
+        classifyProviderError(e, params.signal);
+      }
 
-      // Filter thinking blocks and normalize content
       const content: NormalizedContentBlock[] = [];
       for (const block of response.content) {
         if ((block as any).type === "thinking") continue;

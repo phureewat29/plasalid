@@ -6,6 +6,9 @@
 type Mupdf = typeof import("mupdf");
 let mupdfPromise: Promise<Mupdf> | null = null;
 
+/** mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success. */
+const MUPDF_AUTH_FAILED = 0;
+
 function getMupdf(): Promise<Mupdf> {
   if (!mupdfPromise) {
     mupdfPromise = import("mupdf");
@@ -46,7 +49,7 @@ export async function unlock(bytes: Buffer, password: string): Promise<UnlockRes
       return { ok: true, decrypted: bytes };
     }
     const result = doc.authenticatePassword(password);
-    if (result === 0) {
+    if (result === MUPDF_AUTH_FAILED) {
       return { ok: false };
     }
     const out = doc.saveToBuffer("decrypt");

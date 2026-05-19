@@ -42,6 +42,57 @@ export interface DecryptQueueOptions {
   onProgress?: (event: { index: number; total: number; fileName: string; outcome: "decrypted" | "skipped" | "failed" }) => void;
 }
 
+type DecryptOutcome =
+  | { kind: "decrypted"; file: DecryptedFile }
+  | { kind: "skipped"; existingScannedFileId: string }
+  | { kind: "failed"; error: string };
+
+async function decryptOne(
+  db: Database.Database,
+  file: ScannedFile,
+  opts: { force: boolean; interactive: boolean },
+): Promise<DecryptOutcome> {
+  let pdf;
+  try {
+    pdf = readPdf(file.path);
+  } catch (err) {
+    return { kind: "failed", error: `read failed: ${errorMessage(err)}` };
+  }
+
+  const existing = findScannedByHash(db, pdf.hash);
+  if (existing && !opts.force) {
+    return { kind: "skipped", existingScannedFileId: existing.id };
+  }
+
+  try {
+    const unlocked = await unlockIfNeeded({
+      db,
+      filePath: file.path,
+      bytes: pdf.bytes,
+      interactive: opts.interactive,
+    });
+    persistUnlockOutcome(db, file.path, unlocked.outcome);
+    return {
+      kind: "decrypted",
+      file: {
+        path: file.path,
+        fileName: file.name,
+        relPath: file.relPath,
+        hash: pdf.hash,
+        mime: pdf.mime,
+        decryptedBytes: unlocked.decrypted,
+        replacesPriorScannedFileId: existing?.id,
+      },
+    };
+  } catch (err) {
+    return { kind: "failed", error: errorMessage(err) || "unlock failed" };
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
  * Phase 1 of scan: walk every file in the queue, decrypt any that need it,
  * and return a partition (decrypted / skipped / failed). The actual agent
@@ -60,44 +111,24 @@ export async function decryptQueue(
   const failed: FailedFile[] = [];
 
   for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    let pdf;
-    try {
-      pdf = readPdf(f.path);
-    } catch (err: any) {
-      failed.push({ file: f, error: `read failed: ${err.message}` });
-      opts.onProgress?.({ index: i, total: files.length, fileName: f.name, outcome: "failed" });
-      continue;
-    }
+    const file = files[i];
+    const outcome = await decryptOne(db, file, opts);
+    const progress = (kind: "decrypted" | "skipped" | "failed") =>
+      opts.onProgress?.({ index: i, total: files.length, fileName: file.name, outcome: kind });
 
-    const existing = findScannedByHash(db, pdf.hash);
-    if (existing && !opts.force) {
-      skipped.push({ file: f, existingScannedFileId: existing.id });
-      opts.onProgress?.({ index: i, total: files.length, fileName: f.name, outcome: "skipped" });
-      continue;
-    }
-
-    try {
-      const unlocked = await unlockIfNeeded({
-        db,
-        filePath: f.path,
-        bytes: pdf.bytes,
-        interactive: opts.interactive,
-      });
-      persistUnlockOutcome(db, f.path, unlocked.outcome);
-      decrypted.push({
-        path: f.path,
-        fileName: f.name,
-        relPath: f.relPath,
-        hash: pdf.hash,
-        mime: pdf.mime,
-        decryptedBytes: unlocked.decrypted,
-        replacesPriorScannedFileId: existing?.id,
-      });
-      opts.onProgress?.({ index: i, total: files.length, fileName: f.name, outcome: "decrypted" });
-    } catch (err: any) {
-      failed.push({ file: f, error: err.message ?? "unlock failed" });
-      opts.onProgress?.({ index: i, total: files.length, fileName: f.name, outcome: "failed" });
+    switch (outcome.kind) {
+      case "decrypted":
+        decrypted.push(outcome.file);
+        progress("decrypted");
+        break;
+      case "skipped":
+        skipped.push({ file, existingScannedFileId: outcome.existingScannedFileId });
+        progress("skipped");
+        break;
+      case "failed":
+        failed.push({ file, error: outcome.error });
+        progress("failed");
+        break;
     }
   }
 

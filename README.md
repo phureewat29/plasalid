@@ -1,3 +1,5 @@
+<h1 align="center"><code>&lt;°(((&gt;&lt;</code></h1>
+
 <h1 align="center">Plasalid</h1>
 
 <p align="center">
@@ -100,7 +102,7 @@ plasalid review [--dry-run]         # Connect related transactions, learn recurr
        │  ~/.plasalid/data/  │
        └──────────┬──────────┘
                   │
-             plasalid scan
+    plasalid scan / plasalid record
                   │
        Claude API (PII-redacted)
                   │
@@ -108,7 +110,7 @@ plasalid review [--dry-run]         # Connect related transactions, learn recurr
        │     Encrypted DB    │◀──── plasalid review
        └──────────┬──────────┘       
                   │                   
-        plasalid · chat               
+               plasalid               
 ```
 
 Two outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. No telemetry. No analytics.

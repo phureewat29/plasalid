@@ -3,13 +3,18 @@ import chalk from "chalk";
 import type Database from "libsql";
 
 const HINTS = [
-  "try: what is my net worth?",
-  "try: how much did I spend on food this month?",
-  "try: when is my credit card due?",
-  "try: show me transactions over 5000 baht",
-  "try: which credit card has the highest balance?",
-  "try: how much income did I receive last month?",
-  "try: list all accounts",
+  "try: what's my net worth?",
+  "try: where did my money go last month?",
+  "try: biggest expense this month?",
+  "try: total credit card debt?",
+  "try: next card payment due?",
+  "try: list my subscriptions",
+  "try: coffee spend this year?",
+  "try: transactions over 10,000 baht",
+  "try: top merchants this quarter?",
+  "try: dining — this month vs last?",
+  "try: net worth trend this year?",
+  "try: open concerns from last scan?",
 ];
 
 export function useFooterText(db: Database.Database): string {
@@ -39,7 +44,7 @@ export function useFooterText(db: Database.Database): string {
     }
 
     const idx = (hintIdx + tick) % HINTS.length;
-    const parts = [`${chalk.cyan("<><")} plasalid`];
+    const parts = [`${chalk.cyan("<°(((><")}`];
     if (scanStr) parts.push(scanStr);
     parts.push(HINTS[idx]);
     parts.push("ctrl+c to exit");

@@ -57,8 +57,10 @@ export function formatError(error: any, context?: string): string {
 }
 
 export function banner(): string {
-  return chalk.bold("Plasalid") + chalk.dim("  ·  The Harness Layer for Personal Finance");
+  return chalk.cyan("<°(((><  ") + chalk.bold("Plasalid") + chalk.dim("  ·  The Harness Layer for Personal Finance");
 }
+
+const FISH_ART = "<°(((><";
 
 function stripAnsi(str: string): string {
   return str.replace(ANSI_RE, "");
@@ -82,6 +84,8 @@ const DISCLAIMER =
 
 export function helpScreen(commands: { name: string; desc: string }[]): string {
   const sections: string[] = [
+    chalk.cyan(FISH_ART),
+    "",
     banner(),
     "",
     box("Usage", [

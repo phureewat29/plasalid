@@ -51,7 +51,7 @@ function printBanner(): void {
 
 function printSummary(dataDir: string): void {
   console.log("");
-  console.log(chalk.green("✓ Plasalid is configured."));
+  console.log(`${chalk.cyan("<°(((><")}  ${chalk.green("Plasalid is configured.")}`);
   console.log(chalk.dim(`Config: ${getConfigPath()}`));
   console.log(chalk.dim(`Data:   ${dataDir}`));
   console.log("");

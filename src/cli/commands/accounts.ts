@@ -1,25 +1,12 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
 import { getAccountBalances } from "../../db/queries/account_balance.js";
-import { formatCurrencyAmount } from "../../currency.js";
+import { visibleLength } from "../format.js";
+import { formatSignedAmount } from "../../currency.js";
 import type {
   AccountBalance,
   AccountType,
 } from "../../db/queries/account_balance.js";
-
-function fmtSigned(n: number): string {
-  const body = formatCurrencyAmount(n, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return n < 0 ? `-${body}` : body;
-}
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-function visibleLength(s: string): number {
-  return s.replace(ANSI_RE, "").length;
-}
 
 const TYPE_TAG: Record<AccountType, string> = {
   asset: "asset",
@@ -52,11 +39,8 @@ function compactMeta(a: AccountBalance): string[] {
 
 export function showAccounts(): void {
   const db = getDb();
-  const accounts = [...getAccountBalances(db)].sort((a, b) => {
-    const t = TYPE_RANK[a.type] - TYPE_RANK[b.type];
-    return t !== 0 ? t : a.name.localeCompare(b.name);
-  });
-  if (accounts.length === 0) {
+  const raw = getAccountBalances(db);
+  if (raw.length === 0) {
     console.log(
       chalk.yellow(
         "No accounts yet. Drop your bank/credit card statements into ~/.plasalid/data/ and run `plasalid scan`.",
@@ -65,15 +49,39 @@ export function showAccounts(): void {
     return;
   }
 
+  const byId = new Map(raw.map(a => [a.id, a]));
+  const depthCache = new Map<string, number>();
+  const depthOf = (id: string): number => {
+    if (depthCache.has(id)) return depthCache.get(id)!;
+    const node = byId.get(id);
+    if (!node || !node.parent_id) {
+      depthCache.set(id, 0);
+      return 0;
+    }
+    const d = depthOf(node.parent_id) + 1;
+    depthCache.set(id, d);
+    return d;
+  };
+
+  const accounts = [...raw].sort((a, b) => {
+    const t = TYPE_RANK[a.type] - TYPE_RANK[b.type];
+    if (t !== 0) return t;
+    return a.id.localeCompare(b.id);
+  });
+
   const balanceWidth = Math.max(
-    ...accounts.map((a) => fmtSigned(a.balance).length),
+    ...accounts.map((a) => formatSignedAmount(a.balance).length),
   );
-  const nameWidth = Math.max(...accounts.map((a) => a.name.length));
+  const nameWidth = Math.max(
+    ...accounts.map((a) => a.name.length + depthOf(a.id) * 2),
+  );
 
   for (const a of accounts) {
     const tag = chalk.dim(TYPE_TAG[a.type].padEnd(TYPE_TAG_WIDTH));
-    const name = chalk.bold(a.name) + " ".repeat(nameWidth - a.name.length);
-    const rawBalance = fmtSigned(a.balance);
+    const indent = "  ".repeat(depthOf(a.id));
+    const displayName = indent + a.name;
+    const name = chalk.bold(displayName) + " ".repeat(nameWidth - displayName.length);
+    const rawBalance = formatSignedAmount(a.balance);
     const coloredBalance = a.balance < 0 ? chalk.red(rawBalance) : rawBalance;
     const paddedBalance =
       " ".repeat(balanceWidth - visibleLength(coloredBalance)) + coloredBalance;
@@ -92,10 +100,10 @@ export function showAccounts(): void {
   console.log("");
   console.log(
     "  " +
-      chalk.dim(`Assets ${fmtSigned(assets)}`) +
+      chalk.dim(`Assets ${formatSignedAmount(assets)}`) +
       chalk.dim("   ·   ") +
-      chalk.dim(`Liabilities ${fmtSigned(liabilities)}`) +
+      chalk.dim(`Liabilities ${formatSignedAmount(liabilities)}`) +
       chalk.dim("   ·   ") +
-      chalk.bold(`Net worth ${fmtSigned(netWorth)}`),
+      chalk.bold(`Net worth ${formatSignedAmount(netWorth)}`),
   );
 }

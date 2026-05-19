@@ -2,7 +2,7 @@ import type Database from "libsql";
 import type { ToolDefinition } from "../provider.js";
 import type { BufferedWriteContext } from "../../scanner/buffer.js";
 
-export type ToolProfile = "scan" | "chat" | "review";
+export type ToolProfile = "scan" | "chat" | "review" | "record";
 
 /**
  * Structured highlights the review agent can pass to ask_user. The prompter
@@ -18,7 +18,7 @@ export interface PromptUserFacts {
 }
 
 export interface AgentExecutionContext {
-  /** Set during scan so `record_journal_entry` can stamp `source_file_id`. */
+  /** Set during scan so `record_transaction` can stamp `source_file_id`. */
   fileId?: string;
   /** When false, ask_user returns a marker and the caller halts after the run. */
   interactive: boolean;
@@ -29,10 +29,19 @@ export interface AgentExecutionContext {
   /** Called when the model declares the session is done (scan or review). */
   onComplete?: (summary: string) => void;
   /**
-   * Scan-only: when set, journal entries and concerns are queued here instead
-   * of being written directly to the DB. Account writes still hit the DB
-   * eagerly (serialized via account_mutex) so concurrent scan agents share
-   * the same chart of accounts.
+   * Which top-level command this agent serves. Mutating tools branch on this
+   * to decide whether to append an action_log row (currently only "record").
+   */
+  command?: "scan" | "review" | "record";
+  /** Per-invocation id grouping every action_log row from one CLI run. */
+  correlationId?: string;
+  /** The raw user utterance / file path that started this invocation. */
+  userInput?: string;
+  /**
+   * Scan-only: when set, transactions and concerns are queued here instead of
+   * being written directly to the DB. Account and merchant writes still hit
+   * the DB eagerly (serialized via their own mutexes) so concurrent scan
+   * agents share the same chart of accounts and merchant directory.
    */
   buffer?: BufferedWriteContext;
 }

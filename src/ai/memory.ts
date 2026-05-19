@@ -13,7 +13,7 @@ export interface Memory {
   created_at: string;
 }
 
-// ── Conversation history ────────────────────────────────────────────────────
+/** Conversation history */
 
 export function getConversationHistory(db: Database.Database, limit = 20): ConversationMessage[] {
   return (db.prepare(
@@ -25,7 +25,7 @@ export function saveMessage(db: Database.Database, role: "user" | "assistant", c
   db.prepare(`INSERT INTO conversation_history (role, content) VALUES (?, ?)`).run(role, content);
 }
 
-// ── Memories ────────────────────────────────────────────────────────────────
+/** Memories */
 
 export function getMemories(db: Database.Database): Memory[] {
   return db.prepare(

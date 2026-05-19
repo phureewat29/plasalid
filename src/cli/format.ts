@@ -1,5 +1,12 @@
 import chalk from "chalk";
 
+// eslint-disable-next-line no-control-regex
+export const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+export function visibleLength(s: string): number {
+  return s.replace(ANSI_RE, "").length;
+}
+
 export function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 1) return "< 1s";
@@ -50,11 +57,11 @@ export function formatError(error: any, context?: string): string {
 }
 
 export function banner(): string {
-  return chalk.bold("Plasalid") + chalk.dim("  ·  Talk to your money");
+  return chalk.bold("Plasalid") + chalk.dim("  ·  The Harness Layer for Personal Finance");
 }
 
 function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, "");
+  return str.replace(ANSI_RE, "");
 }
 
 function box(label: string, lines: string[]): string {

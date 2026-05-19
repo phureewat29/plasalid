@@ -21,10 +21,10 @@ export interface ReviewSummary {
 }
 
 /**
- * Walk the existing journal with the review-profile agent: surface open
- * concerns, detect correlated transactions and recurrences, propose fixes,
- * apply them (or print "would do X" stubs when dryRun is on) after the user
- * confirms one step at a time.
+ * Walk the existing ledger with the review-profile agent: surface open
+ * concerns (uncategorized cleanup first), detect correlated transactions and
+ * recurrences, propose fixes, apply them (or print "would do X" stubs when
+ * dryRun is on) after the user confirms one step at a time.
  */
 export async function runReview(opts: ReviewOptions = {}): Promise<ReviewSummary> {
   const db = getDb();

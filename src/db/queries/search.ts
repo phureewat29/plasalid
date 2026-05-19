@@ -1,24 +1,28 @@
 import type Database from "libsql";
-import type { JournalLineRow } from "./journal.js";
+import type { PostingRow } from "./transactions.js";
 
 /**
- * Free-text search across journal entry descriptions, line memos, and account
- * names. Returns matching journal lines joined with account + entry metadata.
+ * Free-text search across transaction descriptions, posting memos, account
+ * names, and merchant canonical names. Returns matching postings joined with
+ * account + transaction + merchant metadata.
  */
-export function searchJournalLines(db: Database.Database, query: string, limit = 30): JournalLineRow[] {
+export function searchPostings(db: Database.Database, query: string, limit = 30): PostingRow[] {
   const needle = `%${query}%`;
   const capped = Math.min(Math.max(limit, 1), 200);
   return db.prepare(
-    `SELECT jl.id, jl.entry_id, jl.account_id, jl.debit, jl.credit, jl.currency, jl.memo,
+    `SELECT p.id, p.transaction_id, p.account_id, p.debit, p.credit, p.currency, p.memo,
             a.name AS account_name, a.type AS account_type,
-            je.date AS entry_date, je.description AS entry_description
-     FROM journal_lines jl
-     JOIN journal_entries je ON je.id = jl.entry_id
-     JOIN accounts a ON a.id = jl.account_id
-     WHERE je.description LIKE ?
-        OR jl.memo LIKE ?
+            t.date AS transaction_date, t.description AS transaction_description,
+            m.canonical_name AS merchant_name
+     FROM postings p
+     JOIN transactions t ON t.id = p.transaction_id
+     JOIN accounts a ON a.id = p.account_id
+     LEFT JOIN merchants m ON m.id = t.merchant_id
+     WHERE t.description LIKE ?
+        OR p.memo LIKE ?
         OR a.name LIKE ?
-     ORDER BY je.date DESC, je.id DESC
+        OR m.canonical_name LIKE ?
+     ORDER BY t.date DESC, t.id DESC
      LIMIT ?`,
-  ).all(needle, needle, needle, capped) as JournalLineRow[];
+  ).all(needle, needle, needle, needle, capped) as PostingRow[];
 }

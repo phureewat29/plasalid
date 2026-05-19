@@ -12,7 +12,7 @@ export interface ReviewScope {
  */
 export function buildReviewUserMessage(scope: ReviewScope): string {
   return [
-    `Review the local Plasalid journal.`,
+    `Review the local Plasalid ledger.`,
     ``,
     `Scope:`,
     `- account: ${scope.accountId ?? "all"}`,
@@ -21,9 +21,9 @@ export function buildReviewUserMessage(scope: ReviewScope): string {
     `- dry run: ${scope.dryRun ? "yes — write tools are no-ops" : "no — writes commit after confirmation"}`,
     ``,
     `Steps:`,
-    `1. Survey first: list_accounts, get_net_worth, count open concerns, then find_duplicate_entries, find_similar_accounts, find_unused_accounts, find_correlated_entries, find_recurrences. Hold the candidate list internally.`,
-    `2. Prioritize open concerns, then correlated transactions, then recurrences, then chart-of-accounts hygiene.`,
-    `3. Ask one focused question at a time via ask_user. After each answer, apply the change and re-survey only if the change invalidated other candidates.`,
+    `1. Survey first: list_accounts, get_net_worth, count open concerns (especially kind='uncategorized_expense'), then find_duplicate_transactions, find_similar_accounts, find_unused_accounts, find_correlated_transactions, find_recurrences. Hold the candidate list internally.`,
+    `2. Prioritize: (a) uncategorized expense cleanup — these are postings parked in expense:uncategorized awaiting a real category; resolving one should also call set_merchant_default_account when the transaction has a merchant, so future statements skip the categorizer. (b) other open concerns. (c) correlated transactions. (d) recurrences. (e) chart-of-accounts hygiene.`,
+    `3. Ask one focused question at a time via ask_user. Group sibling concerns (same merchant, same answer) via related_concern_ids so the user answers once. After each answer, apply the change and re-survey only if the change invalidated other candidates.`,
     `4. Loop until no open concerns remain (or the user keeps choosing "Skip — leave as is"). Then call mark_review_done with a short summary of what was applied, recorded, and skipped.`,
   ].join("\n");
 }

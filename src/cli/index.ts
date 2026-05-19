@@ -19,7 +19,7 @@ function ensureConfigured(): void {
 
 program
   .name("plasalid")
-  .description("The local-first data layer for personal finance")
+  .description("The Harness Layer for Personal Finance — local-first")
   .version(version)
   .addHelpCommand(false)
   .showHelpAfterError(
@@ -73,7 +73,7 @@ program
 
 program
   .command("transactions")
-  .description("List journal lines")
+  .description("List transactions and their postings")
   .option("-a, --account <id>", "Filter by account id")
   .option("--from <date>", "From date YYYY-MM-DD")
   .option("--to <date>", "To date YYYY-MM-DD")
@@ -89,6 +89,17 @@ program
       query: opts.query,
       limit: Number(opts.limit),
     });
+  });
+
+program
+  .command("record <utterance...>")
+  .description(
+    "Add a manual entry, account, or balance update from a plain-language line.",
+  )
+  .action(async (utteranceTokens: string[]) => {
+    ensureConfigured();
+    const { runRecordCommand } = await import("./commands/record.js");
+    await runRecordCommand({ utterance: utteranceTokens.join(" ") });
   });
 
 program
@@ -131,7 +142,7 @@ program
 program
   .command("review")
   .description(
-    "See the whole picture — connect related transactions across statements, learn the rhythm of your recurring money, and clear up anything that's still in question.",
+    "See the whole picture — connect related transactions across statements, surface recurring patterns, and clear up anything that's still in question.",
   )
   .option("-a, --account <id>", "Limit review to a single account")
   .option(
@@ -157,7 +168,7 @@ program
 program
   .command("revert <regex>")
   .description(
-    "Delete scanned files matching <regex> and all their journal entries",
+    "Delete scanned files matching <regex> and all their transactions",
   )
   .action(async (regex) => {
     ensureConfigured();
@@ -180,7 +191,11 @@ program.configureHelp({
       { name: "status", desc: "Show net worth and this-month totals" },
       {
         name: "transactions",
-        desc: "List journal lines (filter by account/date/text)",
+        desc: "List transactions and their postings (filter by account/date/text)",
+      },
+      {
+        name: "record",
+        desc: "Add a manual transaction, account, balance, or merchant from a plain-language line",
       },
       {
         name: "scan",
@@ -188,11 +203,11 @@ program.configureHelp({
       },
       {
         name: "review",
-        desc: "Connect the dots and learn your recurring rhythms",
+        desc: "Cleanup uncategorized, connect duplicates, learn recurring patterns",
       },
       {
         name: "revert",
-        desc: "Delete scanned files matching <regex> and their journal entries",
+        desc: "Delete scanned files matching <regex> and their transactions",
       },
     ]),
 });

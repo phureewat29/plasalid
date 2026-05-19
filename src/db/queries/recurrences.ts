@@ -1,6 +1,6 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
-import { dayDiff } from "./journal.js";
+import { dayDiff } from "./transactions.js";
 
 export type RecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "annually";
 
@@ -10,7 +10,7 @@ export interface RecurrenceCandidate {
   amount: number;
   currency: string;
   side: "debit" | "credit";
-  entries: { id: string; date: string; description: string }[];
+  transactions: { id: string; date: string; description: string }[];
   median_days_between: number;
   implied_frequency: RecurrenceFrequency | "irregular";
 }
@@ -27,32 +27,32 @@ export function findRecurrenceCandidates(
 ): RecurrenceCandidate[] {
   const minOccurrences = Math.max(2, opts.minOccurrences ?? 3);
 
-  const accountFilter = opts.accountId ? `AND jl.account_id = ?` : ``;
+  const accountFilter = opts.accountId ? `AND p.account_id = ?` : ``;
   const params: any[] = opts.accountId ? [opts.accountId] : [];
 
   const rows = db.prepare(
-    `SELECT jl.account_id,
+    `SELECT p.account_id,
             a.name AS account_name,
-            jl.currency,
-            CASE WHEN jl.debit > 0 THEN jl.debit ELSE jl.credit END AS amount,
-            CASE WHEN jl.debit > 0 THEN 'debit' ELSE 'credit' END AS side,
-            je.id AS entry_id,
-            je.date,
-            je.description
-     FROM journal_lines jl
-     JOIN journal_entries je ON je.id = jl.entry_id
-     JOIN accounts a ON a.id = jl.account_id
-     WHERE je.recurrence_id IS NULL
-       AND (jl.debit > 0 OR jl.credit > 0)
+            p.currency,
+            CASE WHEN p.debit > 0 THEN p.debit ELSE p.credit END AS amount,
+            CASE WHEN p.debit > 0 THEN 'debit' ELSE 'credit' END AS side,
+            t.id AS transaction_id,
+            t.date,
+            t.description
+     FROM postings p
+     JOIN transactions t ON t.id = p.transaction_id
+     JOIN accounts a ON a.id = p.account_id
+     WHERE t.recurrence_id IS NULL
+       AND (p.debit > 0 OR p.credit > 0)
        ${accountFilter}
-     ORDER BY jl.account_id, jl.currency, amount, je.date`,
+     ORDER BY p.account_id, p.currency, amount, t.date`,
   ).all(...params) as {
     account_id: string;
     account_name: string;
     currency: string;
     amount: number;
     side: "debit" | "credit";
-    entry_id: string;
+    transaction_id: string;
     date: string;
     description: string;
   }[];
@@ -80,7 +80,7 @@ export function findRecurrenceCandidates(
       amount: Math.round(bucket[0].amount * 100) / 100,
       currency: bucket[0].currency,
       side: bucket[0].side,
-      entries: bucket.map(r => ({ id: r.entry_id, date: r.date, description: r.description })),
+      transactions: bucket.map(r => ({ id: r.transaction_id, date: r.date, description: r.description })),
       median_days_between: median,
       implied_frequency: classifyFrequency(median),
     });
@@ -103,15 +103,13 @@ function classifyFrequency(medianDays: number): RecurrenceFrequency | "irregular
   return "irregular";
 }
 
-// ── Persistence ─────────────────────────────────────────────────────────────
-
 export interface RecordRecurrenceInput {
   account_id: string;
   description: string;
   frequency: RecurrenceFrequency;
   amount_typical?: number | null;
   currency?: string;
-  entry_ids: string[];
+  transaction_ids: string[];
   notes?: string | null;
 }
 
@@ -123,17 +121,17 @@ const FREQ_PERIOD_DAYS: Record<RecurrenceFrequency, number> = {
 };
 
 export function recordRecurrence(db: Database.Database, input: RecordRecurrenceInput): string {
-  if (!input.entry_ids || input.entry_ids.length === 0) {
-    throw new Error("recordRecurrence requires at least one entry_id.");
+  if (!input.transaction_ids || input.transaction_ids.length === 0) {
+    throw new Error("recordRecurrence requires at least one transaction_id.");
   }
 
-  const placeholders = input.entry_ids.map(() => "?").join(",");
+  const placeholders = input.transaction_ids.map(() => "?").join(",");
   const dateRows = db.prepare(
-    `SELECT date FROM journal_entries WHERE id IN (${placeholders}) ORDER BY date ASC`,
-  ).all(...input.entry_ids) as { date: string }[];
+    `SELECT date FROM transactions WHERE id IN (${placeholders}) ORDER BY date ASC`,
+  ).all(...input.transaction_ids) as { date: string }[];
 
   if (dateRows.length === 0) {
-    throw new Error("None of the supplied entry_ids exist.");
+    throw new Error("None of the supplied transaction_ids exist.");
   }
 
   const firstSeen = dateRows[0].date;
@@ -159,16 +157,16 @@ export function recordRecurrence(db: Database.Database, input: RecordRecurrenceI
       nextExpected,
       input.notes ?? null,
     );
-    const updateEntry = db.prepare(`UPDATE journal_entries SET recurrence_id = ? WHERE id = ?`);
-    for (const entryId of input.entry_ids) updateEntry.run(id, entryId);
+    const updateTx = db.prepare(`UPDATE transactions SET recurrence_id = ? WHERE id = ?`);
+    for (const transactionId of input.transaction_ids) updateTx.run(id, transactionId);
   });
   tx();
   return id;
 }
 
-export function linkEntryToRecurrence(
+export function linkTransactionToRecurrence(
   db: Database.Database,
-  entryId: string,
+  transactionId: string,
   recurrenceId: string,
 ): void {
   const recurrence = db
@@ -176,17 +174,15 @@ export function linkEntryToRecurrence(
     .get(recurrenceId) as { frequency: RecurrenceFrequency } | undefined;
   if (!recurrence) throw new Error(`Recurrence ${recurrenceId} not found.`);
 
-  const entry = db
-    .prepare(`SELECT date FROM journal_entries WHERE id = ?`)
-    .get(entryId) as { date: string } | undefined;
-  if (!entry) throw new Error(`Entry ${entryId} not found.`);
+  const transaction = db
+    .prepare(`SELECT date FROM transactions WHERE id = ?`)
+    .get(transactionId) as { date: string } | undefined;
+  if (!transaction) throw new Error(`Transaction ${transactionId} not found.`);
 
   const tx = db.transaction((): void => {
-    db.prepare(`UPDATE journal_entries SET recurrence_id = ? WHERE id = ?`).run(recurrenceId, entryId);
-    // Recompute first/last/next from the full member set so the recurrence
-    // metadata stays in sync after every attach.
+    db.prepare(`UPDATE transactions SET recurrence_id = ? WHERE id = ?`).run(recurrenceId, transactionId);
     const span = db
-      .prepare(`SELECT MIN(date) AS first, MAX(date) AS last FROM journal_entries WHERE recurrence_id = ?`)
+      .prepare(`SELECT MIN(date) AS first, MAX(date) AS last FROM transactions WHERE recurrence_id = ?`)
       .get(recurrenceId) as { first: string; last: string };
     const nextExpected = addDays(span.last, FREQ_PERIOD_DAYS[recurrence.frequency]);
     db.prepare(

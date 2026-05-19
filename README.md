@@ -1,39 +1,39 @@
 <h1 align="center">Plasalid</h1>
 
 <p align="center">
-  <strong>A local-first Plaid for your bank statements</strong>
+  <strong>The Harness for Personal Finance</strong>
 </p>
 
 <p align="center">
-  Turn the PDFs you already receive into a structured, AI-readable journal — on your own machine.
+  Turn the financial documents you already receive into a structured, AI-readable context.
 </p>
 
 
 <br />
 
-In markets like Thailand there's no Plaid: no public API that gives apps a unified view of every account, no easy way to assemble a complete picture of your money. Knowing where you stand means logging into five bank apps one by one — and most people just don't bother. Plasalid is the missing layer: drop your bank and credit-card statement PDFs into a folder and Plasalid parses every transaction, balance, and fee into a double-entry SQLite database that lives on your machine. One source of truth for every account, ready for any AI to read.
-
-Plasalid ships with a built-in chat so you can start asking questions right away, but the data layer is the product. A local MCP / API server is coming next, so any AI tool — Claude Desktop, your own scripts, dashboards, automations — can read the same journal without further integration. Local, private, yours.
+In markets like Thailand there's no Plaid: no public API that gives apps a unified view of every account, no easy way to assemble a complete picture of your money. Knowing where you stand means logging into five bank apps one by one — and most people just don't bother. Plasalid goes further than a local Plaid — it's a harness layer: drop your bank and credit-card statement PDFs into a folder and Plasalid parses every transaction, balance into a double-entry database on your own machine, ready for any AI to plug into. No cloud aggregator. No upstream account to trust. One source of truth for every account.
 
 ## Features
 
-Plasalid is a chain of three stages: **Scan → Review → Chat.** Today's chat is one consumer of the journal; the same data will power a local MCP / API server next.
+Plasalid is a chain of three stages: **Scan → Review → Chat.** Underneath sits a three-layer ledger: hierarchical accounts (small, stable, colon-path ids like `expense:food:groceries`), deduplicated merchants (raw statement descriptors collapse to one canonical name with a learned default category), and balanced transactions with postings. Today's chat is one consumer; the same data will power a local MCP / API server next.
 
 ### Scan — parse without blocking
 
-- **Drop PDFs in, get a balanced journal out.** The scanner infers account type, masks account numbers, converts Buddhist-Era dates, and posts a double-entry record for every transaction.
-- **Never pauses to ask you.** Ambiguous rows post best-guess entries with a structured *concern* attached; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — review clears them up later.
+- **Drop PDFs in, get balanced transactions out.** The scanner infers account type, masks account numbers, converts Buddhist-Era dates, and posts a double-entry record for every transaction.
+- **Merchants as first-class.** Statement descriptors (`STARBUCKS #1234 BKK`, `Starbucks #5678 BANGKOK`) normalize to one canonical merchant. Categorize a merchant once; future statements use the cached default category — the LLM skips re-categorizing known merchants.
+- **Never pauses to ask you.** Ambiguous rows post best-guess transactions with a structured *concern* attached; lines the scanner can't confidently categorize land in `expense:uncategorized` for the review cleanup pass; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — review clears them up later.
 - **Encrypted PDFs handled inline.** Statement password-protected? Plasalid prompts you once, remembers the password (AES-GCM at rest) under a filename pattern, and unlocks next month's statement silently.
 
 ### Review — see the whole picture
 
+- **Uncategorized cleanup.** Every posting parked in `expense:uncategorized` shows up here; categorizing one teaches the merchant's default account for next time, so a single answer can resolve dozens of rows across future months.
 - **Connects related transactions.** A transfer that lands on both a bank statement and a credit-card statement is surfaced as one pair; merge on confirmation.
-- **Recurrences as first-class data.** Spotify, salary, rent get their own `recurrences` rows with cadence (weekly / biweekly / monthly / annually) and next-expected dates, linked back to every member entry. Not a UI category — a fact about your money the next AI tool can read.
+- **Recurrences as first-class data.** Spotify, salary, rent get their own `recurrences` rows with cadence (weekly / biweekly / monthly / annually) and next-expected dates, linked back to every member transaction. Not a UI category — a structured fact any AI consumer can read.
 - **Step-by-step clarification.** Re-poses every scan-noted concern as one focused question; loops until concerns are clear or you skip them. `--dry-run` previews everything; writes only after you confirm.
 
 ### Chat — ask questions about your data
 
-- **Reads your real journal lines.** Not generic categories. "Where did ฿14k go in March?" gets an answer drawn from actual entries, with figures, dates, and account names cited; nothing invented.
+- **Reads your real transactions and postings.** Not generic categories. "Where did ฿14k go in March?" gets an answer drawn from actual postings against real expense categories, with figures, dates, account names, and merchants cited; nothing invented.
 - **One of many possible consumers.** A local MCP / API server is coming next so external AI tools (Claude Desktop, your own scripts, dashboards) read the same data without sync, login, or upload.
 
 ### Built to be plugged into
@@ -70,7 +70,7 @@ Other day-to-day commands:
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
 - `plasalid review --dry-run` — preview the picture (correlated transactions, recurrences, open concerns) without writing; re-run without `--dry-run` to step through fixes interactively.
-- `plasalid revert <regex>` — delete scanned files matching the regex and every journal entry derived from them.
+- `plasalid revert <regex>` — delete scanned files matching the regex and every transaction derived from them.
 
 ## Commands
 
@@ -82,9 +82,10 @@ plasalid setup                      # Configure API key, encryption, and data di
 plasalid data                       # Open the Plasalid data folder in your OS file explorer
 plasalid accounts                   # Show the chart of accounts with balances
 plasalid status                     # Net worth and this-month income/expense totals
-plasalid transactions               # List journal lines (filter by --account, --from, --to, --query, --limit)
+plasalid transactions               # List transactions and their postings (filter by --account, --from, --to, --query, --limit)
+plasalid record <utterance>         # Add a manual transaction, account, balance, or merchant from a plain-language line
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
-plasalid revert <regex>             # Delete scanned files matching <regex> and their journal entries
+plasalid revert <regex>             # Delete scanned files matching <regex> and their transactions
 plasalid review [--dry-run]         # Connect related transactions, learn recurring rhythms, resolve open concerns (--account, --from, --to also accepted)
 ```
 
@@ -133,7 +134,7 @@ Plasalid stores everything in `~/.plasalid/`:
   data/                # Drop any PDFs here (subfolders allowed; AI classifies)
 ```
 
-`db.sqlite` holds the journal, chart of accounts, scan history, open concerns awaiting review, recurring transactions (Spotify, salary, rent — recognized during review and linked from each member journal entry), persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
+`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with learned default categories, transactions and postings), scan history, open concerns awaiting review, recurring transactions (Spotify, salary, rent — recognized during review and linked from each member transaction), an action log for record-mode audit, persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
 
 ### Environment Variables
 

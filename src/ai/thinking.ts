@@ -5,7 +5,7 @@
  */
 export const THINKING_PHRASES = [
   "Thinking...",
-  "Looking through your journal...",
+  "Looking through your transactions...",
   "Checking your accounts...",
   "Crunching the numbers...",
   "Pulling up your data...",

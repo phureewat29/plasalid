@@ -14,7 +14,7 @@ import { stripControls } from "./sanitize.js";
  *    helpers to call and *in what order*.
  */
 
-// ── Date headers ────────────────────────────────────────────────────────────
+/** Date headers */
 
 /** Long-form date for chat ("Today is Friday, March 5, 2026."). */
 export function renderTodayHuman(): string {
@@ -31,7 +31,7 @@ export function renderTodayIso(): string {
   return `Today is ${new Date().toISOString().slice(0, 10)}.`;
 }
 
-// ── Chart of accounts ──────────────────────────────────────────────────────
+/** Chart of accounts */
 
 export interface ChartOfAccountsOptions {
   withBalance: boolean;
@@ -46,11 +46,11 @@ export function renderChartOfAccounts(
   const balances = getAccountBalances(db);
   if (balances.length === 0) {
     const empty = opts.emptyState === "scan"
-      ? "(empty — you may need to create accounts)"
+      ? "(empty — you may need to create accounts; remember to pass parent_id under one of asset/liability/income/expense/equity)"
       : "(empty)";
     return `## Current chart of accounts\n${empty}`;
   }
-  const rows = balances.map(a => formatAccountRow(a, opts.withBalance));
+  const rows = renderHierarchical(balances, opts.withBalance);
   return `## Current chart of accounts\n${rows.join("\n")}`;
 }
 
@@ -65,11 +65,28 @@ export function renderChatChartOrEmpty(db: Database.Database, name: string): str
   if (balances.length === 0) {
     return `No accounts have been scanned yet. ${name} should drop files into ~/.plasalid/data/ and run \`plasalid scan\`.`;
   }
-  const rows = balances.map(a => formatAccountRow(a, true));
+  const rows = renderHierarchical(balances, true);
   return `## Accounts on file\n${rows.join("\n")}`;
 }
 
-// ── Memories ────────────────────────────────────────────────────────────────
+function renderHierarchical(balances: AccountBalance[], withBalance: boolean): string[] {
+  const byId = new Map(balances.map(b => [b.id, b]));
+  const depthCache = new Map<string, number>();
+  const depth = (id: string): number => {
+    if (depthCache.has(id)) return depthCache.get(id)!;
+    const node = byId.get(id);
+    if (!node || !node.parent_id) {
+      depthCache.set(id, 0);
+      return 0;
+    }
+    const d = depth(node.parent_id) + 1;
+    depthCache.set(id, d);
+    return d;
+  };
+  return balances.map(a => formatAccountRow(a, withBalance, depth(a.id)));
+}
+
+/** Memories */
 
 export interface MemoriesOptions {
   header: string;
@@ -89,7 +106,7 @@ export function renderMemories(db: Database.Database, opts: MemoriesOptions): st
   return `## ${opts.header}\n${lines.join("\n")}`;
 }
 
-// ── Review scope ────────────────────────────────────────────────────────────
+/** Review scope */
 
 export interface ScopeOptions {
   accountId?: string;
@@ -110,18 +127,19 @@ export function renderScope(opts: ScopeOptions): string {
   ].join("\n");
 }
 
-// ── Chat user context ──────────────────────────────────────────────────────
+/** Chat user context */
 
 export function renderUserContext(name: string, contextMd: string | null): string {
   const body = contextMd ?? `(No personal context on file yet. ${name} can edit ~/.plasalid/context.md to add family, income, or other facts.)`;
   return `## About ${name}\n${body}`;
 }
 
-// ── Internal formatters ────────────────────────────────────────────────────
+/** Internal formatters */
 
-function formatAccountRow(a: AccountBalance, withBalance: boolean): string {
+function formatAccountRow(a: AccountBalance, withBalance: boolean, depth = 0): string {
+  const indent = "  ".repeat(depth);
   const subtype = a.subtype ? `/${a.subtype}` : "";
-  const base = `- ${a.id} | ${a.name} | ${a.type}${subtype}`;
+  const base = `- ${indent}${a.id} | ${a.name} | ${a.type}${subtype}`;
   return withBalance ? `${base} | balance ${a.balance.toFixed(2)} ${a.currency}` : base;
 }
 

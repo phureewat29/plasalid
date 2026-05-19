@@ -6,7 +6,6 @@ import {
   config,
   saveConfig,
   getConfigPath,
-  isConfigured,
   getPlasalidDir,
   getDataDir,
   type PlasalidConfig,
@@ -64,7 +63,7 @@ function printSummary(dataDir: string): void {
     `  2. Run ${chalk.cyan("plasalid scan")} to allow Plasalid to scan them.`,
   );
   console.log(
-    `  3. Run ${chalk.cyan("plasalid")} to chat with your financial data.`,
+    `  3. Run ${chalk.cyan("plasalid")} to query your local ledger.`,
   );
 }
 
@@ -267,13 +266,4 @@ export async function runSetup(): Promise<void> {
   const dataDir = finalizeDataDir(userName || "User");
 
   printSummary(dataDir);
-}
-
-export function ensureConfigured(): void {
-  if (!isConfigured()) {
-    console.error(
-      chalk.red("Plasalid is not configured. Run `plasalid setup` first."),
-    );
-    process.exit(1);
-  }
 }

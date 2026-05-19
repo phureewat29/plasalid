@@ -1,16 +1,12 @@
 import type Database from "libsql";
 import { saveMemory, getMemories } from "../memory.js";
 import { getAccountBalances } from "../../db/queries/account_balance.js";
-import { formatCurrencyAmount } from "../../currency.js";
+import { formatAmount } from "../../currency.js";
 import { sanitizeForPrompt, sanitizeForPromptCell } from "../sanitize.js";
 import { ACCOUNT_TYPE_DESCRIPTIONS } from "../../accounts/taxonomy.js";
 import type { AgentExecutionContext, ToolDefinition, ToolModule } from "./types.js";
 
 const ACCOUNT_TYPES = Object.keys(ACCOUNT_TYPE_DESCRIPTIONS);
-
-function formatTHB(amount: number): string {
-  return formatCurrencyAmount(amount, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 const DEFS: ToolDefinition[] = [
   {
@@ -67,7 +63,7 @@ async function execute(
           if (a.due_day) meta.push(`due day ${a.due_day}`);
           if (a.points_balance) meta.push(`${a.points_balance} pts`);
           const metaStr = meta.length ? ` [${meta.join(" · ")}]` : "";
-          return `${a.id} | ${sanitizeForPromptCell(a.name)} | ${a.type}${a.subtype ? `/${a.subtype}` : ""} | balance ${formatTHB(a.balance)}${metaStr}`;
+          return `${a.id} | ${sanitizeForPromptCell(a.name)} | ${a.type}${a.subtype ? `/${a.subtype}` : ""} | balance ${formatAmount(a.balance)}${metaStr}`;
         })
         .join("\n");
     }

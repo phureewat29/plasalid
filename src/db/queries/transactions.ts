@@ -1,9 +1,10 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
+import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
 
 const TOLERANCE = 0.005;
 
-export interface JournalLineInput {
+export interface PostingInput {
   account_id: string;
   debit?: number;
   credit?: number;
@@ -12,19 +13,23 @@ export interface JournalLineInput {
   pii_flag?: boolean;
 }
 
-export interface JournalEntryInput {
-  /** Optional pre-assigned id. Used by the buffered-write path so concerns recorded mid-scan can reference the entry before commit. */
+export interface TransactionInput {
+  /** Optional pre-assigned id. Used by the buffered-write path so concerns recorded mid-scan can reference the transaction before commit. */
   id?: string;
   date: string;
   description: string;
   source_file_id?: string | null;
   source_page?: number | null;
-  lines: JournalLineInput[];
+  raw_descriptor?: string | null;
+  merchant?: MerchantUpsertInput | null;
+  /** Pre-resolved merchant id (from scanner's alias pre-resolution pass). Overrides any `merchant` upsert when set. */
+  merchant_id?: string | null;
+  postings: PostingInput[];
 }
 
-export interface JournalLineRow {
+export interface PostingRow {
   id: string;
-  entry_id: string;
+  transaction_id: string;
   account_id: string;
   debit: number;
   credit: number;
@@ -32,45 +37,46 @@ export interface JournalLineRow {
   memo: string | null;
   account_name?: string;
   account_type?: string;
-  entry_date?: string;
-  entry_description?: string;
+  transaction_date?: string;
+  transaction_description?: string;
+  merchant_name?: string | null;
 }
 
 /**
- * Insert a balanced journal entry. Throws if SUM(debit) !== SUM(credit) or any
- * line both debits and credits. Transaction-wrapped: lines never land without
- * a header, header never lands without lines.
+ * Insert a balanced transaction. Throws if SUM(debit) !== SUM(credit) or any
+ * posting both debits and credits. Transaction-wrapped: postings never land
+ * without a header, header never lands without postings.
  */
-export function recordJournalEntry(db: Database.Database, entry: JournalEntryInput): string {
-  const validated = validateJournalEntry(entry);
-  const tx = db.transaction((): void => { insertJournalEntryRows(db, validated); });
+export function recordTransaction(db: Database.Database, input: TransactionInput): string {
+  const validated = validateTransaction(input);
+  const tx = db.transaction((): void => { insertTransactionRows(db, validated); });
   tx();
   return validated.id;
 }
 
 /**
  * Validate balance + invariants and assign an id. Pure (no DB writes). Used by
- * both `recordJournalEntry` and the buffered-scan commit path; the latter
+ * both `recordTransaction` and the buffered-scan commit path; the latter
  * already runs inside its own transaction and must not open another.
  */
-export function validateJournalEntry(entry: JournalEntryInput): JournalEntryInput & { id: string } {
-  if (!entry.lines || entry.lines.length < 2) {
-    throw new Error("Journal entry must contain at least two lines.");
+export function validateTransaction(input: TransactionInput): TransactionInput & { id: string } {
+  if (!input.postings || input.postings.length < 2) {
+    throw new Error("Transaction must contain at least two postings.");
   }
 
   let debitTotal = 0;
   let creditTotal = 0;
-  for (const line of entry.lines) {
-    const debit = line.debit ?? 0;
-    const credit = line.credit ?? 0;
+  for (const p of input.postings) {
+    const debit = p.debit ?? 0;
+    const credit = p.credit ?? 0;
     if (debit < 0 || credit < 0) {
       throw new Error("debit and credit values must be non-negative.");
     }
     if (debit > 0 && credit > 0) {
-      throw new Error("A single journal line cannot debit and credit at the same time.");
+      throw new Error("A single posting cannot debit and credit at the same time.");
     }
     if (debit === 0 && credit === 0) {
-      throw new Error("Each journal line must have either a debit or a credit.");
+      throw new Error("Each posting must have either a debit or a credit.");
     }
     debitTotal += debit;
     creditTotal += credit;
@@ -78,51 +84,57 @@ export function validateJournalEntry(entry: JournalEntryInput): JournalEntryInpu
 
   if (Math.abs(debitTotal - creditTotal) > TOLERANCE) {
     throw new Error(
-      `Journal entry does not balance: debits ${debitTotal.toFixed(2)} vs credits ${creditTotal.toFixed(2)}.`,
+      `Transaction does not balance: debits ${debitTotal.toFixed(2)} vs credits ${creditTotal.toFixed(2)}.`,
     );
   }
 
-  return { ...entry, id: entry.id ?? `je:${randomUUID()}` };
+  return { ...input, id: input.id ?? `tx:${randomUUID()}` };
 }
 
 /**
- * Insert-only counterpart to `recordJournalEntry`. The caller is responsible
+ * Insert-only counterpart to `recordTransaction`. The caller is responsible
  * for opening a transaction (or for accepting partial writes). Expects an
- * already-validated entry from `validateJournalEntry`.
+ * already-validated input from `validateTransaction`.
  */
-export function insertJournalEntryRows(
+export function insertTransactionRows(
   db: Database.Database,
-  entry: JournalEntryInput & { id: string },
+  input: TransactionInput & { id: string },
 ): void {
+  let merchantId = input.merchant_id ?? null;
+  if (!merchantId && input.merchant) {
+    merchantId = upsertMerchant(db, input.merchant).id;
+  }
   db.prepare(
-    `INSERT INTO journal_entries (id, date, description, source_file_id, source_page)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO transactions (id, date, description, merchant_id, raw_descriptor, source_file_id, source_page)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    entry.id,
-    entry.date,
-    entry.description,
-    entry.source_file_id ?? null,
-    entry.source_page ?? null,
+    input.id,
+    input.date,
+    input.description,
+    merchantId,
+    input.raw_descriptor ?? null,
+    input.source_file_id ?? null,
+    input.source_page ?? null,
   );
-  const insertLine = db.prepare(
-    `INSERT INTO journal_lines (id, entry_id, account_id, debit, credit, currency, memo, pii_flag)
+  const insertPosting = db.prepare(
+    `INSERT INTO postings (id, transaction_id, account_id, debit, credit, currency, memo, pii_flag)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  for (const line of entry.lines) {
-    insertLine.run(
-      `jl:${randomUUID()}`,
-      entry.id,
-      line.account_id,
-      line.debit ?? 0,
-      line.credit ?? 0,
-      line.currency || "THB",
-      line.memo ?? null,
-      line.pii_flag ? 1 : 0,
+  for (const p of input.postings) {
+    insertPosting.run(
+      `p:${randomUUID()}`,
+      input.id,
+      p.account_id,
+      p.debit ?? 0,
+      p.credit ?? 0,
+      p.currency || "THB",
+      p.memo ?? null,
+      p.pii_flag ? 1 : 0,
     );
   }
 }
 
-export interface ListJournalLinesOptions {
+export interface ListPostingsOptions {
   account_id?: string;
   from?: string;
   to?: string;
@@ -130,16 +142,16 @@ export interface ListJournalLinesOptions {
   limit?: number;
 }
 
-export interface UpdateJournalEntryFields {
+export interface UpdateTransactionFields {
   date?: string;
   description?: string;
   source_page?: number | null;
 }
 
-export function updateJournalEntry(
+export function updateTransaction(
   db: Database.Database,
-  entryId: string,
-  fields: UpdateJournalEntryFields,
+  transactionId: string,
+  fields: UpdateTransactionFields,
 ): number {
   const sets: string[] = [];
   const params: any[] = [];
@@ -147,43 +159,43 @@ export function updateJournalEntry(
   if (fields.description !== undefined) { sets.push("description = ?"); params.push(fields.description); }
   if (fields.source_page !== undefined) { sets.push("source_page = ?"); params.push(fields.source_page); }
   if (sets.length === 0) return 0;
-  params.push(entryId);
-  return db.prepare(`UPDATE journal_entries SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;
+  params.push(transactionId);
+  return db.prepare(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;
 }
 
-export interface UpdateJournalLineFields {
+export interface UpdatePostingFields {
   account_id?: string;
   memo?: string | null;
 }
 
 /**
- * Safe single-line edits only. Refuses changes to `debit`, `credit`, or `currency`
- * because those would silently break the entry's balance — to fix amounts the
- * caller must delete the entry and record a fresh one.
+ * Safe single-posting edits only. Refuses changes to `debit`, `credit`, or `currency`
+ * because those would silently break the transaction's balance — to fix amounts the
+ * caller must delete the transaction and record a fresh one.
  */
-export function updateJournalLine(
+export function updatePosting(
   db: Database.Database,
-  lineId: string,
-  fields: UpdateJournalLineFields,
+  postingId: string,
+  fields: UpdatePostingFields,
 ): number {
   const sets: string[] = [];
   const params: any[] = [];
   if (fields.account_id !== undefined) { sets.push("account_id = ?"); params.push(fields.account_id); }
   if (fields.memo !== undefined)       { sets.push("memo = ?");       params.push(fields.memo); }
   if (sets.length === 0) return 0;
-  params.push(lineId);
-  return db.prepare(`UPDATE journal_lines SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;
+  params.push(postingId);
+  return db.prepare(`UPDATE postings SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;
 }
 
 /**
- * Delete a journal entry. ON DELETE CASCADE on `journal_lines.entry_id` removes
- * the lines automatically.
+ * Delete a transaction. ON DELETE CASCADE on `postings.transaction_id` removes
+ * the postings automatically.
  */
-export function deleteJournalEntry(db: Database.Database, entryId: string): number {
-  return db.prepare(`DELETE FROM journal_entries WHERE id = ?`).run(entryId).changes;
+export function deleteTransaction(db: Database.Database, transactionId: string): number {
+  return db.prepare(`DELETE FROM transactions WHERE id = ?`).run(transactionId).changes;
 }
 
-export interface DuplicateGroupEntry {
+export interface DuplicateGroupTransaction {
   id: string;
   date: string;
   description: string;
@@ -192,43 +204,43 @@ export interface DuplicateGroupEntry {
   account_names: string[];
 }
 
-export interface FindDuplicateEntriesOptions {
+export interface FindDuplicateTransactionsOptions {
   /** Days of slack when grouping by date. 0 means same-day only. Default 2. */
   toleranceDays?: number;
-  /** Only consider entries that have at least one line on this account. */
+  /** Only consider transactions that have at least one posting on this account. */
   accountId?: string;
-  /** Skip entries whose total debit is below this value. */
+  /** Skip transactions whose total debit is below this value. */
   minAmount?: number;
 }
 
 /**
- * Heuristic duplicate finder: group entries by (rounded total debit) and check
+ * Heuristic duplicate finder: group transactions by (rounded total debit) and check
  * pairs whose date difference is ≤ toleranceDays. Returns groups with ≥2 members.
- * Each entry carries both account_ids (for follow-up tool calls) and
+ * Each transaction carries both account_ids (for follow-up tool calls) and
  * account_names (for human-readable presentation to the user).
  */
-export function findDuplicateEntries(
+export function findDuplicateTransactions(
   db: Database.Database,
-  opts: FindDuplicateEntriesOptions = {},
-): DuplicateGroupEntry[][] {
+  opts: FindDuplicateTransactionsOptions = {},
+): DuplicateGroupTransaction[][] {
   const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 2));
   const minAmount = opts.minAmount ?? 0;
 
   const accountFilter = opts.accountId
-    ? `WHERE je.id IN (SELECT entry_id FROM journal_lines WHERE account_id = ?)`
+    ? `WHERE t.id IN (SELECT transaction_id FROM postings WHERE account_id = ?)`
     : ``;
   const params: any[] = opts.accountId ? [opts.accountId] : [];
 
   const nameById = loadAccountNames(db);
 
   const rows = db.prepare(
-    `SELECT je.id, je.date, je.description,
-            COALESCE(SUM(jl.debit), 0) AS amount,
-            GROUP_CONCAT(jl.account_id) AS account_ids
-     FROM journal_entries je
-     LEFT JOIN journal_lines jl ON jl.entry_id = je.id
+    `SELECT t.id, t.date, t.description,
+            COALESCE(SUM(p.debit), 0) AS amount,
+            GROUP_CONCAT(p.account_id) AS account_ids
+     FROM transactions t
+     LEFT JOIN postings p ON p.transaction_id = t.id
      ${accountFilter}
-     GROUP BY je.id`,
+     GROUP BY t.id`,
   ).all(...params) as {
     id: string;
     date: string;
@@ -237,7 +249,7 @@ export function findDuplicateEntries(
     account_ids: string | null;
   }[];
 
-  const entries: DuplicateGroupEntry[] = rows
+  const candidates: DuplicateGroupTransaction[] = rows
     .filter(r => r.amount >= minAmount)
     .map(r => {
       const ids = (r.account_ids ?? "").split(",").filter(Boolean);
@@ -251,20 +263,20 @@ export function findDuplicateEntries(
       };
     });
 
-  const byAmount = new Map<number, DuplicateGroupEntry[]>();
-  for (const e of entries) {
-    const key = Math.round(e.amount * 100); // cents
+  const byAmount = new Map<number, DuplicateGroupTransaction[]>();
+  for (const e of candidates) {
+    const key = Math.round(e.amount * 100);
     const arr = byAmount.get(key) ?? [];
     arr.push(e);
     byAmount.set(key, arr);
   }
 
-  const groups: DuplicateGroupEntry[][] = [];
-  for (const candidates of byAmount.values()) {
-    if (candidates.length < 2) continue;
-    candidates.sort((a, b) => a.date.localeCompare(b.date));
-    let current: DuplicateGroupEntry[] = [];
-    for (const e of candidates) {
+  const groups: DuplicateGroupTransaction[][] = [];
+  for (const arr of byAmount.values()) {
+    if (arr.length < 2) continue;
+    arr.sort((a, b) => a.date.localeCompare(b.date));
+    let current: DuplicateGroupTransaction[] = [];
+    for (const e of arr) {
       if (current.length === 0) {
         current.push(e);
         continue;
@@ -303,9 +315,7 @@ function loadAccountNames(db: Database.Database): Map<string, string> {
   return map;
 }
 
-// ── Correlations ────────────────────────────────────────────────────────────
-
-export interface CorrelatedEntryPair {
+export interface CorrelatedTransactionPair {
   amount: number;
   currency: string;
   day_gap: number;
@@ -313,45 +323,45 @@ export interface CorrelatedEntryPair {
   b: { id: string; date: string; description: string; account_ids: string[]; account_names: string[] };
 }
 
-export interface FindCorrelatedEntriesOptions {
+export interface FindCorrelatedTransactionsOptions {
   from?: string;
   to?: string;
-  /** Max day difference between paired entries. Default 3. */
+  /** Max day difference between paired transactions. Default 3. */
   toleranceDays?: number;
-  /** Skip entries below this total debit. Default 0. */
+  /** Skip transactions below this total debit. Default 0. */
   minAmount?: number;
 }
 
 /**
- * Heuristic: surface pairs of entries that look like the same money movement
+ * Heuristic: surface pairs of transactions that look like the same money movement
  * recorded against different accounts (e.g. a bank-to-card transfer that lands
  * once on the bank statement and again on the card statement). Filters out
  * pairs whose account-id sets overlap (those are duplicates, not correlations).
  */
-export function findCorrelatedEntries(
+export function findCorrelatedTransactions(
   db: Database.Database,
-  opts: FindCorrelatedEntriesOptions = {},
-): CorrelatedEntryPair[] {
+  opts: FindCorrelatedTransactionsOptions = {},
+): CorrelatedTransactionPair[] {
   const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 3));
   const minAmount = opts.minAmount ?? 0;
 
   const dateFilter: string[] = [];
   const params: any[] = [];
-  if (opts.from) { dateFilter.push("je.date >= ?"); params.push(opts.from); }
-  if (opts.to)   { dateFilter.push("je.date <= ?"); params.push(opts.to); }
+  if (opts.from) { dateFilter.push("t.date >= ?"); params.push(opts.from); }
+  if (opts.to)   { dateFilter.push("t.date <= ?"); params.push(opts.to); }
   const where = dateFilter.length ? `WHERE ${dateFilter.join(" AND ")}` : "";
 
   const nameById = loadAccountNames(db);
 
   const rows = db.prepare(
-    `SELECT je.id, je.date, je.description,
-            COALESCE(SUM(jl.debit), 0) AS amount,
-            COALESCE(MAX(jl.currency), 'THB') AS currency,
-            GROUP_CONCAT(jl.account_id) AS account_ids
-     FROM journal_entries je
-     LEFT JOIN journal_lines jl ON jl.entry_id = je.id
+    `SELECT t.id, t.date, t.description,
+            COALESCE(SUM(p.debit), 0) AS amount,
+            COALESCE(MAX(p.currency), 'THB') AS currency,
+            GROUP_CONCAT(p.account_id) AS account_ids
+     FROM transactions t
+     LEFT JOIN postings p ON p.transaction_id = t.id
      ${where}
-     GROUP BY je.id`,
+     GROUP BY t.id`,
   ).all(...params) as {
     id: string;
     date: string;
@@ -361,7 +371,7 @@ export function findCorrelatedEntries(
     account_ids: string | null;
   }[];
 
-  const entries: CorrelationCandidate[] = rows
+  const candidates: CorrelationCandidate[] = rows
     .filter(r => r.amount >= minAmount)
     .map(r => {
       const ids = (r.account_ids ?? "").split(",").filter(Boolean);
@@ -376,7 +386,7 @@ export function findCorrelatedEntries(
       };
     });
 
-  return correlatePairs(entries, { toleranceDays });
+  return correlatePairs(candidates, { toleranceDays });
 }
 
 export interface CorrelationCandidate {
@@ -395,27 +405,24 @@ export interface CorrelationCandidate {
  * the same money movement on different accounts (date within toleranceDays,
  * same amount + currency, non-overlapping account sets).
  *
- * Used by the DB-backed `findCorrelatedEntries` and by the scan-time
- * coordinator that runs over buffered, not-yet-committed entries.
+ * Used by the DB-backed `findCorrelatedTransactions` and by the scan-time
+ * coordinator that runs over buffered, not-yet-committed transactions.
  */
 export function correlatePairs(
-  entries: CorrelationCandidate[],
+  candidates: CorrelationCandidate[],
   opts: { toleranceDays?: number } = {},
-): CorrelatedEntryPair[] {
+): CorrelatedTransactionPair[] {
   const toleranceDays = Math.max(0, Math.floor(opts.toleranceDays ?? 3));
 
-  // Bucket by (amount-cents, currency) so we only compare entries that could
-  // plausibly pair. O(n) bucketing + O(k²) per bucket dominates only when many
-  // entries share the same amount.
   const buckets = new Map<string, CorrelationCandidate[]>();
-  for (const e of entries) {
+  for (const e of candidates) {
     const key = `${Math.round(e.amount * 100)}|${e.currency}`;
     const arr = buckets.get(key) ?? [];
     arr.push(e);
     buckets.set(key, arr);
   }
 
-  const pairs: CorrelatedEntryPair[] = [];
+  const pairs: CorrelatedTransactionPair[] = [];
   for (const bucket of buckets.values()) {
     if (bucket.length < 2) continue;
     bucket.sort((x, y) => x.date.localeCompare(y.date));
@@ -423,7 +430,7 @@ export function correlatePairs(
       for (let j = i + 1; j < bucket.length; j++) {
         const a = bucket[i], b = bucket[j];
         const gap = dayDiff(a.date, b.date);
-        if (gap > toleranceDays) break; // bucket is sorted by date
+        if (gap > toleranceDays) break;
         const overlap = a.account_ids.some(id => b.account_ids.includes(id));
         if (overlap) continue;
         pairs.push({
@@ -439,39 +446,41 @@ export function correlatePairs(
   return pairs;
 }
 
-export function listJournalLines(db: Database.Database, opts: ListJournalLinesOptions = {}): JournalLineRow[] {
+export function listPostings(db: Database.Database, opts: ListPostingsOptions = {}): PostingRow[] {
   const conditions: string[] = [];
   const params: any[] = [];
 
   if (opts.account_id) {
-    conditions.push("jl.account_id = ?");
+    conditions.push("p.account_id = ?");
     params.push(opts.account_id);
   }
   if (opts.from) {
-    conditions.push("je.date >= ?");
+    conditions.push("t.date >= ?");
     params.push(opts.from);
   }
   if (opts.to) {
-    conditions.push("je.date <= ?");
+    conditions.push("t.date <= ?");
     params.push(opts.to);
   }
   if (opts.q) {
-    conditions.push("(je.description LIKE ? OR jl.memo LIKE ?)");
-    params.push(`%${opts.q}%`, `%${opts.q}%`);
+    conditions.push("(t.description LIKE ? OR p.memo LIKE ? OR m.canonical_name LIKE ?)");
+    params.push(`%${opts.q}%`, `%${opts.q}%`, `%${opts.q}%`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
 
   return db.prepare(
-    `SELECT jl.id, jl.entry_id, jl.account_id, jl.debit, jl.credit, jl.currency, jl.memo,
+    `SELECT p.id, p.transaction_id, p.account_id, p.debit, p.credit, p.currency, p.memo,
             a.name AS account_name, a.type AS account_type,
-            je.date AS entry_date, je.description AS entry_description
-     FROM journal_lines jl
-     JOIN journal_entries je ON je.id = jl.entry_id
-     JOIN accounts a ON a.id = jl.account_id
+            t.date AS transaction_date, t.description AS transaction_description,
+            m.canonical_name AS merchant_name
+     FROM postings p
+     JOIN transactions t ON t.id = p.transaction_id
+     JOIN accounts a ON a.id = p.account_id
+     LEFT JOIN merchants m ON m.id = t.merchant_id
      ${where}
-     ORDER BY je.date DESC, je.id DESC
+     ORDER BY t.date DESC, t.id DESC
      LIMIT ?`,
-  ).all(...params, limit) as JournalLineRow[];
+  ).all(...params, limit) as PostingRow[];
 }

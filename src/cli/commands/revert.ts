@@ -64,7 +64,7 @@ export async function runRevertCommand(regex: string): Promise<void> {
   }
   console.log(
     chalk.bold(
-      `revert will delete ${matches.length} file(s) and their journal entries:`,
+      `revert will delete ${matches.length} file(s) and their transactions:`,
     ),
   );
   for (const m of matches) {

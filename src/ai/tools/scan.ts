@@ -5,7 +5,7 @@ import type { AgentExecutionContext, ToolDefinition, ToolModule } from "./types.
 const DEFS: ToolDefinition[] = [
   {
     name: "mark_file_scanned",
-    description: "Call this once the file is fully processed and all journal entries are posted. Summary text is shown to the user.",
+    description: "Call this once the file is fully processed and all transactions are posted. Summary text is shown to the user.",
     input_schema: {
       type: "object",
       properties: {

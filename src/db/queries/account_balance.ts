@@ -2,10 +2,23 @@ import type Database from "libsql";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
+export const TOP_LEVEL_TYPES: ReadonlyArray<AccountType> = [
+  "asset", "liability", "income", "expense", "equity",
+];
+
+const TYPE_ROOT_NAME: Record<AccountType, string> = {
+  asset: "Assets",
+  liability: "Liabilities",
+  income: "Income",
+  expense: "Expenses",
+  equity: "Equity",
+};
+
 export interface AccountRow {
   id: string;
   name: string;
   type: AccountType;
+  parent_id: string | null;
   subtype: string | null;
   bank_name: string | null;
   account_number_masked: string | null;
@@ -39,13 +52,13 @@ export function getAccountBalances(db: Database.Database, opts: { type?: Account
 
   const rows = db.prepare(
     `SELECT a.*,
-            COALESCE(SUM(jl.debit), 0)  AS sum_debit,
-            COALESCE(SUM(jl.credit), 0) AS sum_credit
+            COALESCE(SUM(p.debit), 0)  AS sum_debit,
+            COALESCE(SUM(p.credit), 0) AS sum_credit
      FROM accounts a
-     LEFT JOIN journal_lines jl ON jl.account_id = a.id
+     LEFT JOIN postings p ON p.account_id = a.id
      ${whereSql}
      GROUP BY a.id
-     ORDER BY a.type, a.name`,
+     ORDER BY a.type, a.id`,
   ).all(...params) as (AccountRow & { sum_debit: number; sum_credit: number })[];
 
   return rows.map(r => {
@@ -81,12 +94,12 @@ export interface PeriodTotals {
 export function getPeriodTotals(db: Database.Database, from: string, to: string): PeriodTotals {
   const row = db.prepare(
     `SELECT
-        COALESCE(SUM(CASE WHEN a.type = 'income'  THEN jl.credit - jl.debit ELSE 0 END), 0) AS income,
-        COALESCE(SUM(CASE WHEN a.type = 'expense' THEN jl.debit - jl.credit ELSE 0 END), 0) AS expenses
-     FROM journal_lines jl
-     JOIN journal_entries je ON je.id = jl.entry_id
-     JOIN accounts a ON a.id = jl.account_id
-     WHERE je.date BETWEEN ? AND ?`,
+        COALESCE(SUM(CASE WHEN a.type = 'income'  THEN p.credit - p.debit ELSE 0 END), 0) AS income,
+        COALESCE(SUM(CASE WHEN a.type = 'expense' THEN p.debit - p.credit ELSE 0 END), 0) AS expenses
+     FROM postings p
+     JOIN transactions t ON t.id = p.transaction_id
+     JOIN accounts a ON a.id = p.account_id
+     WHERE t.date BETWEEN ? AND ?`,
   ).get(from, to) as { income: number; expenses: number };
   return { income: row.income, expenses: row.expenses };
 }
@@ -100,9 +113,195 @@ export function renameAccount(db: Database.Database, id: string, name: string): 
 }
 
 /**
- * Re-point every journal line on `fromId` to `toId`, then delete the source
- * account. Wrapped in a transaction. Returns the number of journal lines moved.
- * Throws if either account doesn't exist.
+ * Idempotently insert one of the five top-level type roots (id = type name,
+ * parent_id = null). Called by `createAccount` when a child's declared parent
+ * is a missing top-level root.
+ */
+export function ensureTopLevelRoot(db: Database.Database, type: AccountType): void {
+  if (findAccountById(db, type)) return;
+  db.prepare(
+    `INSERT INTO accounts (id, name, type, parent_id) VALUES (?, ?, ?, NULL)`,
+  ).run(type, TYPE_ROOT_NAME[type], type);
+}
+
+/**
+ * Idempotently insert one of the structural accounts the system auto-creates:
+ *  - `expense:uncategorized`  (suspense for unclassifiable expense postings)
+ *  - `equity:adjustments`     (balancing side of `adjust_account_balance`)
+ *  - `equity:opening-balance` (starting state imports)
+ * The top-level root is bootstrapped first when missing.
+ */
+export function ensureStructuralAccount(
+  db: Database.Database,
+  id: "expense:uncategorized" | "equity:adjustments" | "equity:opening-balance",
+): void {
+  if (findAccountById(db, id)) return;
+  const [type, leaf] = id.split(":") as [AccountType, string];
+  ensureTopLevelRoot(db, type);
+  const name = leaf === "uncategorized" ? "Uncategorized"
+    : leaf === "adjustments" ? "Adjustments"
+    : "Opening Balance";
+  db.prepare(
+    `INSERT INTO accounts (id, name, type, parent_id) VALUES (?, ?, ?, ?)`,
+  ).run(id, name, type, type);
+}
+
+export interface CreateAccountInput {
+  id: string;
+  name: string;
+  type: AccountType;
+  parent_id?: string | null;
+  subtype?: string | null;
+  bank_name?: string | null;
+  account_number_masked?: string | null;
+  currency?: string;
+  due_day?: number | null;
+  statement_day?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * Insert a new account row. Enforces the three hierarchy invariants:
+ *   1. Top-level roots: parent_id null, id == type, one of TOP_LEVEL_TYPES.
+ *   2. Children: parent_id non-null, parent must exist (the top-level root is
+ *      auto-bootstrapped if missing — intermediate categories must be created
+ *      explicitly), parent.type must equal input.type, input.id must start with
+ *      parent.id + ':'.
+ *   3. UNIQUE on id (surfaces as code: 'ACCOUNT_EXISTS').
+ */
+export function createAccount(db: Database.Database, input: CreateAccountInput): void {
+  const bank = input.bank_name ? String(input.bank_name).toUpperCase() : null;
+  const parentId = input.parent_id ?? null;
+
+  if (parentId === null) {
+    if (!TOP_LEVEL_TYPES.includes(input.id as AccountType)) {
+      throw new Error(
+        `Account "${input.id}" has no parent_id; only top-level type roots may have a null parent (one of ${TOP_LEVEL_TYPES.join(", ")}).`,
+      );
+    }
+    if (input.id !== input.type) {
+      throw new Error(`Top-level root id "${input.id}" must equal its type "${input.type}".`);
+    }
+  } else {
+    let parent = findAccountById(db, parentId);
+    if (!parent) {
+      if (TOP_LEVEL_TYPES.includes(parentId as AccountType)) {
+        ensureTopLevelRoot(db, parentId as AccountType);
+        parent = findAccountById(db, parentId);
+      }
+    }
+    if (!parent) {
+      throw new Error(`Parent account "${parentId}" does not exist; create it first.`);
+    }
+    if (parent.type !== input.type) {
+      throw new Error(
+        `Account "${input.id}" type "${input.type}" does not match parent "${parentId}" type "${parent.type}".`,
+      );
+    }
+    if (!input.id.startsWith(parent.id + ":")) {
+      throw new Error(`Account id "${input.id}" must start with parent id "${parent.id}:".`);
+    }
+  }
+
+  try {
+    db.prepare(
+      `INSERT INTO accounts (id, name, type, parent_id, subtype, bank_name, account_number_masked, currency, due_day, statement_day, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.id,
+      input.name,
+      input.type,
+      parentId,
+      input.subtype ?? null,
+      bank,
+      input.account_number_masked ?? null,
+      input.currency ?? "THB",
+      input.due_day ?? null,
+      input.statement_day ?? null,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+    );
+  } catch (err: any) {
+    if (String(err.message).includes("UNIQUE")) {
+      const dup = new Error(`Account "${input.id}" already exists.`);
+      (dup as any).code = "ACCOUNT_EXISTS";
+      throw dup;
+    }
+    throw err;
+  }
+}
+
+export interface UpdateAccountMetadataPatch {
+  due_day?: number | null;
+  statement_day?: number | null;
+  points_balance?: number | null;
+  account_number_masked?: string | null;
+  bank_name?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateAccountMetadataResult {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changed: boolean;
+}
+
+/**
+ * Patch metadata fields on an account. Returns before/after snapshots of the
+ * touched fields so callers can persist a reversible audit record. `metadata`
+ * is shallow-merged into the existing metadata_json blob.
+ */
+export function updateAccountMetadata(
+  db: Database.Database,
+  id: string,
+  patch: UpdateAccountMetadataPatch,
+): UpdateAccountMetadataResult {
+  const current = findAccountById(db, id);
+  if (!current) throw new Error(`Account "${id}" not found.`);
+
+  const sets: string[] = [];
+  const params: any[] = [];
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+
+  if (patch.due_day !== undefined) {
+    sets.push("due_day = ?"); params.push(patch.due_day);
+    before.due_day = current.due_day; after.due_day = patch.due_day;
+  }
+  if (patch.statement_day !== undefined) {
+    sets.push("statement_day = ?"); params.push(patch.statement_day);
+    before.statement_day = current.statement_day; after.statement_day = patch.statement_day;
+  }
+  if (patch.points_balance !== undefined) {
+    sets.push("points_balance = ?"); params.push(patch.points_balance);
+    before.points_balance = current.points_balance; after.points_balance = patch.points_balance;
+  }
+  if (patch.account_number_masked !== undefined) {
+    sets.push("account_number_masked = ?"); params.push(patch.account_number_masked);
+    before.account_number_masked = current.account_number_masked;
+    after.account_number_masked = patch.account_number_masked;
+  }
+  if (patch.bank_name !== undefined) {
+    const next = patch.bank_name == null ? null : String(patch.bank_name).toUpperCase();
+    sets.push("bank_name = ?"); params.push(next);
+    before.bank_name = current.bank_name; after.bank_name = next;
+  }
+  if (patch.metadata) {
+    const existing = current.metadata_json ? JSON.parse(current.metadata_json) : {};
+    const merged = { ...existing, ...patch.metadata };
+    sets.push("metadata_json = ?"); params.push(JSON.stringify(merged));
+    before.metadata = existing; after.metadata = merged;
+  }
+
+  if (sets.length === 0) return { before, after, changed: false };
+  params.push(id);
+  db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  return { before, after, changed: true };
+}
+
+/**
+ * Re-point every posting on `fromId` to `toId`, then delete the source account.
+ * Wrapped in a transaction. Refuses if the source still has children. Returns
+ * the number of postings moved.
  */
 export function mergeAccounts(db: Database.Database, fromId: string, toId: string): number {
   if (fromId === toId) throw new Error("Cannot merge an account into itself.");
@@ -111,10 +310,17 @@ export function mergeAccounts(db: Database.Database, fromId: string, toId: strin
   const to = findAccountById(db, toId);
   if (!to) throw new Error(`Destination account ${toId} not found.`);
 
+  const childCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM accounts WHERE parent_id = ?`)
+    .get(fromId) as { n: number };
+  if (childCount.n > 0) {
+    throw new Error(`Account ${fromId} has ${childCount.n} child account(s); merge or delete them first.`);
+  }
+
   let moved = 0;
   const tx = db.transaction((): void => {
     moved = db
-      .prepare(`UPDATE journal_lines SET account_id = ? WHERE account_id = ?`)
+      .prepare(`UPDATE postings SET account_id = ? WHERE account_id = ?`)
       .run(toId, fromId).changes;
     db.prepare(`DELETE FROM accounts WHERE id = ?`).run(fromId);
   });
@@ -122,15 +328,63 @@ export function mergeAccounts(db: Database.Database, fromId: string, toId: strin
   return moved;
 }
 
-/** Delete an account only if no journal_lines reference it. */
+/** Delete an account only if no postings reference it AND it has no children. */
 export function deleteAccount(db: Database.Database, id: string): void {
   const inUse = db
-    .prepare(`SELECT 1 FROM journal_lines WHERE account_id = ? LIMIT 1`)
+    .prepare(`SELECT 1 FROM postings WHERE account_id = ? LIMIT 1`)
     .get(id);
   if (inUse) {
-    throw new Error(`Account ${id} still has journal lines; merge it first.`);
+    throw new Error(`Account ${id} still has postings; merge it first.`);
+  }
+  const childCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM accounts WHERE parent_id = ?`)
+    .get(id) as { n: number };
+  if (childCount.n > 0) {
+    throw new Error(`Account ${id} has ${childCount.n} child account(s); delete them first.`);
   }
   db.prepare(`DELETE FROM accounts WHERE id = ?`).run(id);
+}
+
+/**
+ * Recursive CTE walk over `accounts.parent_id` returning the root and every
+ * descendant. Used by `getRollupBalance` and by hierarchical rendering paths.
+ */
+export function getAccountSubtree(db: Database.Database, rootId: string): AccountRow[] {
+  return db.prepare(
+    `WITH RECURSIVE subtree AS (
+       SELECT * FROM accounts WHERE id = ?
+       UNION ALL
+       SELECT a.* FROM accounts a JOIN subtree s ON a.parent_id = s.id
+     )
+     SELECT * FROM subtree ORDER BY id`,
+  ).all(rootId) as AccountRow[];
+}
+
+/**
+ * Sum the natural balance of every account in a subtree (root inclusive).
+ * Uses the same debit-normal / credit-normal convention as `getAccountBalances`.
+ */
+export function getRollupBalance(db: Database.Database, rootId: string): number {
+  const subtree = getAccountSubtree(db, rootId);
+  if (subtree.length === 0) return 0;
+  const ids = subtree.map(a => a.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const row = db.prepare(
+    `SELECT a.type,
+            COALESCE(SUM(p.debit), 0)  AS sum_debit,
+            COALESCE(SUM(p.credit), 0) AS sum_credit
+     FROM accounts a
+     LEFT JOIN postings p ON p.account_id = a.id
+     WHERE a.id IN (${placeholders})
+     GROUP BY a.type`,
+  ).all(...ids) as { type: AccountType; sum_debit: number; sum_credit: number }[];
+
+  let total = 0;
+  for (const r of row) {
+    const debitNormal = r.type === "asset" || r.type === "expense";
+    total += debitNormal ? r.sum_debit - r.sum_credit : r.sum_credit - r.sum_debit;
+  }
+  return total;
 }
 
 export interface SimilarAccountPair {
@@ -161,14 +415,46 @@ export function findUnusedAccounts(db: Database.Database): AccountRow[] {
   return db
     .prepare(
       `SELECT a.* FROM accounts a
-       LEFT JOIN journal_lines jl ON jl.account_id = a.id
-       WHERE jl.id IS NULL
+       LEFT JOIN postings p ON p.account_id = a.id
+       WHERE p.id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_id = a.id)
+         AND a.id NOT IN ('asset','liability','income','expense','equity')
        ORDER BY a.name`,
     )
     .all() as AccountRow[];
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
+export interface FuzzyAccountMatch {
+  account: AccountRow;
+  similarity: number;
+}
+
+/**
+ * Rank the chart of accounts by name similarity to a free-text query. Returns
+ * matches at or above `threshold`, highest first. Bonus weight when the query
+ * is a substring of the name so "ttb saving" still finds "TTB Savings ••1234"
+ * even though pure Levenshtein on the full strings is mediocre.
+ */
+export function findAccountsByFuzzyName(
+  db: Database.Database,
+  query: string,
+  threshold = 0.5,
+): FuzzyAccountMatch[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const rows = db.prepare(`SELECT * FROM accounts ORDER BY name`).all() as AccountRow[];
+  const out: FuzzyAccountMatch[] = [];
+  for (const row of rows) {
+    const name = row.name.toLowerCase();
+    let score = similarity(q, name);
+    if (name.includes(q) || q.includes(name)) score = Math.max(score, 0.85);
+    if (score >= threshold) {
+      out.push({ account: row, similarity: Math.round(score * 1000) / 1000 });
+    }
+  }
+  out.sort((a, b) => b.similarity - a.similarity);
+  return out;
+}
 
 function similarity(a: string, b: string): number {
   if (a === b) return 1;

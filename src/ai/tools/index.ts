@@ -3,9 +3,11 @@ import type { ToolDefinition } from "../provider.js";
 import type { AgentExecutionContext, ToolModule, ToolProfile } from "./types.js";
 import { commonTools } from "./common.js";
 import { readTools } from "./read.js";
-import { scanIngestTools, reviewIngestTools } from "./ingest.js";
+import { accountIngestTools, scanConcernTools, reviewIngestTools } from "./ingest.js";
 import { scanTools } from "./scan.js";
 import { reviewTools } from "./review.js";
+import { recordTools } from "./record.js";
+import { merchantTools } from "./merchants.js";
 
 export type { AgentExecutionContext, ToolProfile } from "./types.js";
 
@@ -14,14 +16,19 @@ export type { AgentExecutionContext, ToolProfile } from "./types.js";
  * the dispatcher iterates every module on each tool call so we never need a
  * central switch.
  *
- * `scanIngestTools` (create_account / update_account_metadata /
- * record_journal_entry / note_concern) ships with both scan and review — scan
- * uses them to post, review uses them to fix.
+ * `accountIngestTools` (create_account / update_account_metadata /
+ * record_transaction) ships with scan, review, and record — they're the
+ * shared write primitives. `scanConcernTools` (note_concern) is scan-only;
+ * record uses `clarify` from `recordTools` for transient prompts, review uses
+ * `ask_user` from `reviewIngestTools` for resolve-in-place clarifications.
+ * `merchantTools` ships with scan, review, and record so any write profile can
+ * upsert / look up / re-cache merchants alongside the posting flow.
  */
 const PROFILES: Record<ToolProfile, ToolModule[]> = {
-  scan:   [commonTools, scanIngestTools, scanTools],
+  scan:   [commonTools, accountIngestTools, scanConcernTools, scanTools, merchantTools],
   chat:   [commonTools, readTools],
-  review: [commonTools, readTools, scanIngestTools, reviewIngestTools, reviewTools],
+  review: [commonTools, readTools, accountIngestTools, reviewIngestTools, reviewTools, merchantTools],
+  record: [commonTools, readTools, accountIngestTools, recordTools, merchantTools],
 };
 
 export function getToolDefinitions(profile: ToolProfile): ToolDefinition[] {
@@ -34,7 +41,17 @@ export async function executeTool(
   input: any,
   ctx?: AgentExecutionContext,
 ): Promise<string> {
-  for (const mod of [commonTools, readTools, scanIngestTools, reviewIngestTools, scanTools, reviewTools]) {
+  for (const mod of [
+    commonTools,
+    readTools,
+    accountIngestTools,
+    scanConcernTools,
+    reviewIngestTools,
+    scanTools,
+    reviewTools,
+    recordTools,
+    merchantTools,
+  ]) {
     const result = await mod.execute(db, name, input, ctx);
     if (result !== undefined) return result;
   }
@@ -45,8 +62,11 @@ export async function executeTool(
 export const TOOL_LABELS: Record<string, string> = {
   ...commonTools.LABELS,
   ...readTools.LABELS,
-  ...scanIngestTools.LABELS,
+  ...accountIngestTools.LABELS,
+  ...scanConcernTools.LABELS,
   ...reviewIngestTools.LABELS,
   ...scanTools.LABELS,
   ...reviewTools.LABELS,
+  ...recordTools.LABELS,
+  ...merchantTools.LABELS,
 };

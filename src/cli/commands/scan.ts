@@ -31,7 +31,17 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
   renderScanSummary(summary);
 }
 
-// ── Ink-based events (TTY mode) ────────────────────────────────────────────
+function logDecryptProgress(
+  e: { index: number; total: number; fileName: string; outcome: string },
+): void {
+  const marker =
+    e.outcome === "decrypted" ? chalk.dim("·")
+    : e.outcome === "skipped" ? chalk.dim("•")
+    : chalk.red("✗");
+  console.log(`  ${marker} [${e.index + 1}/${e.total}] ${e.fileName} (${e.outcome})`);
+}
+
+/** Ink-based events (TTY mode) */
 
 async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
   // Lazy-load ink + react so this module stays importable in non-TTY contexts
@@ -48,13 +58,7 @@ async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
     decryptStart: (count) => {
       if (count > 0) console.log(chalk.dim(`Decrypting ${count} file(s)...`));
     },
-    decryptProgress: (e) => {
-      const marker =
-        e.outcome === "decrypted" ? chalk.dim("·")
-        : e.outcome === "skipped" ? chalk.dim("•")
-        : chalk.red("✗");
-      console.log(`  ${marker} [${e.index + 1}/${e.total}] ${e.fileName} (${e.outcome})`);
-    },
+    decryptProgress: logDecryptProgress,
     decryptDone: (e) => {
       console.log(chalk.dim(`Decrypted ${e.decrypted}, skipped ${e.skipped}, failed ${e.failed}.`));
       console.log("");
@@ -71,7 +75,7 @@ async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
       type: "scan-end",
       fileName: e.fileName,
       status: e.status,
-      entries: e.entries,
+      transactions: e.transactions,
       concerns: e.concerns,
       error: e.error,
     }),
@@ -89,7 +93,7 @@ async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
   };
 }
 
-// ── Plain-text progress (TTY or piped, no ink yet) ─────────────────────────
+/** Plain-text progress (non-TTY or fallback) */
 
 function buildPlainTextEvents(): ScanRunEvents {
   let decryptTotal = 0;
@@ -100,13 +104,7 @@ function buildPlainTextEvents(): ScanRunEvents {
       decryptTotal = count;
       if (count > 0) console.log(chalk.dim(`Decrypting ${count} file(s)...`));
     },
-    decryptProgress: (e) => {
-      const marker =
-        e.outcome === "decrypted" ? chalk.dim("·")
-        : e.outcome === "skipped" ? chalk.dim("•")
-        : chalk.red("✗");
-      console.log(`  ${marker} [${e.index + 1}/${e.total}] ${e.fileName} (${e.outcome})`);
-    },
+    decryptProgress: logDecryptProgress,
     decryptDone: (e) => {
       if (decryptTotal === 0) return;
       console.log(chalk.dim(`Decrypted ${e.decrypted}, skipped ${e.skipped}, failed ${e.failed}.`));
@@ -123,7 +121,7 @@ function buildPlainTextEvents(): ScanRunEvents {
     scanEnd: (e) => {
       lastStepByFile.delete(e.fileName);
       if (e.status === "scanned") {
-        console.log(`${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.entries} entries, ${e.concerns} concerns)`)}`);
+        console.log(`${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.transactions} transactions, ${e.concerns} concerns)`)}`);
       } else {
         console.log(`${chalk.red("✗")} ${e.fileName} ${chalk.dim(`— ${e.error ?? "failed"}`)}`);
       }
@@ -137,7 +135,7 @@ function buildPlainTextEvents(): ScanRunEvents {
   };
 }
 
-// ── Terse summary ──────────────────────────────────────────────────────────
+/** Terse summary */
 
 function renderScanSummary(summary: ScanSummary): void {
   console.log("");
@@ -153,12 +151,12 @@ function renderScanSummary(summary: ScanSummary): void {
     const label = d.relPath;
     switch (d.status) {
       case "scanned": {
-        const tag = chalk.dim(`${d.entries} entries${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""}`);
+        const tag = chalk.dim(`${d.transactions} transactions${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""}`);
         console.log(`  ${chalk.green("✓")} ${label}  ${tag}`);
         break;
       }
       case "replaced": {
-        const tag = chalk.dim(`${d.entries} entries${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""} (replaces prior)`);
+        const tag = chalk.dim(`${d.transactions} transactions${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""} (replaces prior)`);
         console.log(`  ${chalk.cyan("↻")} ${label}  ${tag}`);
         break;
       }

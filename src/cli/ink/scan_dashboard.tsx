@@ -5,7 +5,7 @@ import Spinner from "ink-spinner";
 export type ScanDashboardEvent =
   | { type: "scan-start"; fileName: string }
   | { type: "scan-progress"; fileName: string; step: string }
-  | { type: "scan-end"; fileName: string; status: "scanned" | "failed"; entries: number; concerns: number; error?: string };
+  | { type: "scan-end"; fileName: string; status: "scanned" | "failed"; transactions: number; concerns: number; error?: string };
 
 /**
  * Subscribe / publish channel between the pipeline (which knows nothing about
@@ -29,7 +29,7 @@ export class ScanDashboardController {
 
 type RowState =
   | { kind: "scanning"; step: string }
-  | { kind: "done"; entries: number; concerns: number }
+  | { kind: "done"; transactions: number; concerns: number }
   | { kind: "failed"; error: string };
 
 interface Props {
@@ -62,7 +62,7 @@ export function ScanDashboard({ controller, totalFiles, parallel }: Props) {
             next.set(
               event.fileName,
               event.status === "scanned"
-                ? { kind: "done", entries: event.entries, concerns: event.concerns }
+                ? { kind: "done", transactions: event.transactions, concerns: event.concerns }
                 : { kind: "failed", error: event.error ?? "failed" },
             );
             break;
@@ -93,7 +93,7 @@ function FileRow({ name, state }: { name: string; state: RowState }) {
   if (state.kind === "done") {
     return (
       <Text>
-        {"  "}<Text color="green">✓</Text> {name} <Text dimColor>({state.entries} entries, {state.concerns} concerns)</Text>
+        {"  "}<Text color="green">✓</Text> {name} <Text dimColor>({state.transactions} transactions, {state.concerns} concerns)</Text>
       </Text>
     );
   }

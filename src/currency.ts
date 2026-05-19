@@ -16,10 +16,11 @@ export function formatCurrencyAmount(
   options: {
     minimumFractionDigits?: number;
     maximumFractionDigits?: number;
+    currency?: string;
   } = {},
 ): string {
   const locale = getDisplayLocale();
-  const currency = getDisplayCurrency();
+  const currency = options.currency || getDisplayCurrency();
 
   return new Intl.NumberFormat(locale, {
     style: "currency",
@@ -27,4 +28,17 @@ export function formatCurrencyAmount(
     minimumFractionDigits: options.minimumFractionDigits,
     maximumFractionDigits: options.maximumFractionDigits,
   }).format(Math.abs(amount));
+}
+
+export function formatAmount(amount: number, currency?: string): string {
+  return formatCurrencyAmount(amount, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    currency,
+  });
+}
+
+export function formatSignedAmount(amount: number, currency?: string): string {
+  const body = formatAmount(amount, currency);
+  return amount < 0 ? `-${body}` : body;
 }

@@ -2,12 +2,13 @@ import type Database from "libsql";
 import { randomUUID } from "crypto";
 
 export interface ConcernTarget {
-  entry_id: string | null;
+  transaction_id: string | null;
   account_id: string | null;
 }
 
 export interface RecordConcernInput extends ConcernTarget {
   file_id: string | null;
+  kind?: string | null;
   prompt: string;
   options?: string[];
 }
@@ -15,8 +16,9 @@ export interface RecordConcernInput extends ConcernTarget {
 export interface OpenConcernRow {
   id: string;
   file_id: string | null;
-  entry_id: string | null;
+  transaction_id: string | null;
   account_id: string | null;
+  kind: string | null;
   prompt: string;
   options_json: string | null;
   created_at: string;
@@ -24,22 +26,23 @@ export interface OpenConcernRow {
 
 /**
  * Insert a new concerns row and flip the `has_concern` boolean on whichever
- * target (entry / account) was named. Returns the new `cn:<uuid>` id.
+ * target (transaction / account) was named. Returns the new `cn:<uuid>` id.
  */
 export function recordConcern(db: Database.Database, input: RecordConcernInput): string {
   const id = `cn:${randomUUID()}`;
   db.prepare(
-    `INSERT INTO concerns (id, file_id, entry_id, account_id, prompt, options_json) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO concerns (id, file_id, transaction_id, account_id, kind, prompt, options_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.file_id,
-    input.entry_id,
+    input.transaction_id,
     input.account_id,
+    input.kind ?? null,
     input.prompt,
     input.options ? JSON.stringify(input.options) : null,
   );
-  if (input.entry_id) {
-    db.prepare(`UPDATE journal_entries SET has_concern = 1 WHERE id = ?`).run(input.entry_id);
+  if (input.transaction_id) {
+    db.prepare(`UPDATE transactions SET has_concern = 1 WHERE id = ?`).run(input.transaction_id);
   }
   if (input.account_id) {
     db.prepare(`UPDATE accounts SET has_concern = 1 WHERE id = ?`).run(input.account_id);
@@ -61,26 +64,26 @@ export function resolveConcern(db: Database.Database, id: string, answer: string
 }
 
 /**
- * Look up the entry/account a concern is attached to. Returns null when the
- * concern id doesn't exist.
+ * Look up the transaction/account a concern is attached to. Returns null when
+ * the concern id doesn't exist.
  */
 export function getConcernTarget(db: Database.Database, id: string): ConcernTarget | null {
   const row = db
-    .prepare(`SELECT entry_id, account_id FROM concerns WHERE id = ?`)
+    .prepare(`SELECT transaction_id, account_id FROM concerns WHERE id = ?`)
     .get(id) as ConcernTarget | undefined;
   return row ?? null;
 }
 
 /**
- * Clear `has_concern` on the named entry / account if no other open concerns
+ * Clear `has_concern` on the named transaction / account if no other open concerns
  * still reference it. Safe to call after any concern resolution; idempotent.
  */
 export function maybeClearHasConcernFlags(db: Database.Database, target: ConcernTarget): void {
-  if (target.entry_id) {
+  if (target.transaction_id) {
     const open = db
-      .prepare(`SELECT 1 FROM concerns WHERE entry_id = ? AND resolved_at IS NULL LIMIT 1`)
-      .get(target.entry_id);
-    if (!open) db.prepare(`UPDATE journal_entries SET has_concern = 0 WHERE id = ?`).run(target.entry_id);
+      .prepare(`SELECT 1 FROM concerns WHERE transaction_id = ? AND resolved_at IS NULL LIMIT 1`)
+      .get(target.transaction_id);
+    if (!open) db.prepare(`UPDATE transactions SET has_concern = 0 WHERE id = ?`).run(target.transaction_id);
   }
   if (target.account_id) {
     const open = db
@@ -92,16 +95,18 @@ export function maybeClearHasConcernFlags(db: Database.Database, target: Concern
 
 export interface CountOpenConcernsScope {
   file_id?: string;
-  entry_id?: string;
+  transaction_id?: string;
   account_id?: string;
+  kind?: string;
 }
 
 export function countOpenConcerns(db: Database.Database, scope: CountOpenConcernsScope = {}): number {
   const conditions = ["resolved_at IS NULL"];
   const params: any[] = [];
-  if (scope.file_id)    { conditions.push("file_id = ?");    params.push(scope.file_id); }
-  if (scope.entry_id)   { conditions.push("entry_id = ?");   params.push(scope.entry_id); }
-  if (scope.account_id) { conditions.push("account_id = ?"); params.push(scope.account_id); }
+  if (scope.file_id)        { conditions.push("file_id = ?");        params.push(scope.file_id); }
+  if (scope.transaction_id) { conditions.push("transaction_id = ?"); params.push(scope.transaction_id); }
+  if (scope.account_id)     { conditions.push("account_id = ?");     params.push(scope.account_id); }
+  if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM concerns WHERE ${conditions.join(" AND ")}`)
     .get(...params) as { n: number };
@@ -111,7 +116,7 @@ export function countOpenConcerns(db: Database.Database, scope: CountOpenConcern
 export function listOpenConcerns(db: Database.Database, limit = 50): OpenConcernRow[] {
   const capped = Math.min(Math.max(limit, 1), 200);
   return db.prepare(
-    `SELECT id, file_id, entry_id, account_id, prompt, options_json, created_at
+    `SELECT id, file_id, transaction_id, account_id, kind, prompt, options_json, created_at
      FROM concerns
      WHERE resolved_at IS NULL
      ORDER BY created_at ASC

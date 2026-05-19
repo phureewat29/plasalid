@@ -4,8 +4,10 @@ import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
   buildReviewSystemPrompt,
+  buildRecordSystemPrompt,
   type ScanPromptOptions,
   type ReviewPromptOptions,
+  type RecordPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
 import { getConversationHistory, saveMessage } from "./memory.js";
@@ -204,7 +206,34 @@ export async function runScanAgent(opts: {
 }
 
 /**
- * Review-time agent loop. Surveys the existing journal with the review
+ * Record-time agent loop. Takes one natural-language utterance and walks the
+ * record tool profile (read tools + account/entry writers + adjust_balance +
+ * clarify). Single-shot — does not persist conversation history.
+ */
+export async function runRecordAgent(opts: {
+  db: Database.Database;
+  initialMessages: NormalizedMessage[];
+  prompt: RecordPromptOptions;
+  agentCtx: AgentExecutionContext;
+  onProgress?: ProgressCallback;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const systemPrompt = redact(buildRecordSystemPrompt(opts.db, opts.prompt));
+  const { text } = await runAgent({
+    db: opts.db,
+    systemPrompt,
+    tools: getToolDefinitions("record"),
+    initialMessages: opts.initialMessages,
+    agentCtx: opts.agentCtx,
+    onProgress: opts.onProgress,
+    signal: opts.signal,
+    maxToolSteps: 30,
+  });
+  return text;
+}
+
+/**
+ * Review-time agent loop. Surveys the existing transactions with the review
  * tool profile (read tools + write/merge/delete primitives + recurrence
  * detection/recording).
  */

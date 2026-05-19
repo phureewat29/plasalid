@@ -19,7 +19,7 @@ function ensureConfigured(): void {
 
 program
   .name("plasalid")
-  .description("The Harness Layer for Personal Finance — local-first")
+  .description("AI Harness for Personal Finance")
   .version(version)
   .addHelpCommand(false)
   .showHelpAfterError(
@@ -133,8 +133,15 @@ program
       console.error(`  ${chalk.cyan("plasalid scan 'KBank|SCB'")}`);
       process.exit(1);
     }
-    const envParallel = parseInt(process.env.PLASALID_SCAN_CONCURRENCY ?? "", 10);
-    const parallel = Number.isFinite(opts.parallel) ? opts.parallel : (Number.isFinite(envParallel) ? envParallel : undefined);
+    const envParallel = parseInt(
+      process.env.PLASALID_SCAN_CONCURRENCY ?? "",
+      10,
+    );
+    const parallel = Number.isFinite(opts.parallel)
+      ? opts.parallel
+      : Number.isFinite(envParallel)
+        ? envParallel
+        : undefined;
     const { runScanCommand } = await import("./commands/scan.js");
     await runScanCommand({ regex: regexes[0], force: !!opts.force, parallel });
   });

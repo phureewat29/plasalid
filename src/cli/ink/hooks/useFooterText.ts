@@ -4,15 +4,15 @@ import type Database from "libsql";
 
 const HINTS = [
   "try: what's my net worth?",
+  "try: am I spending more than I earn?",
+  "try: how much did I save last month?",
   "try: where did my money go last month?",
   "try: biggest expense this month?",
+  "try: top spending categories this month?",
   "try: total credit card debt?",
-  "try: next card payment due?",
+  "try: next bill due?",
   "try: list my subscriptions",
-  "try: coffee spend this year?",
-  "try: transactions over 10,000 baht",
-  "try: top merchants this quarter?",
-  "try: dining — this month vs last?",
+  "try: how much liquid cash do I have?",
   "try: net worth trend this year?",
   "try: open concerns from last scan?",
 ];

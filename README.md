@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Turn the financial documents you already receive into a structured, AI-readable context.
+  Turn the financial documents into a structured, AI-readable context.
 </p>
 
 

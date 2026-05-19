@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import chalk from "chalk";
 import type Database from "libsql";
 
 const HINTS = [
@@ -38,7 +39,7 @@ export function useFooterText(db: Database.Database): string {
     }
 
     const idx = (hintIdx + tick) % HINTS.length;
-    const parts = ["Plasalid"];
+    const parts = [`${chalk.cyan("<><")} plasalid`];
     if (scanStr) parts.push(scanStr);
     parts.push(HINTS[idx]);
     parts.push("ctrl+c to exit");

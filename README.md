@@ -15,11 +15,9 @@
 
 <br />
 
-A unified view of personal financial data is critical. In the US and EU, a financial data aggregator like Plaid empowers most finance apps: one connection, and every app sees the same unified view of your accounts. Most of the world doesn't have that, including Thailand, where there's no such aggregator. All bank data is siloed: knowing where your financial status stands means logging into five bank apps one by one — and with such a steep learning curve, most people just don't bother - and that's why Plasalid emerged
+A unified view of personal financial data is critical. In the US and EU, a financial data aggregator like Plaid empowers most finance apps: one connection, and every app sees the same unified view of your accounts. Most of the world doesn't have that, including Thailand, where there's no such aggregator. All bank data is siloed: knowing where your financial status stands means logging into five bank apps one by one — and with such a steep learning curve, most people just don't bother.
 
-Data has stayed fragmented for decades. Without a way to bring it together, personal finance remains hard to manage even in the era of AI. Subscriptions stay active long after they're forgotten, unknown charges go unverified, and bank accounts opened years ago drift unchecked.
-
-Debt may silently grow beyond what any single statement shows, and savings can't be tracked against a complete baseline. Decisions about how to clear debt, where to cut spending, or what you actually own get made on partial information.
+Your data has stayed fragmented for decades. That's why Plasalid emerged to resolve this painpoint. Without a way to bring it together, personal finance remains hard to manage. You can't manage a mortgage effectively without the full picture, and you may be completely blind to your recurring monthly income and expenses. Subscriptions stay active long after they're forgotten, unknown charges go unverified, bank accounts opened years ago drift unchecked, and unexpected spending may silently grow beyond what any single statement shows. When your finances are hard to manage, your life definitely gets harder. Your plans toward financial stability or freedom slip further out of reach.
 
 Plasalid addresses this with a simple founding concept: let users drop all their financial documents — bank statements, credit-card statements, payslips, brokerage statements — onto their own machine, where Plasalid leverages AI to extract every transaction, balance, and holding into a single, structured, double-entry database that serves as context for future processing.
 

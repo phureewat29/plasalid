@@ -176,6 +176,26 @@ program
   });
 
 program
+  .command("rules")
+  .description("List rules the system has learned")
+  .action(async () => {
+    ensureConfigured();
+    const { showRules } = await import("./commands/rules.js");
+    showRules();
+  });
+
+program
+  .command("forget <regex>")
+  .description(
+    "Delete every learned rule whose id matches <regex> (anchored). Run `plasalid rules` to list ids.",
+  )
+  .action(async (regex: string) => {
+    ensureConfigured();
+    const { forgetRule } = await import("./commands/rules.js");
+    forgetRule(regex);
+  });
+
+program
   .command("revert <regex>")
   .description(
     "Delete scanned files matching <regex> and all their transactions",
@@ -214,6 +234,14 @@ program.configureHelp({
       {
         name: "resolve",
         desc: "Walk open unknowns one at a time and apply your decision",
+      },
+      {
+        name: "rules",
+        desc: "List rules the system has learned",
+      },
+      {
+        name: "forget",
+        desc: "Delete learned rules whose ids match <regex> (anchored)",
       },
       {
         name: "revert",

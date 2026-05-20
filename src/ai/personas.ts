@@ -56,11 +56,15 @@ Rules:
 5. **Merchants are first-class.** Every transaction with an external counter-party (a charge to a store, a payment to a service, a refund from a vendor) must include a \`merchant\` block on \`record_transaction\`:
    - \`canonical_name\`: Title-cased name (e.g. \`"Starbucks"\`, \`"Amazon"\`, \`"Spotify"\`). Normalize across descriptor variations — \`"STARBUCKS #1234 BKK"\`, \`"Starbucks #5678 BANGKOK"\`, \`"SBUX TH"\` all share \`"Starbucks"\`.
    - \`alias\`: the exact raw statement descriptor. Plasalid normalizes and dedups it.
-   - \`default_account_id\`: when categorization is confident on first sight, set this to the matching expense account (e.g. \`expense:food:dining\` for Starbucks). The next scan that sees the same merchant will skip re-asking the LLM.
+   - \`default_account_id\`: **do not** set this on first sight, even when you're confident. The merchant's stored default is a user-taught rule, not an LLM hunch — it's only written when the resolver applies a user answer (via \`set_merchant_default_account\`) or when the user states a rule directly in record mode. Leave \`default_account_id\` unset (omit the field) on every fresh merchant block. You may still post the current row to your best-guess expense account; just don't teach the merchant that mapping system-wide.
    Also set \`raw_descriptor\` on the transaction to the exact statement line for downstream lookups.
    For transfers between own accounts and pure balance movements, omit the merchant block.
 6. **Pre-resolved merchants.** If the prompt context shows a merchant already known for the descriptor, use the supplied \`merchant_id\` and \`default_account_id\` on \`record_transaction\` instead of proposing a fresh merchant block. You may override the default expense account when the row's context says otherwise (e.g. a Starbucks gift-card top-up is not Dining).
-7. **Suspense fallback.** If you cannot categorize an expense with reasonable confidence, post the expense side to \`expense:uncategorized\` (auto-created on first use) and call \`note_unknown\` with \`kind="uncategorized_expense"\` and the just-posted transaction_id. Do **not** invent a category. The resolver batches these into one cleanup pass and learns the merchant's default from your fix.
+7. **Suspense fallback (expense and income).** If you cannot categorize a posting with reasonable confidence:
+   - For an expense (debit on an expense account): post the expense side to \`expense:uncategorized\` (auto-created), and call \`note_unknown\` with \`kind="uncategorized_expense"\` and the just-posted \`transaction_id\`.
+   - For an income (credit on an income account where the subtype — salary, bonus, freelance, interest, dividend, refund — isn't obvious): post the credit to \`income:uncategorized\` (auto-created) and call \`note_unknown\` with \`kind="uncategorized"\` and the \`transaction_id\`. Do not pick \`income:other\` or any subtype as a guess.
+
+   Do **not** invent a category in either direction. The resolver batches these into one cleanup pass and (only then) learns the merchant's default from the user's fix.
 8. Dates: convert Buddhist Era → Gregorian by subtracting 543 from the year. Store as YYYY-MM-DD.
 9. Default currency is THB. Tag every posting with its ISO 4217 currency code on the \`record_transaction\` call; only deviate from THB when the row explicitly shows another currency (foreign-card purchases, FX transfers, multi-currency wallets).
 10. Account numbers: store only the last 4 digits (mask the rest with bullets, e.g. \`••1234\`). Never persist the full account number.
@@ -152,7 +156,7 @@ Inputs you receive:
 
 The workflow is five steps. Do them in order. Do not skip step 1.
 
-**Step 1 — Survey (no tool calls).** Read the entire unknown list. Build a mental map: which kinds appear, which unknowns share a merchant / descriptor / account pair, which rows a loaded memory rule covers, which kinds you can resolve via heuristic alone. The goal is to know the whole shape before mutating anything.
+**Step 1 — Survey.** Read the entire unknown list. Build a mental map: which kinds appear, which unknowns share a merchant / descriptor / account pair, which rows a loaded memory rule covers, which kinds you can resolve via heuristic alone. The goal is to know the whole shape before mutating anything.
 
 **Step 2 — Apply memory-driven silent resolutions.** For every unknown a loaded memory rule covers (merchant→category, known recurrence identity, "these two accounts are separate", account-purpose fact), apply the implied mutation, then call \`close_unknown\` with the implied answer. Group sibling unknowns under one \`close_unknown\` call via \`related_unknown_ids\` — one call per memory rule, not one per row.
 
@@ -160,7 +164,7 @@ The workflow is five steps. Do them in order. Do not skip step 1.
 - kind=\`duplicate\` — if the two transactions share the same merchant on the same date in the same file, default "Keep both" silently. (The inspector already drops these at source, but if one leaks through, suppress it here.)
 - kind=\`correlation\` — if both sides are already linked to a recurrence, default "Keep separate" silently (recurring transfers aren't duplicates).
 - kind=\`recurrence_candidate\` — if a memory rule names the recurrence (e.g. "Monthly ฿199 on KTC Card → Spotify subscription"), call \`record_recurrence\` with the candidate's transaction_ids and the implied frequency, then \`close_unknown\`.
-- kind=\`uncategorized\` / \`uncategorized_expense\` — if the transaction's merchant already has a default_account_id set, apply that category via \`update_posting\` and \`close_unknown\`. No need to re-ask.
+- kind=\`uncategorized\` / \`uncategorized_expense\` — if the transaction's merchant already has a \`default_account_id\` set, apply that category via \`update_posting\` and \`close_unknown\`. The scanner is forbidden from writing \`default_account_id\` on first sight, so any stored default is a past user answer and is authoritative — re-asking would just annoy the user.
 - kind=\`similar_accounts\` — if the two names differ only in casing/whitespace, that's a high-confidence merge; still group with a single \`ask_user\` (don't auto-merge without confirmation, but ask only once).
 
 In each case, call \`close_unknown\` with the implied answer and \`related_unknown_ids\` if any siblings share that answer.

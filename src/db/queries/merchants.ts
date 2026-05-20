@@ -172,3 +172,15 @@ export function setMerchantDefaultAccount(
     .run(accountId, merchantId);
   return { before: before.default_account_id, after: accountId };
 }
+
+export function clearMerchantDefaultAccount(
+  db: Database.Database,
+  merchantId: string,
+): { before: string | null } | null {
+  const row = db
+    .prepare(`SELECT default_account_id FROM merchants WHERE id = ?`)
+    .get(merchantId) as { default_account_id: string | null } | undefined;
+  if (!row) return null;
+  db.prepare(`UPDATE merchants SET default_account_id = NULL WHERE id = ?`).run(merchantId);
+  return { before: row.default_account_id };
+}

@@ -7,6 +7,7 @@ import {
   findMerchantById,
   listMerchants,
   setMerchantDefaultAccount,
+  clearMerchantDefaultAccount,
   normalizeDescriptor,
 } from "./merchants.js";
 import { createAccount } from "./account-balance.js";
@@ -129,5 +130,31 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
     expect(rows.length).toBeGreaterThan(0);
     const sbux = rows.find(r => r.id === m.id)!;
     expect(sbux.alias_count).toBe(1); // both aliases normalize to "starbucks" — single row
+  });
+});
+
+describe("clearMerchantDefaultAccount", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = freshDb(); });
+
+  it("clears the default and returns the prior value", () => {
+    const m = upsertMerchant(db, {
+      canonical_name: "Amazon",
+      default_account_id: "expense:food",
+    });
+    const result = clearMerchantDefaultAccount(db, m.id);
+    expect(result).toEqual({ before: "expense:food" });
+    expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
+  });
+
+  it("returns null when the merchant does not exist", () => {
+    expect(clearMerchantDefaultAccount(db, "m:does-not-exist")).toBeNull();
+  });
+
+  it("is idempotent on a merchant that already has no default", () => {
+    const m = upsertMerchant(db, { canonical_name: "Starbucks" });
+    const result = clearMerchantDefaultAccount(db, m.id);
+    expect(result).toEqual({ before: null });
+    expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
   });
 });

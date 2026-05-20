@@ -45,3 +45,12 @@ export function saveMemory(db: Database.Database, content: string, category = "g
   if (existing) return;
   db.prepare(`INSERT INTO memories (content, category) VALUES (?, ?)`).run(content, category);
 }
+
+export function deleteMemory(db: Database.Database, id: number): Memory | null {
+  const row = db
+    .prepare(`SELECT id, content, category, created_at FROM memories WHERE id = ?`)
+    .get(id) as Memory | undefined;
+  if (!row) return null;
+  db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+  return row;
+}

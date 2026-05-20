@@ -3,18 +3,20 @@ import chalk from "chalk";
 import type Database from "libsql";
 
 const HINTS = [
-  "try: what's my net worth?",
-  "try: am I spending more than I earn?",
-  "try: how much did I save last month?",
-  "try: where did my money go last month?",
-  "try: biggest expense this month?",
-  "try: top spending categories this month?",
-  "try: total credit card debt?",
-  "try: next bill due?",
-  "try: list my subscriptions",
-  "try: how much liquid cash do I have?",
-  "try: net worth trend this year?",
-  "try: open unknowns from last scan?",
+  "try: what's my net worth, and where is most of it sitting?",
+  "try: how many months could I live off my savings if income stopped today?",
+  "try: am I saving more this year than last?",
+  "try: which debt costs me the most each month in interest?",
+  "try: at my current pace, when am I credit-card-free?",
+  "try: what's my savings rate this year?",
+  "try: at this savings rate, how far am I from retiring?",
+  "try: any subscriptions I probably haven't used in months?",
+  "try: how much of my spend is fixed vs variable?",
+  "try: which category jumped the most this quarter?",
+  "try: this month vs last month — what changed?",
+  "try: am I building wealth faster than I'm burning it?",
+  "try: if I throw an extra ฿5k a month at my highest-rate debt, when am I done?",
+  "try: which account is doing the heavy lifting on my net worth growth?",
 ];
 
 export function useFooterText(db: Database.Database): string {

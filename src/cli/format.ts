@@ -60,7 +60,7 @@ export function banner(): string {
   return (
     chalk.cyan("<°(((><  ") +
     chalk.bold("Plasalid") +
-    chalk.dim("  ·  AI Harness for Personal Finance")
+    chalk.dim("  ·  The Harness Layer for Personal Finance")
   );
 }
 

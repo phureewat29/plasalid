@@ -5,17 +5,25 @@
 <h1 align="center">Plasalid</h1>
 
 <p align="center">
-  <strong>The Harness for Personal Finance</strong>
+  <strong>The Harness Layer for Personal Finance</strong>
 </p>
 
 <p align="center">
-  Turn the financial documents into a structured, AI-readable context.
+    Turn your financial documents into structured, insightful, AI-readable context.
 </p>
 
 
 <br />
 
-In markets like Thailand there's no Plaid: no public API that gives apps a unified view of every account, no easy way to assemble a complete picture of your money. Knowing where you stand means logging into five bank apps one by one — and most people just don't bother. Plasalid goes further than a local Plaid — it's a harness layer: drop your bank and credit-card statement PDFs into a folder and Plasalid parses every transaction, balance into a double-entry database on your own machine, ready for any AI to plug into. No cloud aggregator. No upstream account to trust. One source of truth for every account.
+In US/EU, a financial data platform like Plaid is empowering most personal-finance apps. One connection, every app sees the same unified view of your accounts. Most of the world doesn't have that. In Thailand, for example, there's no equivalent to Plaid; all bank data is siloed: knowing where your financial status stands means logging into five bank apps one by one, and with such a steep learning curve, most people just don't bother. The picture stays fragmented.
+
+Without a unified view, the consequences are concrete. Subscriptions stay active long after they're forgotten. Unknown charges go unverified. Brokerage accounts opened years ago drift unchecked. Debt grows beyond what any single statement shows, and savings can't be tracked against a complete baseline. Decisions about how to clear debt, where to cut spending, or what you actually own get made on partial information, if they get made at all.
+
+Plasalid addresses this by parsing financial documents into a single structured ledger on your own machine. Drop any document into a folder — bank statements, credit-card statements, payslips, brokerage statements — and Plasalid extracts every transaction, balance, and holding into a double-entry database. 
+
+Plasalid also comes with a built-in chat that queries the ledger directly, so questions like which subscriptions are still active, where money went last month, or what your current net worth is can be answered against actual records rather than estimates. You can talk with your money on Plasalid. 
+
+The same data ledger also serves as a harness, open to any AI agent that connects to it, so the picture you assemble once is reusable across whatever tools you choose to use.
 
 ## Features
 

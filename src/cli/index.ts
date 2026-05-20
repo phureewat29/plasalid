@@ -19,7 +19,7 @@ function ensureConfigured(): void {
 
 program
   .name("plasalid")
-  .description("AI Harness for Personal Finance")
+  .description("The Harness Layer for Personal Finance")
   .version(version)
   .addHelpCommand(false)
   .showHelpAfterError(

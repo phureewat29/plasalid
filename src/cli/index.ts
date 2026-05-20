@@ -147,11 +147,11 @@ program
   });
 
 program
-  .command("review")
+  .command("resolve")
   .description(
-    "See the whole picture — connect related transactions across statements, surface recurring patterns, and clear up anything that's still in question.",
+    "Walk every open unknown from the last scan one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip).",
   )
-  .option("-a, --account <id>", "Limit review to a single account")
+  .option("-a, --account <id>", "Limit to unknowns attached to a single account")
   .option(
     "--from <date>",
     "Only consider entries on or after this date (YYYY-MM-DD)",
@@ -160,15 +160,18 @@ program
     "--to <date>",
     "Only consider entries on or before this date (YYYY-MM-DD)",
   )
-  .option("-d, --dry-run", "Surface findings without applying any change")
+  .option(
+    "-k, --kind <kind>",
+    "Filter by unknown kind (uncategorized_expense, duplicate, correlation, recurrence_candidate, similar_accounts)",
+  )
   .action(async (opts) => {
     ensureConfigured();
-    const { runReviewCommand } = await import("./commands/review.js");
-    await runReviewCommand({
+    const { runResolveCommand } = await import("./commands/resolve.js");
+    await runResolveCommand({
       accountId: opts.account,
       from: opts.from,
       to: opts.to,
-      dryRun: !!opts.dryRun,
+      kind: opts.kind,
     });
   });
 
@@ -209,8 +212,8 @@ program.configureHelp({
         desc: "Scan new PDFs (optionally by regex; --force to re-scan)",
       },
       {
-        name: "review",
-        desc: "Cleanup uncategorized, connect duplicates, learn recurring patterns",
+        name: "resolve",
+        desc: "Walk open unknowns one at a time and apply your decision",
       },
       {
         name: "revert",

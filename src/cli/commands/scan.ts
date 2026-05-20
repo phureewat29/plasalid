@@ -76,19 +76,17 @@ async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
       fileName: e.fileName,
       status: e.status,
       transactions: e.transactions,
-      concerns: e.concerns,
+      unknowns: e.unknowns,
       error: e.error,
     }),
-    correlating: (pairs) => {
-      if (inkInstance) { inkInstance.unmount(); inkInstance = null; }
-      if (mountedFiles > 0 && pairs > 0) {
-        console.log(chalk.dim(`Correlating across files... ${pairs} pair(s) flagged.`));
-      }
-    },
     committing: () => {
-      // In case correlating fired with 0 pairs, ink may still be mounted; unmount now.
       if (inkInstance) { inkInstance.unmount(); inkInstance = null; }
       if (mountedFiles > 0) console.log(chalk.dim("Committing..."));
+    },
+    inspecting: (result) => {
+      if (mountedFiles > 0 && result.total > 0) {
+        console.log(chalk.dim(`Inspectors flagged ${result.total} unknown(s).`));
+      }
     },
   };
 }
@@ -121,16 +119,18 @@ function buildPlainTextEvents(): ScanRunEvents {
     scanEnd: (e) => {
       lastStepByFile.delete(e.fileName);
       if (e.status === "scanned") {
-        console.log(`${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.transactions} transactions, ${e.concerns} concerns)`)}`);
+        console.log(`${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.transactions} transactions, ${e.unknowns} unknowns)`)}`);
       } else {
         console.log(`${chalk.red("✗")} ${e.fileName} ${chalk.dim(`— ${e.error ?? "failed"}`)}`);
       }
     },
-    correlating: (pairs) => {
-      if (pairs > 0) console.log(chalk.dim(`Correlating across files... ${pairs} pair(s) flagged.`));
-    },
     committing: () => {
       console.log(chalk.dim("Committing..."));
+    },
+    inspecting: (result) => {
+      if (result.total > 0) {
+        console.log(chalk.dim(`Inspectors flagged ${result.total} unknown(s).`));
+      }
     },
   };
 }
@@ -143,7 +143,7 @@ function renderScanSummary(summary: ScanSummary): void {
     `Scanned ${summary.total} file(s) — ` +
     `${summary.scanned + summary.replaced} ok, ` +
     `${summary.failed} failed, ` +
-    `${summary.concerns} concern${summary.concerns === 1 ? "" : "s"} flagged`;
+    `${summary.unknowns} unknown${summary.unknowns === 1 ? "" : "s"} flagged`;
   console.log(chalk.bold(headline));
   console.log("");
 
@@ -151,12 +151,12 @@ function renderScanSummary(summary: ScanSummary): void {
     const label = d.relPath;
     switch (d.status) {
       case "scanned": {
-        const tag = chalk.dim(`${d.transactions} transactions${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""}`);
+        const tag = chalk.dim(`${d.transactions} transactions${d.unknowns > 0 ? ` · ${d.unknowns} unknowns` : ""}`);
         console.log(`  ${chalk.green("✓")} ${label}  ${tag}`);
         break;
       }
       case "replaced": {
-        const tag = chalk.dim(`${d.transactions} transactions${d.concerns > 0 ? ` · ${d.concerns} concerns` : ""} (replaces prior)`);
+        const tag = chalk.dim(`${d.transactions} transactions${d.unknowns > 0 ? ` · ${d.unknowns} unknowns` : ""} (replaces prior)`);
         console.log(`  ${chalk.cyan("↻")} ${label}  ${tag}`);
         break;
       }
@@ -175,10 +175,10 @@ function renderScanSummary(summary: ScanSummary): void {
   if (newlyProcessed > 0) {
     console.log("");
     console.log(
-      `${chalk.dim("Next:")} ${chalk.cyan("plasalid review")}${chalk.dim(
-        summary.concerns > 0
-          ? " — to clear the concerns and learn your recurring rhythms."
-          : " — to connect related transactions and learn your recurring rhythms.",
+      `${chalk.dim("Next:")} ${chalk.cyan("plasalid resolve")}${chalk.dim(
+        summary.unknowns > 0
+          ? " — to walk every open unknown and apply your decision."
+          : " — no unknowns surfaced this run; nothing to do.",
       )}`,
     );
   }

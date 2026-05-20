@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
-import { accountIngestTools } from "./ingest.js";
-import { createAccount, findAccountById } from "../../db/queries/account_balance.js";
-import { listActions } from "../../db/queries/action_log.js";
+import { accountIngestTools, resolveIngestTools } from "./ingest.js";
+import { createAccount, findAccountById } from "../../db/queries/account-balance.js";
+import { listActions } from "../../db/queries/action-log.js";
+import { recordUnknown, listOpenUnknowns } from "../../db/queries/unknowns.js";
 import type { AgentExecutionContext } from "./types.js";
 
 function freshDb() {
@@ -168,5 +169,39 @@ describe("accountIngestTools — record-context action_log", () => {
       "record_transaction",
       "update_account_metadata",
     ]);
+  });
+});
+
+describe("resolveIngestTools — close_unknown", () => {
+  it("closes a primary unknown plus all related siblings in one call", async () => {
+    const db = freshDb();
+    const ids = [0, 1, 2].map(i =>
+      recordUnknown(db, {
+        file_id: null,
+        transaction_id: null,
+        account_id: "expense:food",
+        kind: "uncategorized_expense",
+        prompt: `Lazada row ${i}`,
+        options: ["expense:shopping", "Skip — leave as is"],
+      }),
+    );
+
+    const res = await resolveIngestTools.execute(db, "close_unknown", {
+      unknown_id: ids[0],
+      answer: "expense:shopping",
+      related_unknown_ids: [ids[1], ids[2]],
+    }, ctx());
+
+    expect(res).toBe("Closed 3 unknowns.");
+    expect(listOpenUnknowns(db)).toHaveLength(0);
+  });
+
+  it("returns a helpful error when unknown_id is unknown", async () => {
+    const db = freshDb();
+    const res = await resolveIngestTools.execute(db, "close_unknown", {
+      unknown_id: "cn:nope",
+      answer: "Skip — leave as is",
+    }, ctx());
+    expect(res).toMatch(/not found/);
   });
 });

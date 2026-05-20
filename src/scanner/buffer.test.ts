@@ -21,7 +21,7 @@ describe("BufferedWriteContext", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
-  it("queues transactions and concerns without touching the DB until commit()", () => {
+  it("queues transactions and unknowns without touching the DB until commit()", () => {
     const buf = new BufferedWriteContext("x.pdf");
     const transactionId = buf.appendTransaction({
       date: "2026-01-15",
@@ -31,18 +31,18 @@ describe("BufferedWriteContext", () => {
         { account_id: "asset:cash", credit: 100 },
       ],
     });
-    buf.appendConcern({ transaction_id: transactionId, account_id: null, prompt: "Is this category right?" });
+    buf.appendUnknown({ transaction_id: transactionId, account_id: null, prompt: "Is this category right?" });
 
     expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM concerns`).get()).toMatchObject({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM unknowns`).get()).toMatchObject({ n: 0 });
 
     const counts = buf.commit(db, "sf:test");
-    expect(counts).toEqual({ transactions: 1, concerns: 1 });
+    expect(counts).toEqual({ transactions: 1, unknowns: 1 });
     expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 1 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM concerns`).get()).toMatchObject({ n: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM unknowns`).get()).toMatchObject({ n: 1 });
 
-    const concern = db.prepare(`SELECT transaction_id FROM concerns LIMIT 1`).get() as { transaction_id: string };
-    expect(concern.transaction_id).toBe(transactionId);
+    const unknown = db.prepare(`SELECT transaction_id FROM unknowns LIMIT 1`).get() as { transaction_id: string };
+    expect(unknown.transaction_id).toBe(transactionId);
   });
 
   it("rolls back the DB on a mid-commit error", () => {

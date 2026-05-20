@@ -9,7 +9,7 @@ import {
   setMerchantDefaultAccount,
   normalizeDescriptor,
 } from "./merchants.js";
-import { createAccount } from "./account_balance.js";
+import { createAccount } from "./account-balance.js";
 
 function freshDb() {
   const db = new Database(":memory:");

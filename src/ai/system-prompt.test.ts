@@ -9,11 +9,11 @@ vi.mock("./context.js", () => ({
 
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
-import { createAccount } from "../db/queries/account_balance.js";
+import { createAccount } from "../db/queries/account-balance.js";
 import { saveMemory } from "./memory.js";
 import {
   buildChatSystemPrompt,
-  buildReviewSystemPrompt,
+  buildResolveSystemPrompt,
   buildRecordSystemPrompt,
   buildScanSystemPrompt,
 } from "./system-prompt.js";
@@ -76,10 +76,10 @@ describe("system prompt builders", () => {
     });
   });
 
-  describe("buildReviewSystemPrompt", () => {
+  describe("buildResolveSystemPrompt", () => {
     it("composes the expected sections in order", () => {
-      const out = buildReviewSystemPrompt(db, { dryRun: false });
-      expect(out).toContain("You are Plasalid's reviewer");
+      const out = buildResolveSystemPrompt(db, {});
+      expect(out).toContain("You are Plasalid's resolver");
       expect(out).toContain("Today is ");
       expect(out).toContain("## Current chart of accounts");
       expect(out).toContain("## Scope");
@@ -87,13 +87,8 @@ describe("system prompt builders", () => {
     });
 
     it("contains no emoji", () => {
-      const out = buildReviewSystemPrompt(db, { dryRun: false });
+      const out = buildResolveSystemPrompt(db, {});
       expect(out).not.toMatch(EMOJI_RE);
-    });
-
-    it("renders dryRun flag in the scope section", () => {
-      const out = buildReviewSystemPrompt(db, { dryRun: true });
-      expect(out).toMatch(/dry run: yes/);
     });
   });
 

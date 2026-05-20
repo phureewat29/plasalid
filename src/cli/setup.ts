@@ -51,19 +51,26 @@ function printBanner(): void {
 
 function printSummary(dataDir: string): void {
   console.log("");
-  console.log(`${chalk.cyan("<°(((><")}  ${chalk.green("Plasalid is configured.")}`);
+  console.log(
+    `${chalk.cyan("<°(((><")}  ${chalk.green("Plasalid is configured.")}`,
+  );
   console.log(chalk.dim(`Config: ${getConfigPath()}`));
   console.log(chalk.dim(`Data:   ${dataDir}`));
   console.log("");
   console.log("Next steps:");
   console.log(
-    `  1. Run ${chalk.cyan("plasalid data")} to drop your bank/credit card statments PDFs in.`,
+    `  1. Run ${chalk.cyan("plasalid data")} to drop your bank / credit-card statement PDFs in.`,
   );
+  console.log(`  2. Run ${chalk.cyan("plasalid scan")} to parse them.`);
   console.log(
-    `  2. Run ${chalk.cyan("plasalid scan")} to allow Plasalid to scan them.`,
+    `  3. Run ${chalk.cyan("plasalid resolve")} to work through anything the scanner flagged.`,
   );
+  console.log(`  4. Run ${chalk.cyan("plasalid")} to chat with your money.`);
+  console.log("");
   console.log(
-    `  3. Run ${chalk.cyan("plasalid")} to query your local ledger.`,
+    chalk.dim(
+      `  Optional: ${chalk.cyan(`plasalid record "..."`)}${chalk.dim(" to record manual/undocumented transaction, balance, or account at any time.")}`,
+    ),
   );
 }
 

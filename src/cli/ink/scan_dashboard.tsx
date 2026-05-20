@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 
 export type ScanDashboardEvent =
   | { type: "scan-start"; fileName: string }
   | { type: "scan-progress"; fileName: string; step: string }
-  | { type: "scan-end"; fileName: string; status: "scanned" | "failed"; transactions: number; concerns: number; error?: string };
+  | { type: "scan-end"; fileName: string; status: "scanned" | "failed"; transactions: number; unknowns: number; error?: string };
 
 /**
  * Subscribe / publish channel between the pipeline (which knows nothing about
@@ -29,7 +29,7 @@ export class ScanDashboardController {
 
 type RowState =
   | { kind: "scanning"; step: string }
-  | { kind: "done"; transactions: number; concerns: number }
+  | { kind: "done"; transactions: number; unknowns: number }
   | { kind: "failed"; error: string };
 
 interface Props {
@@ -41,7 +41,7 @@ interface Props {
 /**
  * Multi-row live dashboard for the scan phase. Rows appear when a file starts
  * scanning, update as steps flow, and freeze when the agent loop ends. Counts
- * shown are the in-buffer counts at scan-end; correlation may add concerns
+ * shown are the in-buffer counts at scan-end; correlation may add unknowns
  * later, which the terse summary reflects.
  */
 export function ScanDashboard({ controller, totalFiles, parallel }: Props) {
@@ -62,7 +62,7 @@ export function ScanDashboard({ controller, totalFiles, parallel }: Props) {
             next.set(
               event.fileName,
               event.status === "scanned"
-                ? { kind: "done", transactions: event.transactions, concerns: event.concerns }
+                ? { kind: "done", transactions: event.transactions, unknowns: event.unknowns }
                 : { kind: "failed", error: event.error ?? "failed" },
             );
             break;
@@ -93,7 +93,7 @@ function FileRow({ name, state }: { name: string; state: RowState }) {
   if (state.kind === "done") {
     return (
       <Text>
-        {"  "}<Text color="green">✓</Text> {name} <Text dimColor>({state.transactions} transactions, {state.concerns} concerns)</Text>
+        {"  "}<Text color="green">✓</Text> {name} <Text dimColor>({state.transactions} transactions, {state.unknowns} unknowns)</Text>
       </Text>
     );
   }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
 import { recordTransaction, listPostings } from "./transactions.js";
-import { getAccountBalances, getNetWorth } from "./account_balance.js";
+import { getAccountBalances, getNetWorth } from "./account-balance.js";
 
 function freshDb() {
   const db = new Database(":memory:");

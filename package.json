@@ -1,9 +1,10 @@
 {
   "name": "plasalid",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Plasalid — AI Harness for Personal Finance",
   "keywords": [
     "finance",
+    "harness",
     "personal-finance",
     "aggregator",
     "parser",

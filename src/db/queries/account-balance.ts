@@ -28,7 +28,7 @@ export interface AccountRow {
   points_balance: number | null;
   metadata_json: string | null;
   pii_flag: number;
-  has_concern: number;
+  has_unknown: number;
   created_at: string;
 }
 
@@ -409,19 +409,6 @@ export function findSimilarAccounts(db: Database.Database, threshold = 0.85): Si
   }
   pairs.sort((x, y) => y.similarity - x.similarity);
   return pairs;
-}
-
-export function findUnusedAccounts(db: Database.Database): AccountRow[] {
-  return db
-    .prepare(
-      `SELECT a.* FROM accounts a
-       LEFT JOIN postings p ON p.account_id = a.id
-       WHERE p.id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.parent_id = a.id)
-         AND a.id NOT IN ('asset','liability','income','expense','equity')
-       ORDER BY a.name`,
-    )
-    .all() as AccountRow[];
 }
 
 export interface FuzzyAccountMatch {

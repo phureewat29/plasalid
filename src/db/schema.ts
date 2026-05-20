@@ -16,7 +16,7 @@ export function migrate(db: Database.Database): void {
       points_balance REAL,
       metadata_json TEXT,
       pii_flag INTEGER NOT NULL DEFAULT 0,
-      has_concern INTEGER NOT NULL DEFAULT 0,
+      has_unknown INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -76,7 +76,7 @@ export function migrate(db: Database.Database): void {
       source_file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       source_page INTEGER,
       recurrence_id TEXT REFERENCES recurrences(id) ON DELETE SET NULL,
-      has_concern INTEGER NOT NULL DEFAULT 0,
+      has_unknown INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -100,7 +100,7 @@ export function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS postings_transaction_idx ON postings(transaction_id);
     CREATE INDEX IF NOT EXISTS postings_account_idx ON postings(account_id);
 
-    CREATE TABLE IF NOT EXISTS concerns (
+    CREATE TABLE IF NOT EXISTS unknowns (
       id TEXT PRIMARY KEY,
       file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       transaction_id TEXT REFERENCES transactions(id) ON DELETE CASCADE,

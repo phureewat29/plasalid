@@ -10,7 +10,7 @@ import {
   getRollupBalance,
   ensureStructuralAccount,
   ensureTopLevelRoot,
-} from "./account_balance.js";
+} from "./account-balance.js";
 import { recordTransaction } from "./transactions.js";
 
 function freshDb() {

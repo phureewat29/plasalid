@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { getDb } from "../../db/connection.js";
 import { runRecordAgent } from "../../ai/agent.js";
 import { makePromptUser, makeAgentOnProgress, statusSpinner } from "../ux.js";
-import { listActions, type ActionLogRow } from "../../db/queries/action_log.js";
+import { listActions, type ActionLogRow } from "../../db/queries/action-log.js";
 import { formatAmount } from "../../currency.js";
 import type { NormalizedMessage } from "../../ai/provider.js";
 
@@ -11,7 +11,9 @@ export interface RecordCommandOptions {
   utterance: string;
 }
 
-export async function runRecordCommand(opts: RecordCommandOptions): Promise<void> {
+export async function runRecordCommand(
+  opts: RecordCommandOptions,
+): Promise<void> {
   const utterance = opts.utterance.trim();
   if (!utterance) {
     console.error(chalk.red(`Usage: plasalid record "<what happened>"`));
@@ -59,7 +61,11 @@ function renderActionSummary(correlationId: string): void {
   const actions = listActions(getDb(), { correlationId });
   if (actions.length === 0) return;
   console.log("");
-  console.log(chalk.dim(`Logged ${actions.length} action${actions.length === 1 ? "" : "s"} (${correlationId}):`));
+  console.log(
+    chalk.dim(
+      `Logged ${actions.length} action${actions.length === 1 ? "" : "s"} (${correlationId}):`,
+    ),
+  );
   for (const a of actions) {
     console.log(chalk.dim(`  · ${describeAction(a)}`));
   }
@@ -73,16 +79,20 @@ function describeAction(a: ActionLogRow): string {
       return `create_account ${a.target_id}${name}`;
     }
     case "update_account_metadata": {
-      const fields = payload?.after && typeof payload.after === "object"
-        ? Object.keys(payload.after).join(", ")
-        : "";
+      const fields =
+        payload?.after && typeof payload.after === "object"
+          ? Object.keys(payload.after).join(", ")
+          : "";
       return `update_account_metadata ${a.target_id}${fields ? ` — ${fields}` : ""}`;
     }
     case "record_transaction": {
       const date = payload?.transaction?.date ?? "";
       const desc = payload?.transaction?.description ?? "";
       const total = totalDebit(payload?.postings);
-      const amount = total != null ? ` ${formatTotal(total, currencyOf(payload?.postings))}` : "";
+      const amount =
+        total != null
+          ? ` ${formatTotal(total, currencyOf(payload?.postings))}`
+          : "";
       return `record_transaction ${a.target_id} — ${[date, desc].filter(Boolean).join(" ")}${amount}`;
     }
     case "adjust_balance": {
@@ -107,7 +117,11 @@ function describeAction(a: ActionLogRow): string {
 }
 
 function safeJson(s: string): any {
-  try { return JSON.parse(s); } catch { return null; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
 
 function totalDebit(postings: any): number | null {
@@ -116,7 +130,8 @@ function totalDebit(postings: any): number | null {
 }
 
 function currencyOf(postings: any): string {
-  if (Array.isArray(postings) && postings[0]?.currency) return String(postings[0].currency);
+  if (Array.isArray(postings) && postings[0]?.currency)
+    return String(postings[0].currency);
   return "THB";
 }
 

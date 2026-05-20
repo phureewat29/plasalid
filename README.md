@@ -19,21 +19,21 @@ In markets like Thailand there's no Plaid: no public API that gives apps a unifi
 
 ## Features
 
-Plasalid is a chain of three stages: **Scan → Review → Chat.** Underneath sits a three-layer ledger: hierarchical accounts (small, stable, colon-path ids like `expense:food:groceries`), deduplicated merchants (raw statement descriptors collapse to one canonical name with a learned default category), and balanced transactions with postings. Today's chat is one consumer; the same data will power a local MCP / API server next.
+Plasalid is a chain of three stages: **Scan → Resolve → Chat.** Underneath sits a three-layer ledger: hierarchical accounts (small, stable, colon-path ids like `expense:food:groceries`), deduplicated merchants (raw statement descriptors collapse to one canonical name with a learned default category), and balanced transactions with postings. Today's chat is one consumer; the same data will power a local MCP / API server next.
 
 ### Scan — parse without blocking
 
 - **Drop PDFs in, get balanced transactions out.** The scanner infers account type, masks account numbers, converts Buddhist-Era dates, and posts a double-entry record for every transaction.
 - **Merchants as first-class.** Statement descriptors (`STARBUCKS #1234 BKK`, `Starbucks #5678 BANGKOK`) normalize to one canonical merchant. Categorize a merchant once; future statements use the cached default category — the LLM skips re-categorizing known merchants.
-- **Never pauses to ask you.** Ambiguous rows post best-guess transactions with a structured *concern* attached; lines the scanner can't confidently categorize land in `expense:uncategorized` for the review cleanup pass; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — review clears them up later.
+- **Never pauses to ask you.** Ambiguous rows post best-guess transactions with a structured *unknown* attached; lines the scanner can't confidently categorize land in `expense:uncategorized` for the resolve cleanup pass; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — resolve clears them up later.
 - **Encrypted PDFs handled inline.** Statement password-protected? Plasalid prompts you once, remembers the password (AES-GCM at rest) under a filename pattern, and unlocks next month's statement silently.
 
-### Review — see the whole picture
+### Resolve — close every open unknown
 
 - **Uncategorized cleanup.** Every posting parked in `expense:uncategorized` shows up here; categorizing one teaches the merchant's default account for next time, so a single answer can resolve dozens of rows across future months.
 - **Connects related transactions.** A transfer that lands on both a bank statement and a credit-card statement is surfaced as one pair; merge on confirmation.
 - **Recurrences as first-class data.** Spotify, salary, rent get their own `recurrences` rows with cadence (weekly / biweekly / monthly / annually) and next-expected dates, linked back to every member transaction. Not a UI category — a structured fact any AI consumer can read.
-- **Step-by-step clarification.** Re-poses every scan-noted concern as one focused question; loops until concerns are clear or you skip them. `--dry-run` previews everything; writes only after you confirm.
+- **Step-by-step clarification.** Re-poses every scan-noted unknown as one focused question; loops until unknowns are clear or you skip them.
 
 ### Chat — ask questions about your data
 
@@ -66,14 +66,14 @@ Then:
 
 1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
 2. Run `plasalid scan` — it parses your PDFs end-to-end without stopping.
-3. Run `plasalid review` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a concern.
+3. Run `plasalid resolve` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a unknown.
 4. Run `plasalid` to chat with what was scanned.
 
 Other day-to-day commands:
 
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid review --dry-run` — preview the picture (correlated transactions, recurrences, open concerns) without writing; re-run without `--dry-run` to step through fixes interactively.
+- `plasalid resolve` — walk every open unknown one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip). Filter with `--account`, `--from`, `--to`, or `--kind`.
 - `plasalid revert <regex>` — delete scanned files matching the regex and every transaction derived from them.
 
 ## Commands
@@ -90,7 +90,7 @@ plasalid transactions               # List transactions and their postings (filt
 plasalid record <utterance>         # Add a manual transaction, account, balance, or merchant from a plain-language line
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
 plasalid revert <regex>             # Delete scanned files matching <regex> and their transactions
-plasalid review [--dry-run]         # Connect related transactions, learn recurring rhythms, resolve open concerns (--account, --from, --to also accepted)
+plasalid resolve                    # Walk every open unknown and apply your decision (--account, --from, --to, --kind also accepted)
 ```
 
 ## How It Works
@@ -109,7 +109,7 @@ plasalid review [--dry-run]         # Connect related transactions, learn recurr
        Claude API (PII-redacted)
                   │
        ┌──────────▼──────────┐
-       │     Encrypted DB    │◀──── plasalid review
+       │     Encrypted DB    │◀──── plasalid resolve
        └──────────┬──────────┘       
                   │                   
                plasalid               
@@ -138,7 +138,7 @@ Plasalid stores everything in `~/.plasalid/`:
   data/                # Drop any PDFs here (subfolders allowed; AI classifies)
 ```
 
-`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with learned default categories, transactions and postings), scan history, open concerns awaiting review, recurring transactions (Spotify, salary, rent — recognized during review and linked from each member transaction), an action log for record-mode audit, persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
+`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with learned default categories, transactions and postings), scan history, open unknowns awaiting resolve, recurring transactions (Spotify, salary, rent — recognized during resolve and linked from each member transaction), an action log for record-mode audit, persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
 
 ### Environment Variables
 

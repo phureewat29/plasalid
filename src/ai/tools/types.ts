@@ -2,10 +2,10 @@ import type Database from "libsql";
 import type { ToolDefinition } from "../provider.js";
 import type { BufferedWriteContext } from "../../scanner/buffer.js";
 
-export type ToolProfile = "scan" | "chat" | "review" | "record";
+export type ToolProfile = "scan" | "chat" | "resolve" | "record";
 
 /**
- * Structured highlights the review agent can pass to ask_user. The prompter
+ * Structured highlights the resolve agent can pass to ask_user. The prompter
  * renders them as a single colored header line above the question (each
  * category gets its own chalk color), so the user can scan amount / date /
  * merchant / accounts at a glance without parsing prose.
@@ -22,23 +22,21 @@ export interface AgentExecutionContext {
   fileId?: string;
   /** When false, ask_user returns a marker and the caller halts after the run. */
   interactive: boolean;
-  /** When true, mutating tools become no-ops that return a "would do X" preview. */
-  dryRun?: boolean;
   /** Synchronously prompt the user (only invoked when interactive === true). */
   promptUser?: (prompt: string, options?: string[], facts?: PromptUserFacts) => Promise<string>;
-  /** Called when the model declares the session is done (scan or review). */
+  /** Called when the model declares the session is done (scan or resolve). */
   onComplete?: (summary: string) => void;
   /**
    * Which top-level command this agent serves. Mutating tools branch on this
    * to decide whether to append an action_log row (currently only "record").
    */
-  command?: "scan" | "review" | "record";
+  command?: "scan" | "resolve" | "record";
   /** Per-invocation id grouping every action_log row from one CLI run. */
   correlationId?: string;
   /** The raw user utterance / file path that started this invocation. */
   userInput?: string;
   /**
-   * Scan-only: when set, transactions and concerns are queued here instead of
+   * Scan-only: when set, transactions and unknowns are queued here instead of
    * being written directly to the DB. Account and merchant writes still hit
    * the DB eagerly (serialized via their own mutexes) so concurrent scan
    * agents share the same chart of accounts and merchant directory.

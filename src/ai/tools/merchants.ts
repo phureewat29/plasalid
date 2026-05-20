@@ -5,9 +5,13 @@ import {
   findMerchantById,
   setMerchantDefaultAccount,
 } from "../../db/queries/merchants.js";
-import { appendAction } from "../../db/queries/action_log.js";
+import { appendAction } from "../../db/queries/action-log.js";
 import { sanitizeForPrompt } from "../sanitize.js";
-import type { AgentExecutionContext, ToolDefinition, ToolModule } from "./types.js";
+import type {
+  AgentExecutionContext,
+  ToolDefinition,
+  ToolModule,
+} from "./types.js";
 
 /**
  * Merchant tools
@@ -27,9 +31,20 @@ const DEFS: ToolDefinition[] = [
     input_schema: {
       type: "object",
       properties: {
-        canonical_name: { type: "string", description: "Title-cased merchant name, e.g. 'Starbucks', 'Amazon'." },
-        alias: { type: "string", description: "Optional raw descriptor (as seen on a statement). Plasalid normalizes and dedups it." },
-        default_account_id: { type: "string", description: "Optional learned cache: the merchant's default expense account." },
+        canonical_name: {
+          type: "string",
+          description: "Title-cased merchant name, e.g. 'Starbucks', 'Amazon'.",
+        },
+        alias: {
+          type: "string",
+          description:
+            "Optional raw descriptor (as seen on a statement). Plasalid normalizes and dedups it.",
+        },
+        default_account_id: {
+          type: "string",
+          description:
+            "Optional learned cache: the merchant's default expense account.",
+        },
       },
       required: ["canonical_name"],
     },
@@ -41,7 +56,10 @@ const DEFS: ToolDefinition[] = [
     input_schema: {
       type: "object",
       properties: {
-        descriptor: { type: "string", description: "The raw statement line or merchant string to look up." },
+        descriptor: {
+          type: "string",
+          description: "The raw statement line or merchant string to look up.",
+        },
       },
       required: ["descriptor"],
     },
@@ -75,7 +93,6 @@ async function execute(
 ): Promise<string | undefined> {
   switch (name) {
     case "find_or_create_merchant": {
-      if (ctx?.dryRun) return `Would upsert merchant "${input.canonical_name}".`;
       const existing = db
         .prepare(`SELECT id FROM merchants WHERE canonical_name = ?`)
         .get(input.canonical_name) as { id: string } | undefined;
@@ -91,26 +108,37 @@ async function execute(
           user_input: ctx.userInput ?? null,
           action_type: "create_merchant",
           target_id: merchant.id,
-          payload: { canonical_name: merchant.canonical_name, default_account_id: merchant.default_account_id },
+          payload: {
+            canonical_name: merchant.canonical_name,
+            default_account_id: merchant.default_account_id,
+          },
         });
       }
-      const defaultStr = merchant.default_account_id ? ` (default → ${merchant.default_account_id})` : "";
+      const defaultStr = merchant.default_account_id
+        ? ` (default → ${merchant.default_account_id})`
+        : "";
       return `Merchant ${merchant.id}: ${sanitizeForPrompt(merchant.canonical_name)}${defaultStr}.`;
     }
 
     case "find_merchant_by_descriptor": {
       const hit = findMerchantByAlias(db, String(input.descriptor ?? ""));
-      if (!hit) return `No merchant matched descriptor "${sanitizeForPrompt(String(input.descriptor ?? ""))}".`;
-      const defaultStr = hit.default_account_id ? ` (default → ${hit.default_account_id})` : "";
+      if (!hit)
+        return `No merchant matched descriptor "${sanitizeForPrompt(String(input.descriptor ?? ""))}".`;
+      const defaultStr = hit.default_account_id
+        ? ` (default → ${hit.default_account_id})`
+        : "";
       return `Merchant ${hit.merchant.id}: ${sanitizeForPrompt(hit.merchant.canonical_name)}${defaultStr}.`;
     }
 
     case "set_merchant_default_account": {
-      if (ctx?.dryRun) return `Would set ${input.merchant_id}'s default to ${input.account_id}.`;
       const m = findMerchantById(db, input.merchant_id);
       if (!m) return `Merchant ${input.merchant_id} not found.`;
       try {
-        const result = setMerchantDefaultAccount(db, input.merchant_id, input.account_id);
+        const result = setMerchantDefaultAccount(
+          db,
+          input.merchant_id,
+          input.account_id,
+        );
         if (ctx?.correlationId) {
           appendAction(db, {
             correlation_id: ctx.correlationId,

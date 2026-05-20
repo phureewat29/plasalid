@@ -3,10 +3,10 @@ import { config } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
-  buildReviewSystemPrompt,
+  buildResolveSystemPrompt,
   buildRecordSystemPrompt,
   type ScanPromptOptions,
-  type ReviewPromptOptions,
+  type ResolvePromptOptions,
   type RecordPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
@@ -236,28 +236,29 @@ export async function runRecordAgent(opts: {
 }
 
 /**
- * Review-time agent loop. Surveys the existing transactions with the review
- * tool profile (read tools + write/merge/delete primitives + recurrence
- * detection/recording).
+ * Resolve-time agent loop. The pipeline calls this once per open unknown with
+ * that unknown's id/prompt/options in the initial messages. The agent surfaces
+ * the question, applies the user's chosen answer via mutation tools, and
+ * finishes with mark_resolve_done.
  */
-export async function runReviewAgent(opts: {
+export async function runResolveAgent(opts: {
   db: Database.Database;
   initialMessages: NormalizedMessage[];
-  prompt: ReviewPromptOptions;
+  prompt: ResolvePromptOptions;
   agentCtx: AgentExecutionContext;
   onProgress?: ProgressCallback;
   signal?: AbortSignal;
 }): Promise<string> {
-  const systemPrompt = redact(buildReviewSystemPrompt(opts.db, opts.prompt));
+  const systemPrompt = redact(buildResolveSystemPrompt(opts.db, opts.prompt));
   const { text } = await runAgent({
     db: opts.db,
     systemPrompt,
-    tools: getToolDefinitions("review"),
+    tools: getToolDefinitions("resolve"),
     initialMessages: opts.initialMessages,
     agentCtx: opts.agentCtx,
     onProgress: opts.onProgress,
     signal: opts.signal,
-    maxToolSteps: 60,
+    maxToolSteps: 30,
   });
   return text;
 }

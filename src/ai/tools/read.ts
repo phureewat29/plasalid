@@ -4,13 +4,17 @@ import {
   getAccountBalances,
   getNetWorth,
   getPeriodTotals,
-} from "../../db/queries/account_balance.js";
+} from "../../db/queries/account-balance.js";
 import { listPostings } from "../../db/queries/transactions.js";
-import { listOpenConcerns } from "../../db/queries/concerns.js";
+import { listOpenUnknowns } from "../../db/queries/unknowns.js";
 import { searchPostings } from "../../db/queries/search.js";
 import { formatAmount } from "../../currency.js";
 import { sanitizeForPrompt, sanitizeForPromptCell } from "../sanitize.js";
-import type { AgentExecutionContext, ToolDefinition, ToolModule } from "./types.js";
+import type {
+  AgentExecutionContext,
+  ToolDefinition,
+  ToolModule,
+} from "./types.js";
 
 const DEFS: ToolDefinition[] = [
   {
@@ -24,19 +28,25 @@ const DEFS: ToolDefinition[] = [
   },
   {
     name: "get_net_worth",
-    description: "Compute current net worth: total assets minus total liabilities.",
+    description:
+      "Compute current net worth: total assets minus total liabilities.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "list_postings",
-    description: "List transaction postings filtered by account and/or date range.",
+    description:
+      "List transaction postings filtered by account and/or date range.",
     input_schema: {
       type: "object",
       properties: {
         account_id: { type: "string" },
         from: { type: "string", description: "Start date YYYY-MM-DD" },
         to: { type: "string", description: "End date YYYY-MM-DD" },
-        q: { type: "string", description: "Free-text contains-match on description, memo, or merchant" },
+        q: {
+          type: "string",
+          description:
+            "Free-text contains-match on description, memo, or merchant",
+        },
         limit: { type: "number", description: "Max results (default 50)" },
       },
       required: [],
@@ -44,7 +54,8 @@ const DEFS: ToolDefinition[] = [
   },
   {
     name: "search_transactions",
-    description: "Free-text search across transaction descriptions, posting memos, account names, and merchant names.",
+    description:
+      "Free-text search across transaction descriptions, posting memos, account names, and merchant names.",
     input_schema: {
       type: "object",
       properties: {
@@ -56,7 +67,8 @@ const DEFS: ToolDefinition[] = [
   },
   {
     name: "get_period_totals",
-    description: "Get total income and total expense in a date range. Useful for monthly summaries.",
+    description:
+      "Get total income and total expense in a date range. Useful for monthly summaries.",
     input_schema: {
       type: "object",
       properties: {
@@ -67,13 +79,18 @@ const DEFS: ToolDefinition[] = [
     },
   },
   {
-    name: "list_open_concerns",
-    description: "List clarification requests recorded by the scanner that have not been resolved yet. Each row carries the prompt, optional candidate answers, and the file/transaction/account it was attached to. The reviewer uses this to drive the step-by-step clarification loop.",
+    name: "list_open_unknowns",
+    description:
+      "List clarification requests recorded by the scanner that have not been resolved yet. Each row carries the prompt, optional candidate answers, and the file/transaction/account it was attached to. The resolver uses this to drive the step-by-step clarification loop.",
     input_schema: {
       type: "object",
       properties: {
         limit: { type: "number", default: 50 },
-        kind: { type: "string", description: "Optional filter by concern kind (e.g. 'uncategorized_expense')." },
+        kind: {
+          type: "string",
+          description:
+            "Optional filter by unknown kind (e.g. 'uncategorized_expense').",
+        },
       },
       required: [],
     },
@@ -86,7 +103,7 @@ const LABELS: Record<string, string> = {
   list_postings: "Listing postings",
   search_transactions: "Searching transactions",
   get_period_totals: "Summing period totals",
-  list_open_concerns: "Listing open concerns",
+  list_open_unknowns: "Listing open unknowns",
 };
 
 async function execute(
@@ -100,7 +117,7 @@ async function execute(
       const acct = findAccountById(db, input.account_id);
       if (!acct) return `Account "${input.account_id}" not found.`;
       const balances = getAccountBalances(db);
-      const bal = balances.find(b => b.id === acct.id)?.balance ?? 0;
+      const bal = balances.find((b) => b.id === acct.id)?.balance ?? 0;
       return `${sanitizeForPrompt(acct.name)} (${acct.type}): ${formatAmount(bal)}`;
     }
     case "get_net_worth": {
@@ -117,22 +134,27 @@ async function execute(
       });
       if (rows.length === 0) return "No matching postings.";
       return rows
-        .map(r => {
+        .map((r) => {
           const dr = r.debit > 0 ? `DR ${formatAmount(r.debit)}` : "";
           const cr = r.credit > 0 ? `CR ${formatAmount(r.credit)}` : "";
-          const merchant = r.merchant_name ? ` (${sanitizeForPromptCell(r.merchant_name)})` : "";
+          const merchant = r.merchant_name
+            ? ` (${sanitizeForPromptCell(r.merchant_name)})`
+            : "";
           return `${r.transaction_date} | ${sanitizeForPromptCell(r.transaction_description || "")}${merchant} | ${sanitizeForPromptCell(r.account_name || "")} | ${dr}${cr} | ${sanitizeForPromptCell(r.memo || "")}`;
         })
         .join("\n");
     }
     case "search_transactions": {
       const rows = searchPostings(db, input.query, input.limit);
-      if (rows.length === 0) return `No matches for "${sanitizeForPrompt(input.query)}".`;
+      if (rows.length === 0)
+        return `No matches for "${sanitizeForPrompt(input.query)}".`;
       return rows
-        .map(r => {
+        .map((r) => {
           const dr = r.debit > 0 ? `DR ${formatAmount(r.debit)}` : "";
           const cr = r.credit > 0 ? `CR ${formatAmount(r.credit)}` : "";
-          const merchant = r.merchant_name ? ` (${sanitizeForPromptCell(r.merchant_name)})` : "";
+          const merchant = r.merchant_name
+            ? ` (${sanitizeForPromptCell(r.merchant_name)})`
+            : "";
           return `${r.transaction_date} | ${sanitizeForPromptCell(r.transaction_description || "")}${merchant} | ${sanitizeForPromptCell(r.account_name || "")} | ${dr}${cr}`;
         })
         .join("\n");
@@ -141,20 +163,27 @@ async function execute(
       const totals = getPeriodTotals(db, input.from, input.to);
       return `Income ${formatAmount(totals.income)} · Expenses ${formatAmount(totals.expenses)} · Net ${formatAmount(totals.income - totals.expenses)}`;
     }
-    case "list_open_concerns": {
-      const rows = listOpenConcerns(db, input.limit ?? 50);
-      const filtered = input.kind ? rows.filter(r => r.kind === input.kind) : rows;
-      if (filtered.length === 0) return "No open concerns. The picture is clear.";
+    case "list_open_unknowns": {
+      const rows = listOpenUnknowns(db, input.limit ?? 50);
+      const filtered = input.kind
+        ? rows.filter((r) => r.kind === input.kind)
+        : rows;
+      if (filtered.length === 0)
+        return "No open unknowns. The picture is clear.";
       return filtered
-        .map(r => {
+        .map((r) => {
           const targets = [
             r.transaction_id ? `transaction=${r.transaction_id}` : null,
             r.account_id ? `account=${r.account_id}` : null,
-            !r.transaction_id && !r.account_id && r.file_id ? `file=${r.file_id}` : null,
+            !r.transaction_id && !r.account_id && r.file_id
+              ? `file=${r.file_id}`
+              : null,
             r.kind ? `kind=${r.kind}` : null,
-          ].filter(Boolean).join(" ");
+          ]
+            .filter(Boolean)
+            .join(" ");
           const options = r.options_json
-            ? ` [options: ${(JSON.parse(r.options_json) as string[]).map(o => sanitizeForPrompt(o)).join(" | ")}]`
+            ? ` [options: ${(JSON.parse(r.options_json) as string[]).map((o) => sanitizeForPrompt(o)).join(" | ")}]`
             : "";
           return `${r.id} ${targets} — ${sanitizeForPrompt(r.prompt)}${options}`;
         })

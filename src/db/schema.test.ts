@@ -21,7 +21,7 @@ describe("migrate", () => {
     const expected = [
       "accounts",
       "action_log",
-      "concerns",
+      "unknowns",
       "conversation_history",
       "file_passwords",
       "memories",

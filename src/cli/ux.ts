@@ -140,7 +140,7 @@ export function makeAgentOnProgress(
 }
 
 /**
- * Render the structured facts the review agent attaches to ask_user as a
+ * Render the structured facts the resolve agent attaches to ask_user as a
  * single colored line above the inquirer prompt. Each category has a fixed
  * chalk color so the user's eye picks out the type without reading prose.
  * Returns null when there's nothing to render (so the caller can skip the

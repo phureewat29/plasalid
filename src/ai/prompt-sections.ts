@@ -1,6 +1,9 @@
 import type Database from "libsql";
 import { getMemories, type Memory } from "./memory.js";
-import { getAccountBalances, type AccountBalance } from "../db/queries/account_balance.js";
+import {
+  getAccountBalances,
+  type AccountBalance,
+} from "../db/queries/account-balance.js";
 import { stripControls } from "./sanitize.js";
 
 /**
@@ -26,7 +29,7 @@ export function renderTodayHuman(): string {
   })}.`;
 }
 
-/** ISO date for scan/review ("Today is 2026-03-05."). */
+/** ISO date for scan/resolve ("Today is 2026-03-05."). */
 export function renderTodayIso(): string {
   return `Today is ${new Date().toISOString().slice(0, 10)}.`;
 }
@@ -35,8 +38,8 @@ export function renderTodayIso(): string {
 
 export interface ChartOfAccountsOptions {
   withBalance: boolean;
-  /** Empty-state copy. `scan` hints at creating accounts; `review` is terse. */
-  emptyState: "scan" | "review";
+  /** Empty-state copy. `scan` hints at creating accounts; `resolve` is terse. */
+  emptyState: "scan" | "resolve";
 }
 
 export function renderChartOfAccounts(
@@ -45,9 +48,10 @@ export function renderChartOfAccounts(
 ): string {
   const balances = getAccountBalances(db);
   if (balances.length === 0) {
-    const empty = opts.emptyState === "scan"
-      ? "(empty — you may need to create accounts; remember to pass parent_id under one of asset/liability/income/expense/equity)"
-      : "(empty)";
+    const empty =
+      opts.emptyState === "scan"
+        ? "(empty — you may need to create accounts; remember to pass parent_id under one of asset/liability/income/expense/equity)"
+        : "(empty)";
     return `## Current chart of accounts\n${empty}`;
   }
   const rows = renderHierarchical(balances, opts.withBalance);
@@ -60,7 +64,10 @@ export function renderChartOfAccounts(
  * action that mentions the user by name. Worth its own helper instead of
  * branching the generic one.
  */
-export function renderChatChartOrEmpty(db: Database.Database, name: string): string {
+export function renderChatChartOrEmpty(
+  db: Database.Database,
+  name: string,
+): string {
   const balances = getAccountBalances(db);
   if (balances.length === 0) {
     return `No accounts have been scanned yet. ${name} should drop files into ~/.plasalid/data/ and run \`plasalid scan\`.`;
@@ -69,8 +76,11 @@ export function renderChatChartOrEmpty(db: Database.Database, name: string): str
   return `## Accounts on file\n${rows.join("\n")}`;
 }
 
-function renderHierarchical(balances: AccountBalance[], withBalance: boolean): string[] {
-  const byId = new Map(balances.map(b => [b.id, b]));
+function renderHierarchical(
+  balances: AccountBalance[],
+  withBalance: boolean,
+): string[] {
+  const byId = new Map(balances.map((b) => [b.id, b]));
   const depthCache = new Map<string, number>();
   const depth = (id: string): number => {
     if (depthCache.has(id)) return depthCache.get(id)!;
@@ -83,7 +93,7 @@ function renderHierarchical(balances: AccountBalance[], withBalance: boolean): s
     depthCache.set(id, d);
     return d;
   };
-  return balances.map(a => formatAccountRow(a, withBalance, depth(a.id)));
+  return balances.map((a) => formatAccountRow(a, withBalance, depth(a.id)));
 }
 
 /** Memories */
@@ -96,23 +106,25 @@ export interface MemoriesOptions {
   showCategory: boolean;
 }
 
-export function renderMemories(db: Database.Database, opts: MemoriesOptions): string | null {
+export function renderMemories(
+  db: Database.Database,
+  opts: MemoriesOptions,
+): string | null {
   const all = getMemories(db);
   const filtered = opts.filterCategories
-    ? all.filter(m => opts.filterCategories!.includes(m.category))
+    ? all.filter((m) => opts.filterCategories!.includes(m.category))
     : all;
   if (filtered.length === 0) return null;
-  const lines = filtered.map(m => formatMemoryLine(m, opts.showCategory));
+  const lines = filtered.map((m) => formatMemoryLine(m, opts.showCategory));
   return `## ${opts.header}\n${lines.join("\n")}`;
 }
 
-/** Review scope */
+/** Resolve scope */
 
 export interface ScopeOptions {
   accountId?: string;
   from?: string;
   to?: string;
-  dryRun: boolean;
 }
 
 export function renderScope(opts: ScopeOptions): string {
@@ -121,26 +133,34 @@ export function renderScope(opts: ScopeOptions): string {
     `- account: ${opts.accountId ?? "all"}`,
     `- from: ${opts.from ?? "all time"}`,
     `- to: ${opts.to ?? "now"}`,
-    `- dry run: ${opts.dryRun
-      ? "yes — write tools will not mutate the DB"
-      : "no — write tools will mutate the DB after confirmation"}`,
   ].join("\n");
 }
 
 /** Chat user context */
 
-export function renderUserContext(name: string, contextMd: string | null): string {
-  const body = contextMd ?? `(No personal context on file yet. ${name} can edit ~/.plasalid/context.md to add family, income, or other facts.)`;
+export function renderUserContext(
+  name: string,
+  contextMd: string | null,
+): string {
+  const body =
+    contextMd ??
+    `(No personal context on file yet. ${name} can edit ~/.plasalid/context.md to add family, income, or other facts.)`;
   return `## About ${name}\n${body}`;
 }
 
 /** Internal formatters */
 
-function formatAccountRow(a: AccountBalance, withBalance: boolean, depth = 0): string {
+function formatAccountRow(
+  a: AccountBalance,
+  withBalance: boolean,
+  depth = 0,
+): string {
   const indent = "  ".repeat(depth);
   const subtype = a.subtype ? `/${a.subtype}` : "";
   const base = `- ${indent}${a.id} | ${a.name} | ${a.type}${subtype}`;
-  return withBalance ? `${base} | balance ${a.balance.toFixed(2)} ${a.currency}` : base;
+  return withBalance
+    ? `${base} | balance ${a.balance.toFixed(2)} ${a.currency}`
+    : base;
 }
 
 function formatMemoryLine(m: Memory, showCategory: boolean): string {

@@ -14,7 +14,7 @@ export interface PostingInput {
 }
 
 export interface TransactionInput {
-  /** Optional pre-assigned id. Used by the buffered-write path so concerns recorded mid-scan can reference the transaction before commit. */
+  /** Optional pre-assigned id. Used by the buffered-write path so unknowns recorded mid-scan can reference the transaction before commit. */
   id?: string;
   date: string;
   description: string;
@@ -200,6 +200,8 @@ export interface DuplicateGroupTransaction {
   date: string;
   description: string;
   amount: number;
+  source_file_id: string | null;
+  merchant_id: string | null;
   account_ids: string[];
   account_names: string[];
 }
@@ -234,7 +236,7 @@ export function findDuplicateTransactions(
   const nameById = loadAccountNames(db);
 
   const rows = db.prepare(
-    `SELECT t.id, t.date, t.description,
+    `SELECT t.id, t.date, t.description, t.source_file_id, t.merchant_id,
             COALESCE(SUM(p.debit), 0) AS amount,
             GROUP_CONCAT(p.account_id) AS account_ids
      FROM transactions t
@@ -245,6 +247,8 @@ export function findDuplicateTransactions(
     id: string;
     date: string;
     description: string;
+    source_file_id: string | null;
+    merchant_id: string | null;
     amount: number;
     account_ids: string | null;
   }[];
@@ -258,6 +262,8 @@ export function findDuplicateTransactions(
         date: r.date,
         description: r.description,
         amount: Math.round(r.amount * 100) / 100,
+        source_file_id: r.source_file_id,
+        merchant_id: r.merchant_id,
         account_ids: ids,
         account_names: ids.map(id => nameById.get(id) ?? id),
       };
@@ -389,7 +395,7 @@ export function findCorrelatedTransactions(
   return correlatePairs(candidates, { toleranceDays });
 }
 
-export interface CorrelationCandidate {
+interface CorrelationCandidate {
   id: string;
   date: string;
   description: string;
@@ -404,11 +410,8 @@ export interface CorrelationCandidate {
  * and equipped with account_ids/names, return the cross-pairs that look like
  * the same money movement on different accounts (date within toleranceDays,
  * same amount + currency, non-overlapping account sets).
- *
- * Used by the DB-backed `findCorrelatedTransactions` and by the scan-time
- * coordinator that runs over buffered, not-yet-committed transactions.
  */
-export function correlatePairs(
+function correlatePairs(
   candidates: CorrelationCandidate[],
   opts: { toleranceDays?: number } = {},
 ): CorrelatedTransactionPair[] {

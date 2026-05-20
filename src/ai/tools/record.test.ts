@@ -6,9 +6,9 @@ import {
   createAccount,
   getAccountBalances,
   findAccountById,
-} from "../../db/queries/account_balance.js";
+} from "../../db/queries/account-balance.js";
 import { recordTransaction } from "../../db/queries/transactions.js";
-import { listActions } from "../../db/queries/action_log.js";
+import { listActions } from "../../db/queries/action-log.js";
 import type { AgentExecutionContext } from "./types.js";
 
 function freshDb() {

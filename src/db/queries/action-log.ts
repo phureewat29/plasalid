@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 
-export type ActionCommand = "record" | "scan" | "review";
+export type ActionCommand = "record" | "scan" | "resolve";
 
 export type ActionType =
   | "create_account"

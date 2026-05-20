@@ -23,10 +23,6 @@ const BACKSPACE = 127;
 const BACKSPACE_ALT = 8;
 const ESC = 27;
 
-function cloneBuf(b: TextBuffer): TextBuffer {
-  return { lines: [...b.lines], row: b.row, col: b.col };
-}
-
 function wordLeft(line: string, col: number): number {
   let p = col;
   while (p > 0 && line[p - 1] === " ") p--;

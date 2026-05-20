@@ -14,7 +14,7 @@ const HINTS = [
   "try: list my subscriptions",
   "try: how much liquid cash do I have?",
   "try: net worth trend this year?",
-  "try: open concerns from last scan?",
+  "try: open unknowns from last scan?",
 ];
 
 export function useFooterText(db: Database.Database): string {

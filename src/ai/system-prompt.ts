@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { config } from "../config.js";
 import { readContext } from "./context.js";
-import { chatPersona, SCAN_PERSONA, REVIEW_PERSONA, RECORD_PERSONA } from "./personas.js";
+import { chatPersona, SCAN_PERSONA, RESOLVE_PERSONA, RECORD_PERSONA } from "./personas.js";
 import { getThaiTaxonomyHint } from "../accounts/taxonomy.js";
 import {
   renderChartOfAccounts,
@@ -17,11 +17,10 @@ export interface ScanPromptOptions {
   fileName: string;
 }
 
-export interface ReviewPromptOptions {
+export interface ResolvePromptOptions {
   accountId?: string;
   from?: string;
   to?: string;
-  dryRun: boolean;
 }
 
 export interface RecordPromptOptions {
@@ -50,14 +49,14 @@ export function buildChatSystemPrompt(db: Database.Database): string {
   ]);
 }
 
-export function buildReviewSystemPrompt(
+export function buildResolveSystemPrompt(
   db: Database.Database,
-  opts: ReviewPromptOptions,
+  opts: ResolvePromptOptions,
 ): string {
   return joinSections([
-    REVIEW_PERSONA,
+    RESOLVE_PERSONA,
     renderTodayIso(),
-    renderChartOfAccounts(db, { withBalance: true, emptyState: "review" }),
+    renderChartOfAccounts(db, { withBalance: true, emptyState: "resolve" }),
     renderScope(opts),
     renderMemories(db, {
       header: "Rules you've already learned (apply directly; do not re-ask the user)",
@@ -94,7 +93,7 @@ export function buildScanSystemPrompt(
     `## File context\nFile: ${opts.fileName}`,
     `## Taxonomy hints\n${getThaiTaxonomyHint()}`,
     renderMemories(db, {
-      header: "Rules you've already learned (apply silently before raising a concern)",
+      header: "Rules you've already learned (apply silently before raising an unknown)",
       filterCategories: ["scanning_hint", "general"],
       showCategory: false,
     }),

@@ -1,12 +1,12 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
-import { getAccountBalances } from "../../db/queries/account_balance.js";
+import { getAccountBalances } from "../../db/queries/account-balance.js";
 import { visibleLength } from "../format.js";
 import { formatSignedAmount } from "../../currency.js";
 import type {
   AccountBalance,
   AccountType,
-} from "../../db/queries/account_balance.js";
+} from "../../db/queries/account-balance.js";
 
 const TYPE_TAG: Record<AccountType, string> = {
   asset: "asset",
@@ -49,7 +49,7 @@ export function showAccounts(): void {
     return;
   }
 
-  const byId = new Map(raw.map(a => [a.id, a]));
+  const byId = new Map(raw.map((a) => [a.id, a]));
   const depthCache = new Map<string, number>();
   const depthOf = (id: string): number => {
     if (depthCache.has(id)) return depthCache.get(id)!;
@@ -80,7 +80,8 @@ export function showAccounts(): void {
     const tag = chalk.dim(TYPE_TAG[a.type].padEnd(TYPE_TAG_WIDTH));
     const indent = "  ".repeat(depthOf(a.id));
     const displayName = indent + a.name;
-    const name = chalk.bold(displayName) + " ".repeat(nameWidth - displayName.length);
+    const name =
+      chalk.bold(displayName) + " ".repeat(nameWidth - displayName.length);
     const rawBalance = formatSignedAmount(a.balance);
     const coloredBalance = a.balance < 0 ? chalk.red(rawBalance) : rawBalance;
     const paddedBalance =

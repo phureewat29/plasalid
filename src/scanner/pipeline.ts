@@ -1,12 +1,12 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 import { getDb } from "../db/connection.js";
-import { countOpenConcerns } from "../db/queries/concerns.js";
-import { correlatePairs, type CorrelationCandidate } from "../db/queries/transactions.js";
+import { countOpenUnknowns } from "../db/queries/unknowns.js";
+import { runInspectors, type InspectionRunResult } from "./inspectors/index.js";
 import { runScanAgent } from "../ai/agent.js";
 import { buildDocumentBlock } from "./pdf.js";
 import { buildScanUserMessage } from "./prompts.js";
-import { scanDataDir, type ScannedFile } from "./walker.js";
+import { scanDataDir } from "./walker.js";
 import { BufferedWriteContext } from "./buffer.js";
 import { runWithConcurrency } from "./concurrency.js";
 import {
@@ -14,7 +14,7 @@ import {
   confirmProceedAfterFailures,
   type DecryptedFile,
   type DecryptQueueResult,
-} from "./decrypt_queue.js";
+} from "./decrypt-queue.js";
 import type { NormalizedMessage } from "../ai/provider.js";
 
 export type ScanFileStatus = "scanned" | "replaced" | "failed" | "skipped";
@@ -24,7 +24,7 @@ export interface ScanFileResult {
   relPath: string;
   status: ScanFileStatus;
   transactions: number;
-  concerns: number;
+  unknowns: number;
   error?: string;
 }
 
@@ -34,7 +34,7 @@ export interface ScanSummary {
   replaced: number;
   skipped: number;
   failed: number;
-  concerns: number;
+  unknowns: number;
   details: ScanFileResult[];
 }
 
@@ -45,9 +45,10 @@ export interface ScanRunEvents {
   decryptDone?: (e: { decrypted: number; skipped: number; failed: number }) => void;
   scanStart?: (e: { fileName: string }) => void;
   scanProgress?: (e: { fileName: string; step: string }) => void;
-  scanEnd?: (e: { fileName: string; status: "scanned" | "failed"; transactions: number; concerns: number; error?: string }) => void;
-  correlating?: (pairs: number) => void;
+  scanEnd?: (e: { fileName: string; status: "scanned" | "failed"; transactions: number; unknowns: number; error?: string }) => void;
   committing?: () => void;
+  /** Post-commit inspector pass. `result.total` is the count of unknowns emitted by all inspectors combined. */
+  inspecting?: (result: InspectionRunResult) => void;
 }
 
 export interface RunScanOptions {
@@ -94,15 +95,40 @@ export async function runScan(opts: RunScanOptions = {}): Promise<ScanSummary> {
   // Phase 2 — parallel scan with buffered writes
   const scanResults = await scanInParallel(db, decryptResult.decrypted, { concurrency, events });
 
-  // Phase 3 — cross-file correlation pre-commit
-  const pairCount = applyCrossFileCorrelations(scanResults);
-  events?.correlating?.(pairCount);
-
-  // Phase 4 — per-file commit
+  // Phase 3 — per-file commit
   events?.committing?.();
-  const fileResults = commitAll(db, decryptResult, scanResults);
+  const { details, committedFileIds } = commitAll(db, decryptResult, scanResults);
 
-  return buildSummary(allFiles.length, fileResults);
+  // Phase 4 — post-commit inspector sweep (duplicates, correlations, recurrences, similar accounts)
+  if (committedFileIds.length > 0) {
+    const inspectionResult = runInspectors(db, { fileIds: committedFileIds });
+    events?.inspecting?.(inspectionResult);
+    addInspectionUnknownsToSummary(details, committedFileIds, inspectionResult.total);
+  }
+
+  return buildSummary(allFiles.length, details);
+}
+
+/**
+ * Inspector unknowns were inserted after the per-file commit, so the per-file
+ * `unknowns` counters in `details` don't see them. Spread the total across the
+ * files that participated in this run so the summary's `unknowns` line stays
+ * truthful. Distribution is per-file proportional — good enough for a summary,
+ * not a load-bearing fact.
+ */
+function addInspectionUnknownsToSummary(
+  details: ScanFileResult[],
+  committedFileIds: readonly string[],
+  total: number,
+): void {
+  if (total === 0 || committedFileIds.length === 0) return;
+  const scannedDetails = details.filter(d => d.status === "scanned" || d.status === "replaced");
+  if (scannedDetails.length === 0) return;
+  const perFile = Math.floor(total / scannedDetails.length);
+  const remainder = total - perFile * scannedDetails.length;
+  for (let i = 0; i < scannedDetails.length; i++) {
+    scannedDetails[i].unknowns += perFile + (i < remainder ? 1 : 0);
+  }
 }
 
 /** Phase 2: parallel scan */
@@ -175,7 +201,7 @@ async function scanOneFile(
       fileName: file.fileName,
       status: "scanned",
       transactions: buffer.transactions.length,
-      concerns: buffer.concerns.length,
+      unknowns: buffer.unknowns.length,
     });
     return { decryptedFile: file, buffer, agentText: text };
   } catch (err: any) {
@@ -184,104 +210,45 @@ async function scanOneFile(
       fileName: file.fileName,
       status: "failed",
       transactions: 0,
-      concerns: 0,
+      unknowns: 0,
       error: message,
     });
     return { decryptedFile: file, buffer, error: message, agentText: "" };
   }
 }
 
-/** Phase 3: cross-file correlation */
+/** Phase 3: commit */
 
-/**
- * For every pair of buffered entries that look like the same money movement
- * across two different files, append a mirror concern to each side's buffer.
- * Returns the number of pairs detected so the CLI can report it.
- */
-function applyCrossFileCorrelations(results: ScanWorkResult[]): number {
-  type WithOrigin = { file: ScanWorkResult; transactionId: string; postings: { account_id: string; debit?: number; credit?: number; currency?: string }[]; date: string; description: string };
-  const all: WithOrigin[] = [];
-  for (const res of results) {
-    if (res.error) continue;
-    for (const bt of res.buffer.transactions) {
-      all.push({
-        file: res,
-        transactionId: bt.transaction_id,
-        postings: bt.input.postings,
-        date: bt.input.date,
-        description: bt.input.description,
-      });
-    }
-  }
-
-  const candidates: CorrelationCandidate[] = all.map(e => {
-    const debit = e.postings.reduce((s, p) => s + (p.debit ?? 0), 0);
-    const currency = e.postings.find(p => p.currency)?.currency ?? "THB";
-    const ids = Array.from(new Set(e.postings.map(p => p.account_id)));
-    return {
-      id: e.transactionId,
-      date: e.date,
-      description: e.description,
-      amount: Math.round(debit * 100) / 100,
-      currency,
-      account_ids: ids,
-      account_names: ids,
-    };
-  });
-
-  const pairs = correlatePairs(candidates, { toleranceDays: 3 });
-  const byTransaction = new Map(all.map(a => [a.transactionId, a]));
-
-  for (const pair of pairs) {
-    const a = byTransaction.get(pair.a.id);
-    const b = byTransaction.get(pair.b.id);
-    if (!a || !b) continue;
-    if (a.file === b.file) continue;
-
-    const amountStr = `฿${pair.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    a.file.buffer.appendConcern({
-      transaction_id: a.transactionId,
-      account_id: null,
-      prompt: `Looks like the matching half of this ${amountStr} movement on ${a.date} was also recorded in ${b.file.decryptedFile.fileName} on ${b.date}. Merge during review?`,
-      options: ["Yes — merge into one transaction", "No — these are two real events", "Skip — leave as is"],
-    });
-    b.file.buffer.appendConcern({
-      transaction_id: b.transactionId,
-      account_id: null,
-      prompt: `Looks like the matching half of this ${amountStr} movement on ${b.date} was also recorded in ${a.file.decryptedFile.fileName} on ${a.date}. Merge during review?`,
-      options: ["Yes — merge into one transaction", "No — these are two real events", "Skip — leave as is"],
-    });
-  }
-
-  return pairs.filter(p => byTransaction.get(p.a.id)?.file !== byTransaction.get(p.b.id)?.file).length;
+interface CommitOutput {
+  details: ScanFileResult[];
+  committedFileIds: string[];
 }
-
-/** Phase 4: commit */
 
 function commitAll(
   db: Database.Database,
   decryptResult: DecryptQueueResult,
   scanResults: ScanWorkResult[],
-): ScanFileResult[] {
-  const out: ScanFileResult[] = [];
+): CommitOutput {
+  const details: ScanFileResult[] = [];
+  const committedFileIds: string[] = [];
 
   for (const skipped of decryptResult.skipped) {
-    out.push({
+    details.push({
       name: skipped.file.name,
       relPath: skipped.file.relPath,
       status: "skipped",
       transactions: 0,
-      concerns: countOpenConcerns(db, { file_id: skipped.existingScannedFileId }),
+      unknowns: countOpenUnknowns(db, { file_id: skipped.existingScannedFileId }),
     });
   }
 
   for (const failed of decryptResult.failed) {
-    out.push({
+    details.push({
       name: failed.file.name,
       relPath: failed.file.relPath,
       status: "failed",
       transactions: 0,
-      concerns: 0,
+      unknowns: 0,
       error: failed.error,
     });
   }
@@ -289,12 +256,12 @@ function commitAll(
   for (const res of scanResults) {
     const { decryptedFile, buffer, error, agentText } = res;
     if (error) {
-      out.push({
+      details.push({
         name: decryptedFile.fileName,
         relPath: decryptedFile.relPath,
         status: "failed",
         transactions: 0,
-        concerns: buffer.concerns.length,
+        unknowns: buffer.unknowns.length,
         error,
       });
       continue;
@@ -311,26 +278,27 @@ function commitAll(
       });
       const counts = buffer.commit(db, scannedFileId);
       setFileStatus(db, scannedFileId, "scanned", { raw_text: agentText });
-      out.push({
+      committedFileIds.push(scannedFileId);
+      details.push({
         name: decryptedFile.fileName,
         relPath: decryptedFile.relPath,
         status: decryptedFile.replacesPriorScannedFileId ? "replaced" : "scanned",
         transactions: counts.transactions,
-        concerns: counts.concerns,
+        unknowns: counts.unknowns,
       });
     } catch (err: any) {
-      out.push({
+      details.push({
         name: decryptedFile.fileName,
         relPath: decryptedFile.relPath,
         status: "failed",
         transactions: 0,
-        concerns: buffer.concerns.length,
+        unknowns: buffer.unknowns.length,
         error: err?.message ?? "commit failed",
       });
     }
   }
 
-  return out;
+  return { details, committedFileIds };
 }
 
 /** Summary assembly */
@@ -342,12 +310,12 @@ function buildSummary(total: number, details: ScanFileResult[]): ScanSummary {
     replaced: 0,
     skipped: 0,
     failed: 0,
-    concerns: 0,
+    unknowns: 0,
     details,
   };
   for (const d of details) {
     summary[d.status]++;
-    summary.concerns += d.concerns;
+    summary.unknowns += d.unknowns;
   }
   return summary;
 }
@@ -355,10 +323,10 @@ function buildSummary(total: number, details: ScanFileResult[]): ScanSummary {
 function buildAbortedSummary(total: number, decrypt: DecryptQueueResult): ScanSummary {
   const details: ScanFileResult[] = [
     ...decrypt.skipped.map(s => ({
-      name: s.file.name, relPath: s.file.relPath, status: "skipped" as const, transactions: 0, concerns: 0,
+      name: s.file.name, relPath: s.file.relPath, status: "skipped" as const, transactions: 0, unknowns: 0,
     })),
     ...decrypt.failed.map(f => ({
-      name: f.file.name, relPath: f.file.relPath, status: "failed" as const, transactions: 0, concerns: 0, error: f.error,
+      name: f.file.name, relPath: f.file.relPath, status: "failed" as const, transactions: 0, unknowns: 0, error: f.error,
     })),
   ];
   return buildSummary(total, details);

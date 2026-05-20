@@ -25,7 +25,14 @@ Moreover, Plasalid comes with a built-in agentic chat that queries the data dire
 
 The data ledger also serves as a harness, open to any AI agent that connects to it, so the picture you assemble once is reusable across whatever tools you choose to use.
 
+<p align="center">
+  <img src=".github/plasalid-demo.gif" alt="demo" width="100%" />
+</p>
+
+
 ## Features
+
+![](https://github.com/phureewat29/plasalid/.github/plasalid-demo.gif)
 
 ### Unified ledger from any financial documents
 

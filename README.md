@@ -15,45 +15,36 @@
 
 <br />
 
-In US/EU, a financial data platform like Plaid is empowering most personal-finance apps. One connection, every app sees the same unified view of your accounts. Most of the world doesn't have that. In Thailand, for example, there's no equivalent to Plaid; all bank data is siloed: knowing where your financial status stands means logging into five bank apps one by one, and with such a steep learning curve, most people just don't bother. The picture stays fragmented.
+A unified view of personal financial data is critical. In the US and EU, a financial data aggregator like Plaid empowers most finance apps: one connection, and every app sees the same unified view of your accounts. Most of the world doesn't have that, including Thailand, where there's no such aggregator. All bank data is siloed: knowing where your financial status stands means logging into five bank apps one by one — and with such a steep learning curve, most people just don't bother - and that's why Plasalid emerged
 
-Without a unified view, the consequences are concrete. Subscriptions stay active long after they're forgotten. Unknown charges go unverified. Brokerage accounts opened years ago drift unchecked. Debt grows beyond what any single statement shows, and savings can't be tracked against a complete baseline. Decisions about how to clear debt, where to cut spending, or what you actually own get made on partial information, if they get made at all.
+Data has stayed fragmented for decades. Without a way to bring it together, personal finance remains hard to manage even in the era of AI. Subscriptions stay active long after they're forgotten, unknown charges go unverified, and bank accounts opened years ago drift unchecked.
 
-Plasalid addresses this by parsing financial documents into a single structured ledger on your own machine. Drop any document into a folder — bank statements, credit-card statements, payslips, brokerage statements — and Plasalid extracts every transaction, balance, and holding into a double-entry database. 
+Debt may silently grow beyond what any single statement shows, and savings can't be tracked against a complete baseline. Decisions about how to clear debt, where to cut spending, or what you actually own get made on partial information.
 
-Plasalid also comes with a built-in chat that queries the ledger directly, so questions like which subscriptions are still active, where money went last month, or what your current net worth is can be answered against actual records rather than estimates. You can talk with your money on Plasalid. 
+Plasalid addresses this with a simple founding concept: let users drop all their financial documents — bank statements, credit-card statements, payslips, brokerage statements — onto their own machine, where Plasalid leverages AI to extract every transaction, balance, and holding into a single, structured, double-entry database that serves as context for future processing.
 
-The same data ledger also serves as a harness, open to any AI agent that connects to it, so the picture you assemble once is reusable across whatever tools you choose to use.
+Moreover, Plasalid comes with a built-in agentic chat that queries the data directly, so questions like which subscriptions are still active, where money went last month, or what your current net worth is can be answered against actual records rather than estimates. You can talk with your money on Plasalid to help you understand your financial situation and plan efficiently.
+
+The data ledger also serves as a harness, open to any AI agent that connects to it, so the picture you assemble once is reusable across whatever tools you choose to use.
 
 ## Features
 
-Plasalid is a chain of three stages: **Scan → Resolve → Chat.** Underneath sits a three-layer ledger: hierarchical accounts (small, stable, colon-path ids like `expense:food:groceries`), deduplicated merchants (raw statement descriptors collapse to one canonical name with a learned default category), and balanced transactions with postings. Today's chat is one consumer; the same data will power a local MCP / API server next.
+### Unified ledger from any financial documents
 
-### Scan — parse without blocking
+- **Drop PDFs, get a complete ledger.** Bank statements, credit-card statements, payslips, brokerage statements, and etc. — Plasalid uses AI to parse every transaction, balance, and holding into double-entry ledger.
+- **No aggregator, no per-bank login.** The picture assembles itself from documents you already receive each month. No manual entry. No fragile connector to maintain.
 
-- **Drop PDFs in, get balanced transactions out.** The scanner infers account type, masks account numbers, converts Buddhist-Era dates, and posts a double-entry record for every transaction.
-- **Merchants as first-class.** Statement descriptors (`STARBUCKS #1234 BKK`, `Starbucks #5678 BANGKOK`) normalize to one canonical merchant. Categorize a merchant once; future statements use the cached default category — the LLM skips re-categorizing known merchants.
-- **Never pauses to ask you.** Ambiguous rows post best-guess transactions with a structured *unknown* attached; lines the scanner can't confidently categorize land in `expense:uncategorized` for the resolve cleanup pass; unparseable rows are skipped, not guessed. A missing row is better than a wrong row — resolve clears them up later.
-- **Encrypted PDFs handled inline.** Statement password-protected? Plasalid prompts you once, remembers the password (AES-GCM at rest) under a filename pattern, and unlocks next month's statement silently.
+### Build in AI agent that queries your real data
 
-### Resolve — close every open unknown
+- **Ask in plain language.** "Which subscriptions are still active?" "Where did money go last month?" "How much did I spend at Starbucks this year?" "What's my net worth right now?"
+- **Answers from actual records.** Figures, dates, and merchants are drawn straight from double-entry ledger — never an estimate, never invented.
 
-- **Uncategorized cleanup.** Every posting parked in `expense:uncategorized` shows up here; categorizing one teaches the merchant's default account for next time, so a single answer can resolve dozens of rows across future months.
-- **Connects related transactions.** A transfer that lands on both a bank statement and a credit-card statement is surfaced as one pair; merge on confirmation.
-- **Recurrences as first-class data.** Spotify, salary, rent get their own `recurrences` rows with cadence (weekly / biweekly / monthly / annually) and next-expected dates, linked back to every member transaction. Not a UI category — a structured fact any AI consumer can read.
-- **Step-by-step clarification.** Re-poses every scan-noted unknown as one focused question; loops until unknowns are clear or you skip them.
+### Local-first, private, and open as harness
 
-### Chat — ask questions about your data
-
-- **Reads your real transactions and postings.** Not generic categories. "Where did ฿14k go in March?" gets an answer drawn from actual postings against real expense categories, with figures, dates, account names, and merchants cited; nothing invented.
-- **One of many possible consumers.** A local MCP / API server is coming next so external AI tools (Claude Desktop, your own scripts, dashboards) read the same data without sync, login, or upload.
-
-### Built to be plugged into
-
-- **Local-first.** AES-256 encrypted SQLite on your machine. No cloud sync, no third-party aggregator, no upstream account to trust.
-- **Standard double-entry.** No proprietary schema; any tool that speaks SQL can plug in. No vendor lock, no rate limits, no paywall.
-- **PII redacted on the way out.** Names, national IDs, phone numbers, and full account/card numbers are scrubbed before any prompt leaves your machine.
-- **BYO model.** Pick Anthropic (Claude) or any OpenAI-compatible server (Ollama, OpenAI, LM Studio, vLLM, …) at setup. Local models keep everything 100% on your machine.
+- **Everything runs on your machine.** AES-256-encrypted SQLite ledger. Fully encrypted sensitive data. No cloud aggregator, no upstream account, no third-party can touch your data.
+- **PII redacted on the way out.** Your names, your identity, phone numbers, and full account/card numbers are scrubbed before any prompt leaves your machine.
+- **Pluggable AI provider.** Anthropic, or any OpenAI compatible local model — pick at setup; local models keep inference 100% offline.
+- **A harness layer for AI agents.** Plasalid's standard double-entry ledger is the baseline data layer — open for extensibility by design.
 
 
 ## Install
@@ -89,9 +80,9 @@ Other day-to-day commands:
 Run `plasalid --help` to see all available commands.
 
 ```bash
-plasalid                            # Interactive TUI chat with your local data
+plasalid                            # Interactive chat with your data
 plasalid setup                      # Configure API key, encryption, and data directory
-plasalid data                       # Open the Plasalid data folder in your OS file explorer
+plasalid data                       # Open the Plasalid data folder in your file explorer
 plasalid accounts                   # Show the chart of accounts with balances
 plasalid status                     # Net worth and this-month income/expense totals
 plasalid transactions               # List transactions and their postings (filter by --account, --from, --to, --query, --limit)
@@ -104,7 +95,7 @@ plasalid resolve                    # Walk every open unknown and apply your dec
 ## How It Works
 
 ```
-  Bank statements · Credit-card statements
+  Bank · Card · Payslip · Brokerage · Transfer · Receipt
                   │
              (drop PDFs)
                   │
@@ -114,7 +105,7 @@ plasalid resolve                    # Walk every open unknown and apply your dec
                   │
     plasalid scan / plasalid record
                   │
-       Claude API (PII-redacted)
+       AI provider (PII-redacted)
                   │
        ┌──────────▼──────────┐
        │     Encrypted DB    │◀──── plasalid resolve
@@ -123,7 +114,7 @@ plasalid resolve                    # Walk every open unknown and apply your dec
                plasalid               
 ```
 
-Two outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. No telemetry. No analytics.
+Two outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. The same encrypted ledger is open to external AI agents through a local MCP / API server (coming next). No telemetry. No analytics.
 
 ## Security & Privacy
 

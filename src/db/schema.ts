@@ -108,6 +108,7 @@ export function migrate(db: Database.Database): void {
       kind TEXT,
       prompt TEXT NOT NULL,
       options_json TEXT,
+      context_json TEXT,
       answer TEXT,
       resolved_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -159,4 +160,17 @@ export function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS action_log_correlation_idx ON action_log(correlation_id);
     CREATE INDEX IF NOT EXISTS action_log_created_idx ON action_log(created_at);
   `);
+
+  ensureColumn(db, "unknowns", "context_json", "TEXT");
+}
+
+function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  type: string,
+): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }

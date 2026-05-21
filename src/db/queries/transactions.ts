@@ -1,8 +1,7 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
-
-const TOLERANCE = 0.005;
+import { ensureStructuralAccount } from "./account-balance.js";
 
 export interface PostingInput {
   account_id: string;
@@ -40,6 +39,7 @@ export interface PostingRow {
   transaction_date?: string;
   transaction_description?: string;
   merchant_name?: string | null;
+  transaction_recurrence_id?: string | null;
 }
 
 /**
@@ -55,17 +55,16 @@ export function recordTransaction(db: Database.Database, input: TransactionInput
 }
 
 /**
- * Validate balance + invariants and assign an id. Pure (no DB writes). Used by
- * both `recordTransaction` and the buffered-scan commit path; the latter
- * already runs inside its own transaction and must not open another.
+ * Validate structural invariants and assign an id. Pure (no DB writes).
+ * Balance equality is **not** checked here — `insertTransactionRows` closes any
+ * imbalance with an `equity:adjustments` posting at insert time, so callers
+ * can record whatever the source document (or the LLM) actually saw.
  */
 export function validateTransaction(input: TransactionInput): TransactionInput & { id: string } {
-  if (!input.postings || input.postings.length < 2) {
-    throw new Error("Transaction must contain at least two postings.");
+  if (!input.postings || input.postings.length < 1) {
+    throw new Error("Transaction must contain at least one posting.");
   }
 
-  let debitTotal = 0;
-  let creditTotal = 0;
   for (const p of input.postings) {
     const debit = p.debit ?? 0;
     const credit = p.credit ?? 0;
@@ -78,14 +77,6 @@ export function validateTransaction(input: TransactionInput): TransactionInput &
     if (debit === 0 && credit === 0) {
       throw new Error("Each posting must have either a debit or a credit.");
     }
-    debitTotal += debit;
-    creditTotal += credit;
-  }
-
-  if (Math.abs(debitTotal - creditTotal) > TOLERANCE) {
-    throw new Error(
-      `Transaction does not balance: debits ${debitTotal.toFixed(2)} vs credits ${creditTotal.toFixed(2)}.`,
-    );
   }
 
   return { ...input, id: input.id ?? `tx:${randomUUID()}` };
@@ -94,12 +85,16 @@ export function validateTransaction(input: TransactionInput): TransactionInput &
 /**
  * Insert-only counterpart to `recordTransaction`. The caller is responsible
  * for opening a transaction (or for accepting partial writes). Expects an
- * already-validated input from `validateTransaction`.
+ * already-validated input from `validateTransaction`. If the postings don't
+ * sum to zero, a closing entry on `equity:adjustments` is appended so the
+ * double-entry invariant always holds at the row level.
  */
 export function insertTransactionRows(
   db: Database.Database,
   input: TransactionInput & { id: string },
 ): void {
+  const postings = balanceWithAdjustment(db, input.postings);
+
   let merchantId = input.merchant_id ?? null;
   if (!merchantId && input.merchant) {
     merchantId = upsertMerchant(db, input.merchant).id;
@@ -120,7 +115,7 @@ export function insertTransactionRows(
     `INSERT INTO postings (id, transaction_id, account_id, debit, credit, currency, memo, pii_flag)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  for (const p of input.postings) {
+  for (const p of postings) {
     insertPosting.run(
       `p:${randomUUID()}`,
       input.id,
@@ -132,6 +127,33 @@ export function insertTransactionRows(
       p.pii_flag ? 1 : 0,
     );
   }
+}
+
+/**
+ * If the postings don't tie, append a closing entry on `equity:adjustments`.
+ * Sums in integer cents to avoid float drift — no tolerance constant needed.
+ * Returns the original list when already balanced.
+ */
+function balanceWithAdjustment(
+  db: Database.Database,
+  postings: PostingInput[],
+): PostingInput[] {
+  let debitCents = 0;
+  let creditCents = 0;
+  for (const p of postings) {
+    debitCents  += Math.round((p.debit  ?? 0) * 100);
+    creditCents += Math.round((p.credit ?? 0) * 100);
+  }
+  const diffCents = debitCents - creditCents;
+  if (diffCents === 0) return postings;
+
+  ensureStructuralAccount(db, "equity:adjustments");
+  const amount = Math.abs(diffCents) / 100;
+  const currency = postings[0]?.currency || "THB";
+  const adjustment: PostingInput = diffCents > 0
+    ? { account_id: "equity:adjustments", credit: amount, currency }
+    : { account_id: "equity:adjustments", debit:  amount, currency };
+  return [...postings, adjustment];
 }
 
 export interface ListPostingsOptions {
@@ -477,6 +499,7 @@ export function listPostings(db: Database.Database, opts: ListPostingsOptions = 
     `SELECT p.id, p.transaction_id, p.account_id, p.debit, p.credit, p.currency, p.memo,
             a.name AS account_name, a.type AS account_type,
             t.date AS transaction_date, t.description AS transaction_description,
+            t.recurrence_id AS transaction_recurrence_id,
             m.canonical_name AS merchant_name
      FROM postings p
      JOIN transactions t ON t.id = p.transaction_id
@@ -486,4 +509,54 @@ export function listPostings(db: Database.Database, opts: ListPostingsOptions = 
      ORDER BY t.date DESC, t.id DESC
      LIMIT ?`,
   ).all(...params, limit) as PostingRow[];
+}
+
+export interface TransactionGroup {
+  transaction_id: string;
+  date: string;
+  description: string;
+  merchant: string | null;
+  recurrence_id: string | null;
+  postings: PostingRow[];
+}
+
+/**
+ * Fold `listPostings` output into per-transaction groups, surfacing the header
+ * fields (date, description, merchant, recurrence) shared by every posting
+ * under that transaction. Assumes rows are already in transaction-id order —
+ * `listPostings` produces that ordering naturally via its `ORDER BY t.date DESC, t.id DESC`.
+ */
+export function groupByTransaction(postings: PostingRow[]): TransactionGroup[] {
+  const groups: TransactionGroup[] = [];
+  let current: TransactionGroup | null = null;
+  for (const p of postings) {
+    if (!current || current.transaction_id !== p.transaction_id) {
+      current = {
+        transaction_id: p.transaction_id,
+        date: p.transaction_date ?? "",
+        description: p.transaction_description ?? "",
+        merchant: p.merchant_name ?? null,
+        recurrence_id: p.transaction_recurrence_id ?? null,
+        postings: [],
+      };
+      groups.push(current);
+    }
+    current.postings.push(p);
+  }
+  return groups;
+}
+
+export interface TransactionTotals {
+  transactions: number;
+  postings: number;
+}
+
+export function countTransactions(db: Database.Database): TransactionTotals {
+  const row = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM transactions) AS transactions,
+              (SELECT COUNT(*) FROM postings)     AS postings`,
+    )
+    .get() as TransactionTotals;
+  return row;
 }

@@ -9,7 +9,7 @@ import {
   insertTransactionRows,
   recordTransaction,
 } from "../../db/queries/transactions.js";
-import { appendAction } from "../../db/queries/action-log.js";
+import { appendAction, type ActionType } from "../../db/queries/action-log.js";
 import {
   getUnknownTarget,
   recordUnknown,
@@ -219,6 +219,39 @@ const ACCOUNT_LABELS: Record<string, string> = {
   record_transaction: "Posting transaction",
 };
 
+interface AuditRecord {
+  actionType: ActionType;
+  targetId: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Run a write inside an audit-wrapping transaction. When the caller has a
+ * correlation id, the write + action_log insert land atomically; otherwise
+ * it's just the write. The write closure can return an AuditRecord (logged)
+ * or null (no audit row this call — used when an update was a no-op).
+ */
+function writeWithAudit(
+  db: Database.Database,
+  ctx: AgentExecutionContext | undefined,
+  write: () => AuditRecord | null,
+): void {
+  if (!ctx?.correlationId) { write(); return; }
+  const op = db.transaction(() => {
+    const audit = write();
+    if (!audit) return;
+    appendAction(db, {
+      correlation_id: ctx.correlationId!,
+      command: ctx.command ?? "record",
+      user_input: ctx.userInput ?? null,
+      action_type: audit.actionType,
+      target_id: audit.targetId,
+      payload: audit.payload,
+    });
+  });
+  op();
+}
+
 async function accountExecute(
   db: Database.Database,
   name: string,
@@ -232,7 +265,7 @@ async function accountExecute(
       }
       return await runAccountExclusive(() => {
         try {
-          const create = () => {
+          writeWithAudit(db, ctx, () => {
             createAccount(db, {
               id: input.id,
               name: input.name,
@@ -246,24 +279,12 @@ async function accountExecute(
               statement_day: input.statement_day ?? null,
               metadata: input.metadata ?? null,
             });
-          };
-          if (ctx?.correlationId) {
-            const tx = db.transaction((): void => {
-              create();
-              const row = findAccountById(db, input.id);
-              appendAction(db, {
-                correlation_id: ctx.correlationId!,
-                command: ctx.command ?? "record",
-                user_input: ctx.userInput ?? null,
-                action_type: "create_account",
-                target_id: input.id,
-                payload: { row },
-              });
-            });
-            tx();
-          } else {
-            create();
-          }
+            return {
+              actionType: "create_account",
+              targetId: input.id,
+              payload: { row: findAccountById(db, input.id) },
+            };
+          });
           return `Account created: ${input.id} (${input.name}, ${input.type}).`;
         } catch (err: any) {
           if (err.code === "ACCOUNT_EXISTS") {
@@ -278,7 +299,7 @@ async function accountExecute(
       return await runAccountExclusive(() => {
         try {
           let changed = false;
-          const apply = () => {
+          writeWithAudit(db, ctx, () => {
             const result = updateAccountMetadata(db, input.account_id, {
               due_day: input.due_day,
               statement_day: input.statement_day,
@@ -288,28 +309,14 @@ async function accountExecute(
               metadata: input.metadata,
             });
             changed = result.changed;
-            return result;
-          };
-          if (ctx?.correlationId) {
-            const tx = db.transaction((): void => {
-              const result = apply();
-              if (!result.changed) return;
-              appendAction(db, {
-                correlation_id: ctx.correlationId!,
-                command: ctx.command ?? "record",
-                user_input: ctx.userInput ?? null,
-                action_type: "update_account_metadata",
-                target_id: input.account_id,
-                payload: { before: result.before, after: result.after },
-              });
-            });
-            tx();
-          } else {
-            apply();
-          }
-          return changed
-            ? `Updated ${input.account_id}.`
-            : "Nothing to update.";
+            if (!result.changed) return null;
+            return {
+              actionType: "update_account_metadata",
+              targetId: input.account_id,
+              payload: { before: result.before, after: result.after },
+            };
+          });
+          return changed ? `Updated ${input.account_id}.` : "Nothing to update.";
         } catch (err: any) {
           if (String(err.message).includes("not found")) {
             return `Account "${input.account_id}" not found.`;
@@ -320,8 +327,7 @@ async function accountExecute(
     }
 
     case "record_transaction": {
-      if (!ctx)
-        return "record_transaction is only available inside an agent session.";
+      if (!ctx) return "record_transaction is only available inside an agent session.";
       const txInput = {
         date: input.date,
         description: input.description,
@@ -339,36 +345,35 @@ async function accountExecute(
         })),
       };
       try {
-        let transactionId: string;
         if (ctx.buffer) {
-          transactionId = ctx.buffer.appendTransaction(txInput);
-        } else if (ctx.correlationId) {
-          const validated = validateTransaction(txInput);
-          const tx = db.transaction((): void => {
-            insertTransactionRows(db, validated);
-            appendAction(db, {
-              correlation_id: ctx.correlationId!,
-              command: ctx.command ?? "record",
-              user_input: ctx.userInput ?? null,
-              action_type: "record_transaction",
-              target_id: validated.id,
-              payload: {
-                transaction: {
-                  date: validated.date,
-                  description: validated.description,
-                  source_page: validated.source_page ?? null,
-                  raw_descriptor: validated.raw_descriptor ?? null,
-                },
-                postings: validated.postings,
-              },
-            });
-          });
-          tx();
-          transactionId = validated.id;
-        } else {
-          transactionId = recordTransaction(db, txInput);
+          const transactionId = ctx.buffer.appendTransaction(txInput);
+          return `Posted transaction ${transactionId} (${input.date}).`;
         }
-        return `Posted transaction ${transactionId} (${input.date}).`;
+        // No-audit path uses recordTransaction (validates + inserts in one go).
+        // Audit path validates ahead so the validated id can be returned without
+        // re-reading from disk after the transaction commits.
+        if (!ctx.correlationId) {
+          const transactionId = recordTransaction(db, txInput);
+          return `Posted transaction ${transactionId} (${input.date}).`;
+        }
+        const validated = validateTransaction(txInput);
+        writeWithAudit(db, ctx, () => {
+          insertTransactionRows(db, validated);
+          return {
+            actionType: "record_transaction",
+            targetId: validated.id,
+            payload: {
+              transaction: {
+                date: validated.date,
+                description: validated.description,
+                source_page: validated.source_page ?? null,
+                raw_descriptor: validated.raw_descriptor ?? null,
+              },
+              postings: validated.postings,
+            },
+          };
+        });
+        return `Posted transaction ${validated.id} (${input.date}).`;
       } catch (err: any) {
         return `Could not post transaction: ${err.message}`;
       }
@@ -584,60 +589,51 @@ async function resolveExecute(
 ): Promise<string | undefined> {
   if (name === "close_unknown") return closeUnknown(db, input);
   if (name !== "ask_user") return undefined;
-  if (!ctx) return "ask_user is only available inside an agent session.";
-
-  let id: string;
-  if (input.unknown_id) {
-    id = String(input.unknown_id);
-    if (!getUnknownTarget(db, id)) return `Unknown ${id} not found.`;
-  } else {
-    id = recordUnknown(db, {
-      file_id: ctx.fileId ?? null,
-      transaction_id: input.transaction_id ?? null,
-      account_id: input.account_id ?? null,
-      prompt: input.prompt,
-      options: input.options,
-    });
+  if (!ctx?.promptUser) {
+    return "ask_user requires an interactive resolve session.";
   }
 
-  if (ctx.interactive && ctx.promptUser) {
-    const answer = await ctx.promptUser(
-      input.prompt,
-      input.options,
-      input.facts,
-    );
-    resolveUnknown(db, id, answer);
-    const siblings: string[] = Array.isArray(input.related_unknown_ids)
-      ? input.related_unknown_ids
-      : [];
-    let propagated = 0;
-    for (const sibId of siblings) {
-      if (sibId === id) continue;
-      if (resolveUnknown(db, String(sibId), answer)) propagated++;
-    }
-    const totalResolved = 1 + propagated;
-    return `User answered: ${sanitizeForPrompt(answer)}${totalResolved > 1 ? ` (applied to ${totalResolved} unknown${totalResolved === 1 ? "" : "s"})` : ""}`;
-  }
-  return `Question recorded for later (${id}). Awaiting user input — do not act on assumptions about this answer.`;
+  const id = input.unknown_id
+    ? String(input.unknown_id)
+    : recordUnknown(db, {
+        file_id: ctx.fileId ?? null,
+        transaction_id: input.transaction_id ?? null,
+        account_id: input.account_id ?? null,
+        prompt: input.prompt,
+        options: input.options,
+      });
+  if (!getUnknownTarget(db, id)) return `Unknown ${id} not found.`;
+
+  const answer = await ctx.promptUser(input.prompt, input.options, input.facts);
+  return applyAnswerToGroup(db, id, answer, input.related_unknown_ids);
 }
 
 function closeUnknown(db: Database.Database, input: any): string {
   const primary = String(input.unknown_id ?? "");
   const answer = String(input.answer ?? "");
-  if (!primary || !answer)
-    return "close_unknown requires unknown_id and answer.";
+  if (!primary || !answer) return "close_unknown requires unknown_id and answer.";
   if (!getUnknownTarget(db, primary)) return `Unknown ${primary} not found.`;
+  return applyAnswerToGroup(db, primary, answer, input.related_unknown_ids);
+}
 
-  resolveUnknown(db, primary, answer);
-  let count = 1;
-  const siblings: string[] = Array.isArray(input.related_unknown_ids)
-    ? input.related_unknown_ids
-    : [];
+function applyAnswerToGroup(
+  db: Database.Database,
+  primaryId: string,
+  answer: string,
+  rawSiblings: unknown,
+): string {
+  resolveUnknown(db, primaryId, answer);
+  const siblings: string[] = Array.isArray(rawSiblings) ? rawSiblings.map(String) : [];
+  const resolved: string[] = [primaryId];
+  const notFound: string[] = [];
   for (const sibId of siblings) {
-    if (sibId === primary) continue;
-    if (resolveUnknown(db, String(sibId), answer)) count++;
+    if (sibId === primaryId) continue;
+    if (resolveUnknown(db, sibId, answer)) resolved.push(sibId);
+    else notFound.push(sibId);
   }
-  return `Closed ${count} unknown${count === 1 ? "" : "s"}.`;
+  const preface = `Resolved ${resolved.length} unknown${resolved.length === 1 ? "" : "s"} with: ${sanitizeForPrompt(answer)}`;
+  if (notFound.length === 0) return preface;
+  return `${preface}. NOT FOUND: ${notFound.join(", ")} — these ids did not exist; do not re-close them.`;
 }
 
 export const resolveIngestTools: ToolModule = {

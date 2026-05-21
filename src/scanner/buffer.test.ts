@@ -45,7 +45,36 @@ describe("BufferedWriteContext", () => {
     expect(unknown.transaction_id).toBe(transactionId);
   });
 
-  it("rolls back the DB on a mid-commit error", () => {
+  it("auto-balances imbalanced transactions with an equity:adjustments posting", () => {
+    const buf = new BufferedWriteContext("x.pdf");
+    buf.appendTransaction({
+      date: "2026-01-15",
+      description: "Balanced transaction",
+      postings: [
+        { account_id: "expense:food", debit: 100 },
+        { account_id: "asset:cash", credit: 100 },
+      ],
+    });
+    const imbalancedId = buf.appendTransaction({
+      date: "2026-01-16",
+      description: "AI misread this row",
+      postings: [
+        { account_id: "expense:food", debit: 100 },
+        { account_id: "asset:cash", credit: 50 },
+      ],
+    });
+
+    expect(() => buf.commit(db, "sf:test")).not.toThrow();
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 2 });
+    const onImbalanced = db
+      .prepare(`SELECT account_id, debit, credit FROM postings WHERE transaction_id = ?`)
+      .all(imbalancedId) as { account_id: string; debit: number; credit: number }[];
+    expect(onImbalanced).toHaveLength(3);
+    const adjustment = onImbalanced.find(p => p.account_id === "equity:adjustments");
+    expect(adjustment).toEqual({ account_id: "equity:adjustments", debit: 0, credit: 50 });
+  });
+
+  it("rolls back the DB on a real fatal error (foreign-key violation)", () => {
     const buf = new BufferedWriteContext("x.pdf");
     buf.appendTransaction({
       date: "2026-01-15",
@@ -57,14 +86,14 @@ describe("BufferedWriteContext", () => {
     });
     buf.appendTransaction({
       date: "2026-01-16",
-      description: "Bad transaction",
+      description: "References a missing account",
       postings: [
-        { account_id: "expense:food", debit: 100 },
-        { account_id: "asset:cash", credit: 50 },
+        { account_id: "expense:nonexistent", debit: 100 },
+        { account_id: "asset:cash", credit: 100 },
       ],
     });
 
-    expect(() => buf.commit(db, "sf:test")).toThrow(/does not balance/);
+    expect(() => buf.commit(db, "sf:test")).toThrow();
     expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
   });
 

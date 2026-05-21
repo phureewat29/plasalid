@@ -31,42 +31,40 @@ function inspect(
       transaction_id: null,
       account_id: pair.a.id,
       kind: "similar_accounts",
-      prompt: `These two accounts look like the same thing (similarity ${pair.similarity}):\n  ${pair.a.id} — ${pair.a.name}\n  ${pair.b.id} — ${pair.b.name}`,
+      prompt: `These two accounts look like the same thing:\n  ${pair.a.name}\n  ${pair.b.name}`,
       options: [
-        `Merge ${pair.b.id} into ${pair.a.id}`,
-        `Merge ${pair.a.id} into ${pair.b.id}`,
+        `Merge ${pair.b.name} into ${pair.a.name}`,
+        `Merge ${pair.a.name} into ${pair.b.name}`,
         "Keep separate",
         "Skip",
       ],
+      context: { otherAccountId: pair.b.id },
     });
   }
   return out;
 }
 
 /**
- * `similar_accounts` unknowns (open OR resolved) embed the other account's id
- * in their options strings ("Merge X into Y"). Parse those out so we don't
- * re-flag a pair the user has already seen — including pairs they've already
- * answered "Keep separate" on a prior run.
+ * `similar_accounts` unknowns store the partner account id in `context_json`
+ * (`{otherAccountId}`); the row's own `account_id` is one half of the pair.
+ * Read both to skip pairs the user has already seen — including ones answered
+ * "Keep separate" on a prior run.
  */
 function loadAlreadyFlaggedAccountPairs(db: Database.Database): Set<string> {
   const rows = db
     .prepare(
-      `SELECT account_id, options_json FROM unknowns
+      `SELECT account_id, context_json FROM unknowns
        WHERE kind = 'similar_accounts' AND account_id IS NOT NULL`,
     )
-    .all() as { account_id: string; options_json: string | null }[];
+    .all() as { account_id: string; context_json: string | null }[];
   const out = new Set<string>();
   for (const row of rows) {
-    if (!row.options_json) continue;
+    if (!row.context_json) continue;
     try {
-      const options = JSON.parse(row.options_json) as string[];
-      for (const opt of options) {
-        const match = opt.match(/Merge (\S+) into (\S+)/);
-        if (match) out.add(pairKey(match[1], match[2]));
-      }
+      const ctx = JSON.parse(row.context_json) as { otherAccountId?: string };
+      if (ctx.otherAccountId) out.add(pairKey(row.account_id, ctx.otherAccountId));
     } catch {
-      // skip malformed options_json
+      // skip malformed context_json
     }
   }
   return out;

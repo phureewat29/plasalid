@@ -25,22 +25,14 @@ const TYPE_RANK: Record<AccountType, number> = {
   equity: 4,
 };
 
-function compactMeta(a: AccountBalance): string[] {
-  const meta: string[] = [];
-  if (a.bank_name) meta.push(a.bank_name);
-  if (a.due_day) meta.push(`due ${a.due_day}`);
-  if (a.statement_day) meta.push(`stmt ${a.statement_day}`);
-  if (a.points_balance) meta.push(`${a.points_balance.toLocaleString()} pts`);
-  if (a.currency && a.currency !== "THB") meta.push(a.currency);
-  // Subtype only when there's no other signal yet (e.g. "cash", "salary").
-  if (meta.length === 0 && a.subtype) meta.push(a.subtype);
-  return meta;
+export interface ShowAccountsOptions {
+  noInteractive?: boolean;
 }
 
-export function showAccounts(): void {
+export async function showAccounts(opts: ShowAccountsOptions = {}): Promise<void> {
   const db = getDb();
-  const raw = getAccountBalances(db);
-  if (raw.length === 0) {
+  const accounts = getAccountBalances(db);
+  if (accounts.length === 0) {
     console.log(
       chalk.yellow(
         "No accounts yet. Drop your bank/credit card statements into ~/.plasalid/data/ and run `plasalid scan`.",
@@ -49,6 +41,34 @@ export function showAccounts(): void {
     return;
   }
 
+  const interactive =
+    !opts.noInteractive && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
+
+  if (interactive) {
+    const [
+      { runBrowser },
+      { AccountsBrowser },
+      { createElement },
+      { listPostings },
+    ] = await Promise.all([
+      import("../ink/runBrowser.js"),
+      import("../ink/AccountsBrowser.js"),
+      import("react"),
+      import("../../db/queries/transactions.js"),
+    ]);
+    const recentTransactionsByAccount = new Map<string, ReturnType<typeof listPostings>>();
+    for (const a of accounts) {
+      const rows = listPostings(db, { account_id: a.id, limit: 10 });
+      if (rows.length > 0) recentTransactionsByAccount.set(a.id, rows);
+    }
+    await runBrowser(createElement(AccountsBrowser, { accounts, recentTransactionsByAccount }));
+    return;
+  }
+
+  printAccountsPlain(accounts);
+}
+
+function printAccountsPlain(raw: AccountBalance[]): void {
   const byId = new Map(raw.map((a) => [a.id, a]));
   const depthCache = new Map<string, number>();
   const depthOf = (id: string): number => {
@@ -107,4 +127,15 @@ export function showAccounts(): void {
       chalk.dim("   ·   ") +
       chalk.bold(`Net worth ${formatSignedAmount(netWorth)}`),
   );
+}
+
+function compactMeta(a: AccountBalance): string[] {
+  const meta: string[] = [];
+  if (a.bank_name) meta.push(a.bank_name);
+  if (a.due_day) meta.push(`due ${a.due_day}`);
+  if (a.statement_day) meta.push(`stmt ${a.statement_day}`);
+  if (a.points_balance) meta.push(`${a.points_balance.toLocaleString()} pts`);
+  if (a.currency && a.currency !== "THB") meta.push(a.currency);
+  if (meta.length === 0 && a.subtype) meta.push(a.subtype);
+  return meta;
 }

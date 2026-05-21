@@ -67,6 +67,9 @@ async function runAgent({
   };
   const stepLimit = maxToolSteps ?? MAX_TOOL_STEPS;
 
+  const startTime = Date.now();
+  let toolCount = 0;
+
   throwIfAborted();
   let response = await provider.sendMessage({
     model: config.model,
@@ -77,9 +80,6 @@ async function runAgent({
     thinking: useThinking ? { type: "enabled", budget_tokens: config.thinkingBudget } : undefined,
     signal,
   });
-
-  const startTime = Date.now();
-  let toolCount = 0;
 
   while (response.stopReason === "tool_use" && toolCount < stepLimit) {
     throwIfAborted();
@@ -94,7 +94,8 @@ async function runAgent({
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
-          content: redact(result),
+          content: redact(result.content),
+          ...(result.isError ? { is_error: true } : {}),
         });
       }
     }
@@ -236,10 +237,10 @@ export async function runRecordAgent(opts: {
 }
 
 /**
- * Resolve-time agent loop. The pipeline calls this once per open unknown with
- * that unknown's id/prompt/options in the initial messages. The agent surfaces
- * the question, applies the user's chosen answer via mutation tools, and
- * finishes with mark_resolve_done.
+ * Resolve-time agent loop. The pipeline hands every open unknown in the
+ * initial message and drives the loop until `countOpenUnknowns()` reaches 0.
+ * Each invocation should close as many rows as possible (via ask_user /
+ * close_unknown); the pipeline re-invokes if any remain.
  */
 export async function runResolveAgent(opts: {
   db: Database.Database;
@@ -258,7 +259,7 @@ export async function runResolveAgent(opts: {
     agentCtx: opts.agentCtx,
     onProgress: opts.onProgress,
     signal: opts.signal,
-    maxToolSteps: 30,
+    maxToolSteps: 60,
   });
   return text;
 }

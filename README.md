@@ -32,8 +32,6 @@ The data ledger also serves as a harness, open to any AI agent that connects to 
 
 ## Features
 
-![](https://github.com/phureewat29/plasalid/.github/plasalid-demo.gif)
-
 ### Unified ledger from any financial documents
 
 - **Drop PDFs, get a complete ledger.** Bank statements, credit-card statements, payslips, brokerage statements, and etc. — Plasalid uses AI to parse every transaction, balance, and holding into double-entry ledger.
@@ -89,11 +87,11 @@ plasalid                            # Interactive chat with your data
 plasalid setup                      # Configure API key, encryption, and data directory
 plasalid data                       # Open the Plasalid data folder in your file explorer
 plasalid accounts                   # Show the chart of accounts with balances
-plasalid status                     # Net worth and this-month income/expense totals
 plasalid transactions               # List transactions and their postings (filter by --account, --from, --to, --query, --limit)
-plasalid record <utterance>         # Add a manual transaction, account, balance, or merchant from a plain-language line
+plasalid status                     # Net worth and this-month income/expense totals
+plasalid record [utterance]         # Add a manual transaction, account, balance, or merchant from a plain-language line
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
-plasalid revert <regex>             # Delete scanned files matching <regex> and their transactions
+plasalid revert [regex]             # Delete scanned files matching <regex> and their transactions
 plasalid resolve                    # Walk every open unknown and apply your decision (--account, --from, --to, --kind also accepted)
 ```
 

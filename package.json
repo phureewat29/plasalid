@@ -1,11 +1,11 @@
 {
   "name": "plasalid",
-  "version": "0.6.10",
+  "version": "0.7.0",
   "description": "Plasalid — The Harness Layer for Personal Finance",
   "keywords": [
     "finance",
     "harness",
-    "personal-finance",
+    "personal",
     "aggregator",
     "parser",
     "cli",

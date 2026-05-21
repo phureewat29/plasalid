@@ -11,6 +11,8 @@ export interface RecordUnknownInput extends UnknownTarget {
   kind?: string | null;
   prompt: string;
   options?: string[];
+  /** Kind-specific structured context (e.g. partner ids for similar_accounts). */
+  context?: Record<string, unknown> | null;
 }
 
 export interface OpenUnknownRow {
@@ -21,6 +23,7 @@ export interface OpenUnknownRow {
   kind: string | null;
   prompt: string;
   options_json: string | null;
+  context_json: string | null;
   created_at: string;
 }
 
@@ -33,7 +36,7 @@ export interface OpenUnknownRow {
 export function recordUnknown(db: Database.Database, input: RecordUnknownInput): string {
   const id = `cn:${randomUUID()}`;
   db.prepare(
-    `INSERT INTO unknowns (id, file_id, transaction_id, account_id, kind, prompt, options_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO unknowns (id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.file_id,
@@ -42,6 +45,7 @@ export function recordUnknown(db: Database.Database, input: RecordUnknownInput):
     input.kind ?? null,
     input.prompt,
     input.options ? JSON.stringify(input.options) : null,
+    input.context ? JSON.stringify(input.context) : null,
   );
   if (input.transaction_id) {
     db.prepare(`UPDATE transactions SET has_unknown = 1 WHERE id = ?`).run(input.transaction_id);
@@ -80,7 +84,7 @@ export function getUnknownTarget(db: Database.Database, id: string): UnknownTarg
  * Clear `has_unknown` on the named transaction / account if no other open
  * unknowns still reference it. Safe to call after any resolution; idempotent.
  */
-export function maybeClearHasUnknownFlags(db: Database.Database, target: UnknownTarget): void {
+function maybeClearHasUnknownFlags(db: Database.Database, target: UnknownTarget): void {
   if (target.transaction_id) {
     const open = db
       .prepare(`SELECT 1 FROM unknowns WHERE transaction_id = ? AND resolved_at IS NULL LIMIT 1`)
@@ -118,7 +122,7 @@ export function countOpenUnknowns(db: Database.Database, scope: CountOpenUnknown
 export function listOpenUnknowns(db: Database.Database, limit = 50): OpenUnknownRow[] {
   const capped = Math.min(Math.max(limit, 1), 200);
   return db.prepare(
-    `SELECT id, file_id, transaction_id, account_id, kind, prompt, options_json, created_at
+    `SELECT id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, created_at
      FROM unknowns
      WHERE resolved_at IS NULL
      ORDER BY created_at ASC
@@ -145,7 +149,7 @@ export function listOpenUnknownsByKind(
   const placeholders = kinds.map(() => "?").join(",");
   const cases = kinds.map((_, i) => `WHEN ? THEN ${i}`).join(" ");
   return db.prepare(
-    `SELECT id, file_id, transaction_id, account_id, kind, prompt, options_json, created_at
+    `SELECT id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, created_at
      FROM unknowns
      WHERE resolved_at IS NULL AND kind IN (${placeholders})
      ORDER BY CASE kind ${cases} ELSE ${kinds.length} END, created_at ASC

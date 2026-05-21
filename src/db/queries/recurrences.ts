@@ -198,3 +198,32 @@ function addDays(dateIso: string, days: number): string {
   const next = new Date(t + days * 86_400_000);
   return next.toISOString().slice(0, 10);
 }
+
+export interface RecurringSummary {
+  count: number;
+  /** Sum of every recurrence's amount_typical normalized to a monthly cadence.
+   *  Excludes rows whose amount is null (system can't estimate without one). */
+  monthly_estimate: number;
+}
+
+const MONTHLY_MULTIPLIER: Record<RecurrenceFrequency, number> = {
+  weekly:   52 / 12,
+  biweekly: 26 / 12,
+  monthly:  1,
+  annually: 1 / 12,
+};
+
+export function getRecurringSummary(db: Database.Database): RecurringSummary {
+  const rows = db
+    .prepare(`SELECT frequency, amount_typical FROM recurrences`)
+    .all() as { frequency: RecurrenceFrequency; amount_typical: number | null }[];
+
+  let monthly = 0;
+  for (const r of rows) {
+    if (r.amount_typical == null) continue;
+    const mult = MONTHLY_MULTIPLIER[r.frequency];
+    if (mult == null) continue;
+    monthly += r.amount_typical * mult;
+  }
+  return { count: rows.length, monthly_estimate: Math.round(monthly * 100) / 100 };
+}

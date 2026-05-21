@@ -35,27 +35,38 @@ export function getToolDefinitions(profile: ToolProfile): ToolDefinition[] {
   return PROFILES[profile].flatMap(m => m.DEFS);
 }
 
+export interface ExecuteToolResult {
+  content: string;
+  isError: boolean;
+}
+
+const MODULES = [
+  commonTools,
+  readTools,
+  accountIngestTools,
+  scanUnknownTools,
+  resolveIngestTools,
+  scanTools,
+  resolveTools,
+  recordTools,
+  merchantTools,
+];
+
 export async function executeTool(
   db: Database.Database,
   name: string,
   input: any,
   ctx?: AgentExecutionContext,
-): Promise<string> {
-  for (const mod of [
-    commonTools,
-    readTools,
-    accountIngestTools,
-    scanUnknownTools,
-    resolveIngestTools,
-    scanTools,
-    resolveTools,
-    recordTools,
-    merchantTools,
-  ]) {
-    const result = await mod.execute(db, name, input, ctx);
-    if (result !== undefined) return result;
+): Promise<ExecuteToolResult> {
+  try {
+    for (const mod of MODULES) {
+      const result = await mod.execute(db, name, input, ctx);
+      if (result !== undefined) return { content: result, isError: false };
+    }
+    return { content: `Unknown tool: ${name}`, isError: true };
+  } catch (err: any) {
+    return { content: err?.message ?? String(err), isError: true };
   }
-  return `Unknown tool: ${name}`;
 }
 
 /** Human-readable labels shown in the spinner during tool calls. */

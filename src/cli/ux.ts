@@ -26,30 +26,56 @@ export interface SpinnerLike {
 
 /**
  * One blank line above every spinner so output doesn't crowd whatever printed
- * before. TTY uses ora; non-TTY (cron, piped output) prints the leading text
- * once and turns succeed/fail/info into prefixed plain lines.
+ * before. TTY uses ora; non-TTY (cron, piped output) prints lines as it goes.
  */
 export function statusSpinner(text: string): SpinnerLike {
   console.log("");
-  if (process.stdout.isTTY) {
-    const spinner = ora({ text }).start();
-    return {
-      get text() { return spinner.text; },
-      set text(t: string) { spinner.text = t; },
-      succeed: (t) => { spinner.succeed(t); },
-      fail: (t) => { spinner.fail(t); },
-      info: (t) => { spinner.info(t); },
-      stop: () => { spinner.stop(); },
-      pause: () => { spinner.stop(); },
-      resume: () => { spinner.start(); },
-    };
-  }
-  console.log(text);
+  return process.stdout.isTTY ? oraSpinner(text) : plainSpinner(text);
+}
+
+function oraSpinner(text: string): SpinnerLike {
+  const s = ora({ text }).start();
   return {
-    text,
-    succeed: (t) => { if (t) console.log(`✓ ${t}`); },
-    fail: (t) => { if (t) console.log(`✗ ${t}`); },
-    info: (t) => { if (t) console.log(`• ${t}`); },
+    get text() {
+      return s.text;
+    },
+    set text(t: string) {
+      s.text = t;
+    },
+    succeed: (t) => {
+      s.succeed(t);
+    },
+    fail: (t) => {
+      s.fail(t);
+    },
+    info: (t) => {
+      s.info(t);
+    },
+    stop: () => {
+      s.stop();
+    },
+    pause: () => {
+      s.stop();
+    },
+    resume: () => {
+      s.start();
+    },
+  };
+}
+
+function plainSpinner(initial: string): SpinnerLike {
+  console.log(initial);
+  return {
+    text: initial,
+    succeed: (t) => {
+      if (t) console.log(`✓ ${t}`);
+    },
+    fail: (t) => {
+      if (t) console.log(`✗ ${t}`);
+    },
+    info: (t) => {
+      if (t) console.log(`• ${t}`);
+    },
     stop: () => {},
     pause: () => {},
     resume: () => {},
@@ -64,50 +90,19 @@ export function statusSpinner(text: string): SpinnerLike {
  */
 export function makePromptUser(
   spinner: SpinnerLike,
-): (prompt: string, options?: string[], facts?: PromptUserFacts) => Promise<string> {
-  const OTHER = "__plasalid_other__";
+): (
+  prompt: string,
+  options?: string[],
+  facts?: PromptUserFacts,
+) => Promise<string> {
   return async (prompt, options, facts) => {
     spinner.pause();
     console.log("");
-    const factsLine = facts ? formatFacts(facts) : null;
-    if (factsLine) console.log(factsLine);
+    printFacts(facts);
     try {
-      if (options && options.length > 0) {
-        const choices = [
-          // A blank-ish separator gives breathing room between the question
-          // line and the first choice — inquirer renders separators inline,
-          // and rejects truly-empty strings, so we use a single space.
-          new inquirer.Separator(" "),
-          ...options.map(o => ({ name: o, value: o })),
-          new inquirer.Separator(),
-          { name: "Type a different answer…", value: OTHER },
-        ];
-        const { choice } = await inquirer.prompt([
-          {
-            type: "list",
-            name: "choice",
-            message: prompt,
-            choices,
-            // Stop the cursor at the top/bottom instead of wrapping forever —
-            // the wrap-around default makes the list feel infinite.
-            loop: false,
-            // Show every choice without paginating. Floor of 10 keeps the
-            // prompt height predictable for small option sets.
-            pageSize: Math.max(choices.length, 10),
-          },
-        ]);
-        if (choice === OTHER) {
-          const { freeform } = await inquirer.prompt([
-            { type: "input", name: "freeform", message: "Your answer:" },
-          ]);
-          return String(freeform).trim();
-        }
-        return String(choice);
-      }
-      const { answer } = await inquirer.prompt([
-        { type: "input", name: "answer", message: prompt },
-      ]);
-      return String(answer);
+      return options?.length
+        ? await askList(prompt, options)
+        : await askInput(prompt);
     } finally {
       console.log("");
       spinner.resume();
@@ -115,11 +110,47 @@ export function makePromptUser(
   };
 }
 
+function printFacts(facts?: PromptUserFacts): void {
+  const line = facts ? formatFacts(facts) : null;
+  if (line) console.log(line);
+}
+
+const OTHER_SENTINEL = "__plasalid_other__";
+
+async function askList(prompt: string, options: string[]): Promise<string> {
+  const choices = [
+    new inquirer.Separator(" "),
+    ...options.map((o) => ({ name: o, value: o })),
+    new inquirer.Separator(),
+    { name: "Type a different answer…", value: OTHER_SENTINEL },
+  ];
+  const { choice } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "choice",
+      message: prompt,
+      choices,
+      loop: false,
+      pageSize: Math.max(choices.length, 10),
+    },
+  ]);
+  return choice === OTHER_SENTINEL
+    ? await askInput("Your answer:")
+    : String(choice);
+}
+
+async function askInput(prompt: string): Promise<string> {
+  const { answer } = await inquirer.prompt([
+    { type: "input", name: "answer", message: prompt },
+  ]);
+  return String(answer).trim();
+}
+
 /**
  * Standard agent-progress → spinner-text bridge.
- * - `phase: "tool"` maps the tool name through `TOOL_LABELS`.
- * - `phase: "responding"` picks a stable thinking phrase per session and shows
- *   the elapsed time + tool count.
+ * - `tool` maps the tool name through `TOOL_LABELS`.
+ * - `responding` picks a stable thinking phrase per session and shows the
+ *   elapsed time + tool count.
  * Optional `subject` (e.g. a file name) is appended in parentheses.
  */
 export function makeAgentOnProgress(
@@ -148,8 +179,8 @@ export function makeAgentOnProgress(
  */
 function formatFacts(f: PromptUserFacts): string | null {
   const parts: string[] = [];
-  if (f.amount)   parts.push(chalk.yellow(f.amount));
-  if (f.date)     parts.push(chalk.cyan(f.date));
+  if (f.amount) parts.push(chalk.yellow(f.amount));
+  if (f.date) parts.push(chalk.cyan(f.date));
   if (f.merchant) parts.push(chalk.green(f.merchant));
   for (const a of f.accounts ?? []) parts.push(chalk.magenta(a));
   return parts.length ? parts.join(chalk.dim(" · ")) : null;

@@ -3,12 +3,37 @@
  * AI is composing a response (no specific tool to label). Kept in one place so
  * both surfaces stay in sync.
  */
-export const THINKING_PHRASES = [
+const THINKING_PHRASES = [
   "Thinking...",
-  "Looking through your transactions...",
-  "Checking your accounts...",
+  "Working through the numbers...",
+  "Doing the math...",
+  "Running the numbers...",
   "Crunching the numbers...",
-  "Pulling up your data...",
+  "Connecting the dots...",
+  "Following the money...",
+  "Reading between the lines...",
+  "Putting the pieces together...",
+  "Lining things up...",
+  "Sifting through the details...",
+  "Weighing it up...",
+  "Tracing the trail...",
+  "Cross-checking...",
+  "Adding it up...",
+  "Sorting through it...",
+  "Considering the angles...",
+  "Taking a closer look...",
+  "Squaring things up...",
+  "Tallying things up...",
+  "Squinting at the numbers...",
+  "Doing math, the slow kind...",
+  "Computing... probably correctly...",
+  "Pondering quietly...",
+  "Joining the dots...",
+  "Making sense of it...",
+  "Sharpening the pencil...",
+  "Catching up on the details...",
+  "Comparing notes...",
+  "Pulling the threads together...",
 ];
 
 export function pickThinking(): string {

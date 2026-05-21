@@ -1,6 +1,6 @@
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
-export type InstitutionKind =
+type InstitutionKind =
   | "bank"
   | "card_issuer"
   | "wallet"
@@ -12,7 +12,7 @@ export type InstitutionKind =
   | "telco"
   | "utility";
 
-export interface ThaiInstitution {
+interface ThaiInstitution {
   code: string;
   label: string;
   kind: InstitutionKind;
@@ -20,7 +20,7 @@ export interface ThaiInstitution {
   notes?: string;
 }
 
-export const THAI_BANKS: ThaiInstitution[] = [
+const THAI_BANKS: ThaiInstitution[] = [
   { code: "KBANK", label: "Kasikornbank", kind: "bank" },
   { code: "SCB", label: "Siam Commercial Bank", kind: "bank" },
   { code: "BBL", label: "Bangkok Bank", kind: "bank" },
@@ -39,7 +39,7 @@ export const THAI_BANKS: ThaiInstitution[] = [
   { code: "BAAC", label: "Bank for Agriculture and Agricultural Cooperatives", kind: "bank", notes: "State-owned, rural finance." },
 ];
 
-export const THAI_CARD_ISSUERS: ThaiInstitution[] = [
+const THAI_CARD_ISSUERS: ThaiInstitution[] = [
   { code: "KTC", label: "Krungthai Card", kind: "card_issuer", notes: "Listed subsidiary of KTB." },
   { code: "AEON", label: "AEON Thana Sinsap", kind: "card_issuer" },
   { code: "FIRSTCHOICE", label: "Krungsri First Choice", kind: "card_issuer" },
@@ -50,7 +50,7 @@ export const THAI_CARD_ISSUERS: ThaiInstitution[] = [
   { code: "UOB-TH", label: "UOB Thailand (Cards)", kind: "card_issuer", notes: "Same legal entity as the bank UOB-TH; now issues both its own card line (UOB Yolo, UOB Premier) and the migrated Citi consumer cards." },
 ];
 
-export const THAI_WALLETS: ThaiInstitution[] = [
+const THAI_WALLETS: ThaiInstitution[] = [
   { code: "TRUEMONEY", label: "TrueMoney Wallet", kind: "wallet" },
   { code: "LINEPAY", label: "Rabbit LINE Pay", kind: "wallet" },
   { code: "SHOPEEPAY", label: "ShopeePay", kind: "wallet" },
@@ -60,11 +60,11 @@ export const THAI_WALLETS: ThaiInstitution[] = [
   { code: "PAOTANG", label: "Paotang", kind: "wallet", notes: "Krungthai-operated; government-benefits and tax e-wallet." },
 ];
 
-export const THAI_PAYMENT_RAILS: ThaiInstitution[] = [
+const THAI_PAYMENT_RAILS: ThaiInstitution[] = [
   { code: "PROMPTPAY", label: "PromptPay", kind: "payment_rail", notes: "National 24/7 interbank rail; appears on transfer slips, not an issuer." },
 ];
 
-export const THAI_BROKERS: ThaiInstitution[] = [
+const THAI_BROKERS: ThaiInstitution[] = [
   { code: "INNOVESTX", label: "InnovestX Securities", kind: "broker", notes: "Former SCBS; SCBX subsidiary." },
   { code: "BLS", label: "Bualuang Securities", kind: "broker", notes: "BBL subsidiary." },
   { code: "KS", label: "Kasikorn Securities", kind: "broker", notes: "KBANK subsidiary." },
@@ -81,7 +81,7 @@ export const THAI_BROKERS: ThaiInstitution[] = [
   { code: "KTBST", label: "Krungthai Xspring Securities", kind: "broker", notes: "Formerly KTBST; KTB-affiliated." },
 ];
 
-export const THAI_CRYPTO_EXCHANGES: ThaiInstitution[] = [
+const THAI_CRYPTO_EXCHANGES: ThaiInstitution[] = [
   { code: "BITKUB", label: "Bitkub Exchange", kind: "crypto_exchange", notes: "SEC-licensed; dominant market share." },
   { code: "UPBIT-TH", label: "Upbit Thailand", kind: "crypto_exchange", notes: "SEC-licensed; subsidiary of South Korean Upbit." },
   { code: "ORBIX", label: "Orbix Trade", kind: "crypto_exchange", notes: "Former Satang Pro; rebranded under KBank ownership." },
@@ -93,7 +93,7 @@ export const THAI_CRYPTO_EXCHANGES: ThaiInstitution[] = [
   { code: "ZIPMEX", label: "Zipmex", kind: "crypto_exchange", notes: "Defunct since Nov 2023; statements only appear in historical files." },
 ];
 
-export const THAI_INSURERS: ThaiInstitution[] = [
+const THAI_INSURERS: ThaiInstitution[] = [
   // Life
   { code: "AIA-TH", label: "AIA Thailand", kind: "insurer", notes: "Life; market leader." },
   { code: "MUANG-THAI-LIFE", label: "Muang Thai Life Insurance", kind: "insurer", notes: "Life." },
@@ -112,7 +112,7 @@ export const THAI_INSURERS: ThaiInstitution[] = [
   { code: "TOKIO-MARINE", label: "Tokio Marine (Thailand)", kind: "insurer", notes: "Non-life." },
 ];
 
-export const THAI_GOV: ThaiInstitution[] = [
+const THAI_GOV: ThaiInstitution[] = [
   { code: "REVDEPT", label: "Revenue Department (กรมสรรพากร)", kind: "gov", notes: "Income tax, VAT, excise." },
   { code: "SSO", label: "Social Security Office (สำนักงานประกันสังคม)", kind: "gov", notes: "Employee + self-employed social security contributions." },
   { code: "BOT", label: "Bank of Thailand", kind: "gov", notes: "Central bank; rarely on consumer statements outside of regulatory letters." },
@@ -121,7 +121,7 @@ export const THAI_GOV: ThaiInstitution[] = [
   { code: "CUSTOMS", label: "Customs Department (กรมศุลกากร)", kind: "gov", notes: "Import/export duties." },
 ];
 
-export const THAI_UTILITIES: ThaiInstitution[] = [
+const THAI_UTILITIES: ThaiInstitution[] = [
   { code: "MEA", label: "Metropolitan Electricity Authority (กฟน.)", kind: "utility", notes: "Electricity for Bangkok, Nonthaburi, Samut Prakan." },
   { code: "PEA", label: "Provincial Electricity Authority (กฟภ.)", kind: "utility", notes: "Electricity for the rest of Thailand outside MEA's area." },
   { code: "MWA", label: "Metropolitan Waterworks Authority (กปน.)", kind: "utility", notes: "Water for Bangkok, Nonthaburi, Samut Prakan." },
@@ -129,7 +129,7 @@ export const THAI_UTILITIES: ThaiInstitution[] = [
   { code: "EGAT", label: "Electricity Generating Authority of Thailand (กฟผ.)", kind: "utility", notes: "Power generation; rarely appears on consumer bills directly." },
 ];
 
-export const THAI_TELCOS: ThaiInstitution[] = [
+const THAI_TELCOS: ThaiInstitution[] = [
   { code: "AIS", label: "Advanced Info Service (AIS)", kind: "telco" },
   { code: "TRUE-CORP", label: "True Corporation", kind: "telco", notes: "Merged entity of True + dtac since March 2023." },
   { code: "TRUEMOVE", label: "TrueMove H", kind: "telco", notes: "Brand retained under TRUE-CORP per NBTC ruling." },
@@ -137,7 +137,7 @@ export const THAI_TELCOS: ThaiInstitution[] = [
   { code: "NT", label: "National Telecom (NT)", kind: "telco", notes: "Former TOT; state-owned, minimal consumer presence." },
 ];
 
-export const ALL_THAI_INSTITUTIONS: ThaiInstitution[] = [
+const ALL_THAI_INSTITUTIONS: ThaiInstitution[] = [
   ...THAI_BANKS,
   ...THAI_CARD_ISSUERS,
   ...THAI_WALLETS,
@@ -158,7 +158,7 @@ export const ACCOUNT_TYPE_DESCRIPTIONS: Record<AccountType, string> = {
   equity: "Owner's equity / opening balance equity (for ledger adjustments).",
 };
 
-export const SUGGESTED_ASSET_SUBTYPES = [
+const SUGGESTED_ASSET_SUBTYPES = [
   "bank",
   "cash",
   "wallet",
@@ -168,7 +168,7 @@ export const SUGGESTED_ASSET_SUBTYPES = [
   "receivable",
 ];
 
-export const SUGGESTED_LIABILITY_SUBTYPES = [
+const SUGGESTED_LIABILITY_SUBTYPES = [
   "credit_card",
   "home_loan",
   "auto_loan",
@@ -178,7 +178,7 @@ export const SUGGESTED_LIABILITY_SUBTYPES = [
   "deferred_income",
 ];
 
-export const SUGGESTED_EXPENSE_SUBTYPES = [
+const SUGGESTED_EXPENSE_SUBTYPES = [
   "food",
   "transport",
   "utilities",
@@ -196,7 +196,7 @@ export const SUGGESTED_EXPENSE_SUBTYPES = [
   "other",
 ];
 
-export const SUGGESTED_INCOME_SUBTYPES = [
+const SUGGESTED_INCOME_SUBTYPES = [
   "salary",
   "bonus",
   "freelance",

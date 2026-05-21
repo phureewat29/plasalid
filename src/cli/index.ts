@@ -55,11 +55,12 @@ program
 
 program
   .command("accounts")
-  .description("Show the chart of accounts with balances")
-  .action(async () => {
+  .description("Browse the chart of accounts with balances (interactive TTY) or print them (piped)")
+  .option("--no-interactive", "Force plain-print output instead of the Ink browser")
+  .action(async (opts) => {
     ensureConfigured();
     const { showAccounts } = await import("./commands/accounts.js");
-    showAccounts();
+    await showAccounts({ noInteractive: opts.interactive === false });
   });
 
 program
@@ -73,21 +74,24 @@ program
 
 program
   .command("transactions")
-  .description("List transactions and their postings")
+  .description("Browse transactions (interactive TTY) or print them (piped)")
   .option("-a, --account <id>", "Filter by account id")
   .option("--from <date>", "From date YYYY-MM-DD")
   .option("--to <date>", "To date YYYY-MM-DD")
   .option("-q, --query <text>", "Free-text search on description / memo")
-  .option("-n, --limit <number>", "Max results", "100")
+  .option("-n, --limit <number>", "Max results (default 1000 interactive, 100 piped)")
+  .option("--no-interactive", "Force plain-print output instead of the Ink browser")
   .action(async (opts) => {
     ensureConfigured();
     const { showTransactions } = await import("./commands/transactions.js");
-    showTransactions({
+    await showTransactions({
       account: opts.account,
       from: opts.from,
       to: opts.to,
       query: opts.query,
-      limit: Number(opts.limit),
+      limit: opts.limit != null ? Number(opts.limit) : undefined,
+      // commander inverts --no-foo to `opts.foo = false`
+      noInteractive: opts.interactive === false,
     });
   });
 
@@ -217,11 +221,11 @@ program.configureHelp({
         name: "data",
         desc: "Open the data folder in your OS file explorer (alias: open)",
       },
-      { name: "accounts", desc: "Show the chart of accounts with balances" },
-      { name: "status", desc: "Show net worth and this-month totals" },
+      { name: "accounts", desc: "Browse the chart of accounts (interactive TTY) or list them (piped)" },
+      { name: "status", desc: "Show financial and system status (net worth, recurring, unknowns)" },
       {
         name: "transactions",
-        desc: "List transactions and their postings (filter by account/date/text)",
+        desc: "Browse transactions (interactive TTY) or list them (piped/--no-interactive)",
       },
       {
         name: "record",

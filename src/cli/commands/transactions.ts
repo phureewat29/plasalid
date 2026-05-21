@@ -1,20 +1,19 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
-import { listPostings, type PostingRow } from "../../db/queries/transactions.js";
+import {
+  groupByTransaction,
+  listPostings,
+  type PostingRow,
+  type TransactionGroup,
+} from "../../db/queries/transactions.js";
 import { visibleLength } from "../format.js";
 import { formatAmount } from "../../currency.js";
-
-function truncateMiddle(s: string, max: number): string {
-  if (s.length <= max) return s;
-  if (max < 5) return s.slice(0, max);
-  const keep = max - 1;
-  const head = Math.ceil(keep / 2);
-  const tail = Math.floor(keep / 2);
-  return `${s.slice(0, head)}…${s.slice(s.length - tail)}`;
-}
+import { truncateMiddle } from "../helper.js";
 
 const ACCOUNT_CAP = 32;
 const MEMO_CAP = 40;
+const INTERACTIVE_LIMIT = 1000;
+const RECURRING_MARKER = "[R]";
 
 export interface ShowTransactionsOptions {
   account?: string;
@@ -22,49 +21,52 @@ export interface ShowTransactionsOptions {
   to?: string;
   query?: string;
   limit?: number;
+  /** Force the plain-print path even when stdout is a TTY. */
+  noInteractive?: boolean;
 }
 
-interface TransactionGroup {
-  transaction_id: string;
-  date: string;
-  description: string;
-  merchant: string | null;
-  postings: PostingRow[];
-}
-
-function groupByTransaction(postings: PostingRow[]): TransactionGroup[] {
-  const groups: TransactionGroup[] = [];
-  let current: TransactionGroup | null = null;
-  for (const p of postings) {
-    if (!current || current.transaction_id !== p.transaction_id) {
-      current = {
-        transaction_id: p.transaction_id,
-        date: p.transaction_date ?? "",
-        description: p.transaction_description ?? "",
-        merchant: p.merchant_name ?? null,
-        postings: [],
-      };
-      groups.push(current);
-    }
-    current.postings.push(p);
-  }
-  return groups;
-}
-
-export function showTransactions(opts: ShowTransactionsOptions): void {
+export async function showTransactions(opts: ShowTransactionsOptions): Promise<void> {
   const db = getDb();
+  const interactive = !opts.noInteractive && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
+  const requestedLimit = opts.limit ?? (interactive ? INTERACTIVE_LIMIT : 100);
+
   const postings = listPostings(db, {
     account_id: opts.account,
     from: opts.from,
     to: opts.to,
     q: opts.query,
-    limit: opts.limit ?? 100,
+    limit: requestedLimit,
   });
+
   if (postings.length === 0) {
     console.log(chalk.yellow("No postings match those filters."));
     return;
   }
 
+  if (interactive) {
+    const filterSummary = buildFilterSummary(opts);
+    const [{ runBrowser }, { TransactionsBrowser }, { createElement }] = await Promise.all([
+      import("../ink/runBrowser.js"),
+      import("../ink/TransactionsBrowser.js"),
+      import("react"),
+    ]);
+    await runBrowser(createElement(TransactionsBrowser, { postings, filterSummary }));
+    return;
+  }
+
+  printTransactionsPlain(postings);
+}
+
+function buildFilterSummary(opts: ShowTransactionsOptions): string {
+  const parts: string[] = [];
+  if (opts.account) parts.push(`account=${opts.account}`);
+  if (opts.from)    parts.push(`from=${opts.from}`);
+  if (opts.to)      parts.push(`to=${opts.to}`);
+  if (opts.query)   parts.push(`query="${opts.query}"`);
+  return parts.join(" · ");
+}
+
+function printTransactionsPlain(postings: PostingRow[]): void {
   const truncatedAccount = new Map<string, string>();
   const truncatedMemo = new Map<string, string>();
   for (const p of postings) {
@@ -80,24 +82,25 @@ export function showTransactions(opts: ShowTransactionsOptions): void {
     ...postings.map((p) => {
       const side = p.debit > 0 ? "DR" : "CR";
       const amt = p.debit > 0 ? p.debit : p.credit;
-      return `${side} ${formatAmount(amt)}`.length;
+      return `${side} ${formatAmount(amt, p.currency)}`.length;
     }),
   );
 
   const cols = process.stdout.columns || 100;
   const descMax = Math.max(20, cols - 14);
 
-  const groups = groupByTransaction(postings);
+  const groups: TransactionGroup[] = groupByTransaction(postings);
   for (const g of groups) {
     const desc = truncateMiddle(g.description, descMax);
     const merchant = g.merchant ? chalk.green(`  · ${g.merchant}`) : "";
-    console.log(`${chalk.dim(g.date)}  ${chalk.bold(desc)}${merchant}`);
+    const recurring = g.recurrence_id ? chalk.dim(`  ${RECURRING_MARKER}`) : "";
+    console.log(`${chalk.dim(g.date)}  ${chalk.bold(desc)}${merchant}${recurring}`);
     for (const p of g.postings) {
       const acct = truncatedAccount.get(p.id)!;
       const acctPadded = acct + " ".repeat(accountWidth - acct.length);
       const side = p.debit > 0 ? "DR" : "CR";
       const amt = p.debit > 0 ? p.debit : p.credit;
-      const rawAmount = `${side} ${formatAmount(amt)}`;
+      const rawAmount = `${side} ${formatAmount(amt, p.currency)}`;
       const colored = p.debit > 0 ? chalk.cyan(rawAmount) : chalk.magenta(rawAmount);
       const amountPadded =
         " ".repeat(amountWidth - visibleLength(colored)) + colored;

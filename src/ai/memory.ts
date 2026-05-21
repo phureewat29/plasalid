@@ -33,6 +33,11 @@ export function getMemories(db: Database.Database): Memory[] {
   ).all() as Memory[];
 }
 
+export function countMemories(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM memories`).get() as { n: number };
+  return row.n;
+}
+
 /**
  * Idempotent on (category, content): a verbatim repeat is a no-op. Semantic
  * dedup (different wording for the same rule) is the agent's job — the persona

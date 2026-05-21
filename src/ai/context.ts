@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "f
 import { dirname, resolve } from "path";
 import { getPlasalidDir } from "../config.js";
 
-export function getContextPath(): string {
+function getContextPath(): string {
   return resolve(getPlasalidDir(), "context.md");
 }
 
@@ -16,7 +16,7 @@ export function readContext(): string {
   }
 }
 
-export function writeContext(content: string): void {
+function writeContext(content: string): void {
   const p = getContextPath();
   const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

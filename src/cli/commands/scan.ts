@@ -18,8 +18,9 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
     }
   }
 
-  const useInk = !!process.stdout.isTTY;
-  const events = useInk ? await buildInkEvents(opts.parallel ?? 3) : buildPlainTextEvents();
+  const events = process.stdout.isTTY
+    ? await inkScanEvents(opts.parallel ?? 3)
+    : plainScanEvents();
 
   const summary = await runScan({
     regex: opts.regex,
@@ -41,62 +42,17 @@ function logDecryptProgress(
   console.log(`  ${marker} [${e.index + 1}/${e.total}] ${e.fileName} (${e.outcome})`);
 }
 
-/** Ink-based events (TTY mode) */
-
-async function buildInkEvents(parallel: number): Promise<ScanRunEvents> {
-  // Lazy-load ink + react so this module stays importable in non-TTY contexts
-  // (and so test environments without React don't choke on the JSX).
-  const { render } = await import("ink");
-  const { createElement } = await import("react");
-  const { ScanDashboard, ScanDashboardController } = await import("../ink/scan_dashboard.js");
-
-  const controller = new ScanDashboardController();
-  let inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
-  let mountedFiles = 0;
-
-  return {
-    decryptStart: (count) => {
-      if (count > 0) console.log(chalk.dim(`Decrypting ${count} file(s)...`));
-    },
-    decryptProgress: logDecryptProgress,
-    decryptDone: (e) => {
-      console.log(chalk.dim(`Decrypted ${e.decrypted}, skipped ${e.skipped}, failed ${e.failed}.`));
-      console.log("");
-      mountedFiles = e.decrypted;
-      if (e.decrypted > 0) {
-        inkInstance = render(
-          createElement(ScanDashboard, { controller, totalFiles: e.decrypted, parallel }),
-        );
-      }
-    },
-    scanStart: (e) => controller.publish({ type: "scan-start", fileName: e.fileName }),
-    scanProgress: (e) => controller.publish({ type: "scan-progress", fileName: e.fileName, step: e.step }),
-    scanEnd: (e) => controller.publish({
-      type: "scan-end",
-      fileName: e.fileName,
-      status: e.status,
-      transactions: e.transactions,
-      unknowns: e.unknowns,
-      error: e.error,
-    }),
-    committing: () => {
-      if (inkInstance) { inkInstance.unmount(); inkInstance = null; }
-      if (mountedFiles > 0) console.log(chalk.dim("Committing..."));
-    },
-    inspecting: (result) => {
-      if (mountedFiles > 0 && result.total > 0) {
-        console.log(chalk.dim(`Inspectors flagged ${result.total} unknown(s).`));
-      }
-    },
-  };
-}
-
-/** Plain-text progress (non-TTY or fallback) */
-
-function buildPlainTextEvents(): ScanRunEvents {
+/**
+ * Hooks every mode shares: the decrypt phase, commit notice, and inspector
+ * summary all render the same way in TTY and non-TTY runs. Each mode-specific
+ * factory below spreads this base and overrides the scan-phase hooks
+ * (`scanStart` / `scanProgress` / `scanEnd`) to render differently.
+ *
+ * Returns `Partial<ScanRunEvents>` because the scan-phase hooks are filled in
+ * by the caller — composition, not inheritance.
+ */
+function baseScanEvents(): Partial<ScanRunEvents> {
   let decryptTotal = 0;
-  // De-dupe scan-progress chatter: only print when the step text changes per file.
-  const lastStepByFile = new Map<string, string>();
   return {
     decryptStart: (count) => {
       decryptTotal = count;
@@ -106,8 +62,61 @@ function buildPlainTextEvents(): ScanRunEvents {
     decryptDone: (e) => {
       if (decryptTotal === 0) return;
       console.log(chalk.dim(`Decrypted ${e.decrypted}, skipped ${e.skipped}, failed ${e.failed}.`));
-      console.log("");
     },
+    committing: () => { console.log(chalk.dim("Committing...")); },
+    inspecting: (r) => {
+      if (r.total > 0) console.log(chalk.dim(`Inspectors flagged ${r.total} unknown(s).`));
+    },
+  };
+}
+
+/** TTY mode: mount the Ink dashboard during the scan phase. */
+async function inkScanEvents(parallel: number): Promise<ScanRunEvents> {
+  // Lazy-load ink + react so this module stays importable in non-TTY contexts.
+  const { render } = await import("ink");
+  const { createElement } = await import("react");
+  const { ScanDashboard, ScanDashboardController } = await import("../ink/scan_dashboard.js");
+
+  const controller = new ScanDashboardController();
+  let inkInstance: { unmount: () => void; waitUntilExit: () => Promise<void> } | null = null;
+  let mountedFiles = 0;
+
+  const base = baseScanEvents();
+  return {
+    ...base,
+    decryptDone: (e) => {
+      base.decryptDone?.(e);
+      console.log("");
+      mountedFiles = e.decrypted;
+      if (e.decrypted > 0) {
+        inkInstance = render(
+          createElement(ScanDashboard, { controller, totalFiles: e.decrypted, parallel }),
+        );
+      }
+    },
+    scanStart:    (e) => controller.publish({ type: "scan-start", fileName: e.fileName }),
+    scanProgress: (e) => controller.publish({ type: "scan-progress", fileName: e.fileName, step: e.step }),
+    scanEnd:      (e) => controller.publish({
+      type: "scan-end",
+      fileName: e.fileName,
+      status: e.status,
+      transactions: e.transactions,
+      unknowns: e.unknowns,
+      error: e.error,
+    }),
+    committing: () => {
+      if (inkInstance) { inkInstance.unmount(); inkInstance = null; }
+      if (mountedFiles > 0) base.committing?.();
+    },
+  } as ScanRunEvents;
+}
+
+/** Non-TTY mode: print one line per file as it progresses. */
+function plainScanEvents(): ScanRunEvents {
+  // De-dupe scan-progress chatter: only print when the step text changes per file.
+  const lastStepByFile = new Map<string, string>();
+  return {
+    ...baseScanEvents(),
     scanStart: (e) => {
       console.log(`${chalk.cyan("→")} ${e.fileName} ${chalk.dim("starting...")}`);
     },
@@ -118,25 +127,15 @@ function buildPlainTextEvents(): ScanRunEvents {
     },
     scanEnd: (e) => {
       lastStepByFile.delete(e.fileName);
-      if (e.status === "scanned") {
-        console.log(`${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.transactions} transactions, ${e.unknowns} unknowns)`)}`);
-      } else {
-        console.log(`${chalk.red("✗")} ${e.fileName} ${chalk.dim(`— ${e.error ?? "failed"}`)}`);
-      }
+      const line = e.status === "scanned"
+        ? `${chalk.green("✓")} ${e.fileName} ${chalk.dim(`(${e.transactions} transactions, ${e.unknowns} unknowns)`)}`
+        : `${chalk.red("✗")} ${e.fileName} ${chalk.dim(`— ${e.error ?? "failed"}`)}`;
+      console.log(line);
     },
-    committing: () => {
-      console.log(chalk.dim("Committing..."));
-    },
-    inspecting: (result) => {
-      if (result.total > 0) {
-        console.log(chalk.dim(`Inspectors flagged ${result.total} unknown(s).`));
-      }
-    },
-  };
+  } as ScanRunEvents;
 }
 
 /** Terse summary */
-
 function renderScanSummary(summary: ScanSummary): void {
   console.log("");
   const headline =

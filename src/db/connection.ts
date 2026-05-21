@@ -43,8 +43,3 @@ export function getDb(): Database.Database {
   return singleDb;
 }
 
-/** Close all connections (for graceful shutdown) */
-export function closeAll(): void {
-  singleDb?.close();
-  singleDb = null;
-}

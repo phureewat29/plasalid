@@ -11,11 +11,7 @@ import {
   type RecurrenceFrequency,
 } from "../../db/queries/recurrences.js";
 import { sanitizeForPrompt } from "../sanitize.js";
-import type {
-  AgentExecutionContext,
-  ToolDefinition,
-  ToolModule,
-} from "./types.js";
+import type { ToolDefinition, ToolModule } from "./types.js";
 
 /**
  * Resolve-mode tools: the mutation primitives an agent calls to APPLY the
@@ -127,16 +123,6 @@ const DEFS: ToolDefinition[] = [
       required: ["from_id", "to_id"],
     },
   },
-  {
-    name: "mark_resolve_done",
-    description:
-      "Call once the current unknown's resolution has been applied. The summary is shown to the user. The pipeline will then mark the unknown resolved and move to the next one.",
-    input_schema: {
-      type: "object",
-      properties: { summary: { type: "string" } },
-      required: ["summary"],
-    },
-  },
 ];
 
 const LABELS: Record<string, string> = {
@@ -146,14 +132,12 @@ const LABELS: Record<string, string> = {
   record_recurrence: "Recording recurrence",
   link_transaction_to_recurrence: "Linking transaction to recurrence",
   merge_accounts: "Merging accounts",
-  mark_resolve_done: "Finalizing unknown",
 };
 
 async function execute(
   db: Database.Database,
   name: string,
   input: any,
-  ctx: AgentExecutionContext | undefined,
 ): Promise<string | undefined> {
   switch (name) {
     case "update_transaction": {
@@ -182,44 +166,24 @@ async function execute(
         : `Deleted transaction ${input.transaction_id} and its postings.`;
     }
     case "record_recurrence": {
-      try {
-        const id = recordRecurrence(db, {
-          account_id: input.account_id,
-          description: input.description,
-          frequency: input.frequency as RecurrenceFrequency,
-          amount_typical: input.amount_typical ?? null,
-          currency: input.currency,
-          transaction_ids: input.transaction_ids || [],
-          notes: input.notes ?? null,
-        });
-        return `Recorded recurrence ${id} ("${sanitizeForPrompt(input.description)}", ${input.frequency}); linked ${(input.transaction_ids || []).length} transaction(s).`;
-      } catch (err: any) {
-        return `Could not record recurrence: ${err.message}`;
-      }
+      const id = recordRecurrence(db, {
+        account_id: input.account_id,
+        description: input.description,
+        frequency: input.frequency as RecurrenceFrequency,
+        amount_typical: input.amount_typical ?? null,
+        currency: input.currency,
+        transaction_ids: input.transaction_ids || [],
+        notes: input.notes ?? null,
+      });
+      return `Recorded recurrence ${id} ("${sanitizeForPrompt(input.description)}", ${input.frequency}); linked ${(input.transaction_ids || []).length} transaction(s).`;
     }
     case "link_transaction_to_recurrence": {
-      try {
-        linkTransactionToRecurrence(
-          db,
-          input.transaction_id,
-          input.recurrence_id,
-        );
-        return `Linked transaction ${input.transaction_id} → recurrence ${input.recurrence_id}.`;
-      } catch (err: any) {
-        return `Could not link: ${err.message}`;
-      }
+      linkTransactionToRecurrence(db, input.transaction_id, input.recurrence_id);
+      return `Linked transaction ${input.transaction_id} → recurrence ${input.recurrence_id}.`;
     }
     case "merge_accounts": {
-      try {
-        const moved = mergeAccounts(db, input.from_id, input.to_id);
-        return `Merged ${input.from_id} → ${input.to_id}; moved ${moved} posting(s).`;
-      } catch (err: any) {
-        return `Could not merge: ${err.message}`;
-      }
-    }
-    case "mark_resolve_done": {
-      ctx?.onComplete?.(input.summary || "");
-      return `Unknown done. Summary: ${sanitizeForPrompt(input.summary || "")}`;
+      const moved = mergeAccounts(db, input.from_id, input.to_id);
+      return `Merged ${input.from_id} → ${input.to_id}; moved ${moved} posting(s).`;
     }
     default:
       return undefined;

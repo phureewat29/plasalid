@@ -141,6 +141,15 @@ describe("accountIngestTools — record-context action_log", () => {
     expect(res).toMatch(/does not match parent/);
   });
 
+  it("update_account_metadata writes no audit row when the patch has no fields", async () => {
+    const cr = "cr:noop";
+    const res = await accountIngestTools.execute(db, "update_account_metadata", {
+      account_id: "asset:kbank",
+    }, ctx({ command: "record", correlationId: cr }));
+    expect(res).toBe("Nothing to update.");
+    expect(listActions(db, { correlationId: cr })).toHaveLength(0);
+  });
+
   it("groups three writes under one correlation_id", async () => {
     const cr = "cr:group";
     await accountIngestTools.execute(db, "create_account", {
@@ -192,7 +201,7 @@ describe("resolveIngestTools — close_unknown", () => {
       related_unknown_ids: [ids[1], ids[2]],
     }, ctx());
 
-    expect(res).toBe("Closed 3 unknowns.");
+    expect(res).toBe("Resolved 3 unknowns with: expense:shopping");
     expect(listOpenUnknowns(db)).toHaveLength(0);
   });
 

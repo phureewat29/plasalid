@@ -6,6 +6,7 @@ import {
   findRecurrenceCandidates,
   recordRecurrence,
   linkTransactionToRecurrence,
+  getRecurringSummary,
 } from "./recurrences.js";
 
 function freshDb(): Database.Database {
@@ -192,5 +193,38 @@ describe("recordRecurrence + linkTransactionToRecurrence", () => {
       .get(recId) as { last_seen_date: string; next_expected_date: string };
     expect(rec.last_seen_date).toBe(c.transactions[2].date);
     expect(rec.next_expected_date).toBe(isoPlus(rec.last_seen_date, 30));
+  });
+});
+
+describe("getRecurringSummary", () => {
+  it("returns zero count and zero estimate when no recurrences exist", () => {
+    const db = freshDb();
+    expect(getRecurringSummary(db)).toEqual({ count: 0, monthly_estimate: 0 });
+  });
+
+  it("normalizes amounts across frequencies into a monthly estimate", () => {
+    const db = freshDb();
+    db.prepare(
+      `INSERT INTO recurrences (id, account_id, description, frequency, amount_typical, currency)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("rc:1", "liability:ktc", "Netflix",  "monthly",  400,  "THB");
+    db.prepare(
+      `INSERT INTO recurrences (id, account_id, description, frequency, amount_typical, currency)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("rc:2", "liability:ktc", "Gym",       "weekly",   100,  "THB");
+    db.prepare(
+      `INSERT INTO recurrences (id, account_id, description, frequency, amount_typical, currency)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("rc:3", "liability:ktc", "Insurance", "annually", 12000, "THB");
+    // Null amount: should be counted but contribute zero to the estimate.
+    db.prepare(
+      `INSERT INTO recurrences (id, account_id, description, frequency, currency)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run("rc:4", "liability:ktc", "Mystery", "monthly", "THB");
+
+    const summary = getRecurringSummary(db);
+    expect(summary.count).toBe(4);
+    // 400 + 100*(52/12) + 12000/12 = 400 + 433.33 + 1000 = 1833.33
+    expect(summary.monthly_estimate).toBeCloseTo(1833.33, 2);
   });
 });

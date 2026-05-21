@@ -1,7 +1,7 @@
 import chalk from "chalk";
 
 // eslint-disable-next-line no-control-regex
-export const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 export function visibleLength(s: string): number {
   return s.replace(ANSI_RE, "").length;

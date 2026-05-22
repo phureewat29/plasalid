@@ -151,35 +151,6 @@ program
   });
 
 program
-  .command("resolve")
-  .description(
-    "Walk every open unknown from the last scan one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip).",
-  )
-  .option("-a, --account <id>", "Limit to unknowns attached to a single account")
-  .option(
-    "--from <date>",
-    "Only consider entries on or after this date (YYYY-MM-DD)",
-  )
-  .option(
-    "--to <date>",
-    "Only consider entries on or before this date (YYYY-MM-DD)",
-  )
-  .option(
-    "-k, --kind <kind>",
-    "Filter by unknown kind (uncategorized_expense, duplicate, correlation, recurrence_candidate, similar_accounts)",
-  )
-  .action(async (opts) => {
-    ensureConfigured();
-    const { runResolveCommand } = await import("./commands/resolve.js");
-    await runResolveCommand({
-      accountId: opts.account,
-      from: opts.from,
-      to: opts.to,
-      kind: opts.kind,
-    });
-  });
-
-program
   .command("rules")
   .description("List rules the system has learned")
   .action(async () => {
@@ -234,10 +205,6 @@ program.configureHelp({
       {
         name: "scan",
         desc: "Scan new PDFs (optionally by regex; --force to re-scan)",
-      },
-      {
-        name: "resolve",
-        desc: "Walk open unknowns one at a time and apply your decision",
       },
       {
         name: "rules",

@@ -3,9 +3,8 @@ import type { ToolDefinition } from "../provider.js";
 import type { AgentExecutionContext, ToolModule, ToolProfile } from "./types.js";
 import { commonTools } from "./common.js";
 import { readTools } from "./read.js";
-import { accountIngestTools, scanUnknownTools, resolveIngestTools } from "./ingest.js";
+import { accountIngestTools, scanUnknownTools } from "./ingest.js";
 import { scanTools } from "./scan.js";
-import { resolveTools } from "./resolve.js";
 import { recordTools } from "./record.js";
 import { merchantTools } from "./merchants.js";
 
@@ -27,7 +26,6 @@ export type { AgentExecutionContext, ToolProfile } from "./types.js";
 const PROFILES: Record<ToolProfile, ToolModule[]> = {
   scan:    [commonTools, accountIngestTools, scanUnknownTools, scanTools, merchantTools],
   chat:    [commonTools, readTools],
-  resolve: [commonTools, readTools, accountIngestTools, resolveIngestTools, resolveTools, merchantTools],
   record:  [commonTools, readTools, accountIngestTools, recordTools, merchantTools],
 };
 
@@ -45,9 +43,7 @@ const MODULES = [
   readTools,
   accountIngestTools,
   scanUnknownTools,
-  resolveIngestTools,
   scanTools,
-  resolveTools,
   recordTools,
   merchantTools,
 ];
@@ -75,9 +71,7 @@ export const TOOL_LABELS: Record<string, string> = {
   ...readTools.LABELS,
   ...accountIngestTools.LABELS,
   ...scanUnknownTools.LABELS,
-  ...resolveIngestTools.LABELS,
   ...scanTools.LABELS,
-  ...resolveTools.LABELS,
   ...recordTools.LABELS,
   ...merchantTools.LABELS,
 };

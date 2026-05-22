@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
-import { accountIngestTools, resolveIngestTools } from "./ingest.js";
+import { accountIngestTools } from "./ingest.js";
 import { createAccount, findAccountById } from "../../db/queries/account-balance.js";
 import { listActions } from "../../db/queries/action-log.js";
-import { recordUnknown, listOpenUnknowns } from "../../db/queries/unknowns.js";
 import type { AgentExecutionContext } from "./types.js";
 
 function freshDb() {
@@ -181,36 +180,99 @@ describe("accountIngestTools — record-context action_log", () => {
   });
 });
 
-describe("resolveIngestTools — close_unknown", () => {
-  it("closes a primary unknown plus all related siblings in one call", async () => {
-    const db = freshDb();
-    const ids = [0, 1, 2].map(i =>
-      recordUnknown(db, {
-        file_id: null,
-        transaction_id: null,
-        account_id: "expense:food",
-        kind: "uncategorized_expense",
-        prompt: `Lazada row ${i}`,
-        options: ["expense:shopping", "Skip — leave as is"],
-      }),
-    );
+describe("accountIngestTools — record_transactions (batch)", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = freshDb(); });
 
-    const res = await resolveIngestTools.execute(db, "close_unknown", {
-      unknown_id: ids[0],
-      answer: "expense:shopping",
-      related_unknown_ids: [ids[1], ids[2]],
-    }, ctx());
+  function buildTx(overrides: Partial<{ date: string; description: string; debit: number; account: string }> = {}) {
+    return {
+      date: overrides.date ?? "2026-05-19",
+      description: overrides.description ?? "Coffee",
+      postings: [
+        { account_id: overrides.account ?? "expense:food", debit: overrides.debit ?? 100 },
+        { account_id: "asset:kbank", credit: overrides.debit ?? 100 },
+      ],
+    };
+  }
 
-    expect(res).toBe("Resolved 3 unknowns with: expense:shopping");
-    expect(listOpenUnknowns(db)).toHaveLength(0);
+  it("buffers every valid transaction and reports per-item ids", async () => {
+    const { SharedBuffer } = await import("../../scanner/buffer/sharedBuffer.js");
+    const buffer = new SharedBuffer("sc:test");
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [
+        buildTx({ description: "Coffee 1" }),
+        buildTx({ description: "Coffee 2", debit: 120 }),
+        buildTx({ description: "Coffee 3", debit: 150 }),
+      ],
+    }, ctx({ buffer }));
+
+    expect(res).toMatch(/Posted 3 of 3/);
+    expect(buffer.snapshot().transactions).toHaveLength(3);
+    expect(buffer.snapshot().transactions[0].input.description).toBe("Coffee 1");
+    // No DB writes until commit.
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
   });
 
-  it("returns a helpful error when unknown_id is unknown", async () => {
-    const db = freshDb();
-    const res = await resolveIngestTools.execute(db, "close_unknown", {
-      unknown_id: "cn:nope",
-      answer: "Skip — leave as is",
+  it("buffers up to 50 transactions in a single call", async () => {
+    const { SharedBuffer } = await import("../../scanner/buffer/sharedBuffer.js");
+    const buffer = new SharedBuffer("sc:test");
+    const transactions = Array.from({ length: 50 }, (_, i) =>
+      buildTx({ description: `Row ${i}`, debit: 100 + i }),
+    );
+    const res = await accountIngestTools.execute(db, "record_transactions", { transactions }, ctx({ buffer }));
+
+    expect(res).toMatch(/Posted 50 of 50/);
+    expect(buffer.snapshot().transactions).toHaveLength(50);
+  });
+
+  it("rejects a batch over 50 without buffering anything", async () => {
+    const { SharedBuffer } = await import("../../scanner/buffer/sharedBuffer.js");
+    const buffer = new SharedBuffer("sc:test");
+    const transactions = Array.from({ length: 51 }, (_, i) => buildTx({ description: `Row ${i}` }));
+    const res = await accountIngestTools.execute(db, "record_transactions", { transactions }, ctx({ buffer }));
+
+    expect(res).toMatch(/at most 50/);
+    expect(buffer.snapshot().transactions).toHaveLength(0);
+  });
+
+  it("reports per-item validation errors and still buffers the valid rows", async () => {
+    const { SharedBuffer } = await import("../../scanner/buffer/sharedBuffer.js");
+    const buffer = new SharedBuffer("sc:test");
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [
+        buildTx({ description: "Valid 1" }),
+        // Invalid: posting with both debit and credit.
+        {
+          date: "2026-05-19",
+          description: "Invalid both",
+          postings: [
+            { account_id: "expense:food", debit: 50, credit: 50 },
+            { account_id: "asset:kbank", credit: 50 },
+          ],
+        },
+        buildTx({ description: "Valid 2", debit: 200 }),
+      ],
+    }, ctx({ buffer }));
+
+    expect(res).toMatch(/Posted 2 of 3/);
+    expect(res).toMatch(/index 1/);
+    expect(buffer.snapshot().transactions).toHaveLength(2);
+    expect(buffer.snapshot().transactions.map(t => t.input.description)).toEqual(["Valid 1", "Valid 2"]);
+  });
+
+  it("returns a clear error when no buffer is set (e.g. record / resolve context)", async () => {
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [buildTx()],
     }, ctx());
-    expect(res).toMatch(/not found/);
+    expect(res).toMatch(/only available during a scan/);
+  });
+
+  it("rejects an empty transactions array", async () => {
+    const { SharedBuffer } = await import("../../scanner/buffer/sharedBuffer.js");
+    const buffer = new SharedBuffer("sc:test");
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [],
+    }, ctx({ buffer }));
+    expect(res).toMatch(/at least one transaction/);
   });
 });

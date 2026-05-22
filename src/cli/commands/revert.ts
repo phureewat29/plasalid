@@ -4,7 +4,9 @@ import inquirer from "inquirer";
 import { relative, sep } from "path";
 import { getDb } from "../../db/connection.js";
 import { getDataDir } from "../../config.js";
-import { compileMatcher } from "../../scanner/pipeline.js";
+function compileMatcher(input: string): RegExp {
+  return new RegExp(input, "i");
+}
 
 interface RevertMatch {
   id: string;

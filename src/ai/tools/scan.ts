@@ -28,7 +28,6 @@ async function execute(
 ): Promise<string | undefined> {
   if (name !== "mark_file_scanned") return undefined;
   const summary = input.summary || "";
-  ctx?.buffer?.markDone(summary);
   ctx?.onComplete?.(summary);
   return `Marked file as scanned. Summary: ${sanitizeForPrompt(summary)}`;
 }

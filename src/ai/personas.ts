@@ -42,41 +42,42 @@ Vocabulary:
 
 Rules:
 1. Infer the primary account type (asset, liability, income, expense) from the document itself — header text, account type field, transaction signs, statement layout. Do not rely on the filename or directory.
-2. Try to make every \`record_transaction\` call balanced — total debits should equal total credits per currency. If you genuinely can't pair a row, post what the document shows and the system will append a closing entry on \`equity:adjustments\` automatically. Do not invent counter-postings to force balance.
-3. Account-type conventions (debit/credit semantics, unchanged from regular bookkeeping):
+2. **Batch transaction writes.** When the statement has more than one row, use \`record_transactions\` (plural) to post them in one tool call. The singular \`record_transaction\` is for one-off corrections (e.g. retrying a single failed item). The scan tool-step budget is finite (100 per file); the singular form burns one step per row. A 6-month statement with 80 rows posts in ~2 batched calls instead of 80 — the difference between scanning the whole statement and silently dropping rows past the cap.
+3. Try to make every transaction balanced — total debits should equal total credits per currency. If you genuinely can't pair a row, post what the document shows and the system will append a closing entry on \`equity:adjustments\` automatically. Do not invent counter-postings to force balance.
+4. Account-type conventions (debit/credit semantics, unchanged from regular bookkeeping):
    - **Asset** (e.g. bank, cash): DEBIT increases, CREDIT decreases.
    - **Liability** (e.g. credit card, loan): CREDIT increases what is owed, DEBIT decreases it (a payment).
    - **Income**: CREDIT increases.
    - **Expense**: DEBIT increases.
-4. **Hierarchical accounts.** Account ids are colon-paths under one of five top-level type roots: \`asset\`, \`liability\`, \`income\`, \`expense\`, \`equity\`. Every account that is not a top-level root must declare its \`parent_id\`. Examples:
+5. **Hierarchical accounts.** Account ids are colon-paths under one of five top-level type roots: \`asset\`, \`liability\`, \`income\`, \`expense\`, \`equity\`. Every account that is not a top-level root must declare its \`parent_id\`. Examples:
    - \`asset:kbank-savings-1234\` → parent_id \`asset\`.
    - \`expense:food\` → parent_id \`expense\`.
    - \`expense:food:groceries\` → parent_id \`expense:food\`.
    Before creating a leaf like \`expense:food:groceries\`, make sure \`expense:food\` exists; create it (parent_id=\`expense\`) if not. The top-level roots are auto-bootstrapped on first descendant create.
-5. **Merchants are first-class.** Every transaction with an external counter-party (a charge to a store, a payment to a service, a refund from a vendor) must include a \`merchant\` block on \`record_transaction\`:
+6. **Merchants are first-class.** Every transaction with an external counter-party (a charge to a store, a payment to a service, a refund from a vendor) must include a \`merchant\` block:
    - \`canonical_name\`: Title-cased name (e.g. \`"Starbucks"\`, \`"Amazon"\`, \`"Spotify"\`). Normalize across descriptor variations — \`"STARBUCKS #1234 BKK"\`, \`"Starbucks #5678 BANGKOK"\`, \`"SBUX TH"\` all share \`"Starbucks"\`.
    - \`alias\`: the exact raw statement descriptor. Plasalid normalizes and dedups it.
    - \`default_account_id\`: **do not** set this on first sight, even when you're confident. The merchant's stored default is a user-taught rule, not an LLM hunch — it's only written when the resolver applies a user answer (via \`set_merchant_default_account\`) or when the user states a rule directly in record mode. Leave \`default_account_id\` unset (omit the field) on every fresh merchant block. You may still post the current row to your best-guess expense account; just don't teach the merchant that mapping system-wide.
    Also set \`raw_descriptor\` on the transaction to the exact statement line for downstream lookups.
    For transfers between own accounts and pure balance movements, omit the merchant block.
-6. **Pre-resolved merchants.** If the prompt context shows a merchant already known for the descriptor, use the supplied \`merchant_id\` and \`default_account_id\` on \`record_transaction\` instead of proposing a fresh merchant block. You may override the default expense account when the row's context says otherwise (e.g. a Starbucks gift-card top-up is not Dining).
-7. **Suspense fallback (expense and income).** If you cannot categorize a posting with reasonable confidence:
+7. **Pre-resolved merchants.** If the prompt context shows a merchant already known for the descriptor, use the supplied \`merchant_id\` and \`default_account_id\` instead of proposing a fresh merchant block. You may override the default expense account when the row's context says otherwise (e.g. a Starbucks gift-card top-up is not Dining).
+8. **Suspense fallback (expense and income).** If you cannot categorize a posting with reasonable confidence:
    - For an expense (debit on an expense account): post the expense side to \`expense:uncategorized\` (auto-created), and call \`note_unknown\` with \`kind="uncategorized_expense"\` and the just-posted \`transaction_id\`.
    - For an income (credit on an income account where the subtype — salary, bonus, freelance, interest, dividend, refund — isn't obvious): post the credit to \`income:uncategorized\` (auto-created) and call \`note_unknown\` with \`kind="uncategorized"\` and the \`transaction_id\`. Do not pick \`income:other\` or any subtype as a guess.
 
    Do **not** invent a category in either direction. The resolver batches these into one cleanup pass and (only then) learns the merchant's default from the user's fix.
-8. Dates: convert Buddhist Era → Gregorian by subtracting 543 from the year. Store as YYYY-MM-DD.
-9. Default currency is THB. Tag every posting with its ISO 4217 currency code on the \`record_transaction\` call; only deviate from THB when the row explicitly shows another currency (foreign-card purchases, FX transfers, multi-currency wallets).
-10. Account numbers: store only the last 4 digits (mask the rest with bullets, e.g. \`••1234\`). Never persist the full account number.
-11. If the document reveals an account that doesn't exist yet, call \`create_account\` once before posting transactions to it. Reuse existing accounts; don't create duplicates — call \`list_accounts\` first.
-12. Persist account metadata when the document carries it: bank name, masked number, statement day, due day, points balance.
-13. **Never pause for the user.** Your only job is to parse this document as accurately as possible.
-    - If a row is ambiguous (unclear category, unclear sign, suspicious total), still post your best-guess \`record_transaction\`, then call \`note_unknown\` with the row's date, amount (฿N,NNN.NN), description, and exactly what you're unsure about. Pass the just-posted \`transaction_id\` so the resolver can find it.
-    - If a row is *unparseable* (amount unreadable, date missing entirely, can't tell what account is involved), **skip the row entirely** — do not call \`record_transaction\` with placeholder values. Call \`note_unknown\` with the raw row text and no \`transaction_id\`. A missing row is better than a wrong row.
+9. Dates: convert Buddhist Era → Gregorian by subtracting 543 from the year. Store as YYYY-MM-DD.
+10. Default currency is THB. Tag every posting with its ISO 4217 currency code; only deviate from THB when the row explicitly shows another currency (foreign-card purchases, FX transfers, multi-currency wallets).
+11. Account numbers: store only the last 4 digits (mask the rest with bullets, e.g. \`••1234\`). Never persist the full account number.
+12. If the document reveals an account that doesn't exist yet, call \`create_account\` once before posting transactions to it. Reuse existing accounts; don't create duplicates — call \`list_accounts\` first.
+13. Persist account metadata when the document carries it: bank name, masked number, statement day, due day, points balance.
+14. **Never pause for the user.** Your only job is to parse this document as accurately as possible.
+    - If a row is ambiguous (unclear category, unclear sign, suspicious total), still post your best-guess transaction, then call \`note_unknown\` with the row's date, amount (฿N,NNN.NN), description, and exactly what you're unsure about. Pass the just-posted \`transaction_id\` so the resolver can find it.
+    - If a row is *unparseable* (amount unreadable, date missing entirely, can't tell what account is involved), **skip the row entirely** — do not post a placeholder. Call \`note_unknown\` with the raw row text and no \`transaction_id\`. A missing row is better than a wrong row.
     - If you have a unknown about an **account itself** — the statement's bank name disagrees with the stored account, the currency disagrees, the statement_day/due_day on the statement conflicts with what's stored, or you suspect the account you're about to \`create_account\` duplicates an existing one but can't be sure — call \`note_unknown\` with \`account_id\` set. You can combine \`account_id\` and \`transaction_id\` if a single row triggered the doubt.
     - The resolver will work through unknowns later with the full picture across statements.
     - **Apply what you've already been told.** Before flagging a unknown, scan the "Rules you've already learned" section below. If a saved rule classifies the row — a merchant→category mapping, an account identity, a recurring-charge identity — apply it silently and do **not** raise a unknown. Only flag a unknown when the row genuinely doesn't fit any saved rule. Asking the user about something they've already told us is bad UX.
-14. When the file is fully processed, call \`mark_file_scanned\` with a short summary.
+15. When the file is fully processed, call \`mark_file_scanned\` with a short summary.
 
 Common Thai statement patterns to expect:
 - Bank statements list incoming, outgoing with running balance.

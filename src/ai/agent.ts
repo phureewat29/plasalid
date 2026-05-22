@@ -3,10 +3,8 @@ import { config } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
-  buildResolveSystemPrompt,
   buildRecordSystemPrompt,
   type ScanPromptOptions,
-  type ResolvePromptOptions,
   type RecordPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
@@ -59,7 +57,7 @@ async function runAgent({
   onProgress,
   signal,
   maxToolSteps,
-}: RunAgentArgs): Promise<{ text: string; messages: NormalizedMessage[] }> {
+}: RunAgentArgs): Promise<{ text: string; messages: NormalizedMessage[]; truncated: boolean }> {
   const messages: NormalizedMessage[] = [...initialMessages];
   const useThinking = config.thinkingBudget > 0 && provider.supportsThinking;
   const throwIfAborted = () => {
@@ -115,12 +113,17 @@ async function runAgent({
     });
   }
 
+  const truncated =
+    response.stopReason === "tool_use" && toolCount >= stepLimit;
+
   const textBlocks = response.content.filter(
     (b): b is Extract<NormalizedContentBlock, { type: "text" }> => b.type === "text",
   );
   const text = unredact(textBlocks.map(b => b.text).join("\n"));
-  return { text, messages };
+  return { text, messages, truncated };
 }
+
+const SCAN_MAX_TOOL_STEPS = 100;
 
 /**
  * Conversational chat used by the Ink TUI. Reuses conversation_history for context
@@ -196,7 +199,7 @@ export async function runScanAgent(opts: {
   signal?: AbortSignal;
 }): Promise<string> {
   const systemPrompt = redact(buildScanSystemPrompt(opts.db, opts.prompt));
-  const { text } = await runAgent({
+  const { text, truncated } = await runAgent({
     db: opts.db,
     systemPrompt,
     tools: getToolDefinitions("scan"),
@@ -204,8 +207,17 @@ export async function runScanAgent(opts: {
     agentCtx: opts.agentCtx,
     onProgress: opts.onProgress,
     signal: opts.signal,
-    maxToolSteps: 40,
+    maxToolSteps: SCAN_MAX_TOOL_STEPS,
   });
+  if (truncated && opts.agentCtx.buffer) {
+    await opts.agentCtx.buffer.appendUnknown({
+      chunkId: opts.agentCtx.chunkId ?? null,
+      transaction_id: null,
+      account_id: null,
+      kind: "scan_truncated",
+      prompt: `Scan stopped at the tool-step cap (${SCAN_MAX_TOOL_STEPS}) before the agent finished parsing this chunk. Some transactions may be missing. Split the PDF further or raise the cap.`,
+    });
+  }
   return text;
 }
 
@@ -236,30 +248,3 @@ export async function runRecordAgent(opts: {
   return text;
 }
 
-/**
- * Resolve-time agent loop. The pipeline hands every open unknown in the
- * initial message and drives the loop until `countOpenUnknowns()` reaches 0.
- * Each invocation should close as many rows as possible (via ask_user /
- * close_unknown); the pipeline re-invokes if any remain.
- */
-export async function runResolveAgent(opts: {
-  db: Database.Database;
-  initialMessages: NormalizedMessage[];
-  prompt: ResolvePromptOptions;
-  agentCtx: AgentExecutionContext;
-  onProgress?: ProgressCallback;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const systemPrompt = redact(buildResolveSystemPrompt(opts.db, opts.prompt));
-  const { text } = await runAgent({
-    db: opts.db,
-    systemPrompt,
-    tools: getToolDefinitions("resolve"),
-    initialMessages: opts.initialMessages,
-    agentCtx: opts.agentCtx,
-    onProgress: opts.onProgress,
-    signal: opts.signal,
-    maxToolSteps: 60,
-  });
-  return text;
-}

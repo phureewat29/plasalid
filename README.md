@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-    Turn your financial documents into structured, insightful, AI-readable context.
+    Turn your scattered financial documents into structured, insightful, AI-readable context.
 </p>
 
 
@@ -19,7 +19,7 @@ In the US/EU, a financial data aggregator like Plaid empowers most finance apps:
 
 That's why Plasalid emerged to resolve this pain point. Your data has stayed fragmented for decades, with no way to bring it together. You can't manage a mortgage effectively without the full picture, and you may be completely blind to your recurring monthly income and expenses. Subscriptions stay active long after they're forgotten, unknown charges go unverified, bank accounts opened years ago drift unchecked, and unexpected spending may silently grow beyond what any single statement shows. When your finances are hard to manage, your life definitely becomes more difficult. Your plans toward financial stability or freedom slip further out of reach. Plasalid is built to solve this.
 
-Plasalid addresses this with a simple founding concept: let users drop all their financial documents — bank statements, credit-card statements, payslips, brokerage statements — onto their own machine, where Plasalid leverages AI to extract every transaction, balance, and holding into a single, structured, double-entry database that serves as context for future processing.
+Plasalid addresses this with a simple founding concept: let users drop all their financial documents - bank statements, credit-card statements, payslips, brokerage statements - onto their own machine, where Plasalid leverages AI to extract every transaction, balance, and holding into a single, structured, double-entry database that serves as context for future processing.
 
 Moreover, Plasalid comes with a built-in agentic chat that queries the data directly, so questions like which subscriptions are still active, where money went last month, or what your current net worth is can be answered against actual records rather than estimates. You can talk with your money on Plasalid to help you understand your financial situation and plan efficiently.
 

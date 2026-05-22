@@ -13,7 +13,7 @@ export interface PostingInput {
 }
 
 export interface TransactionInput {
-  /** Optional pre-assigned id. Used by the buffered-write path so unknowns recorded mid-scan can reference the transaction before commit. */
+  /** Optional pre-assigned id. Used by the buffered-write path so questions recorded mid-scan can reference the transaction before commit. */
   id?: string;
   date: string;
   description: string;

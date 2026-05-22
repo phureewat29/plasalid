@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { migrate } from "../db/schema.js";
-import { generateKey } from "../db/encryption.js";
+import { migrate } from "../../db/schema.js";
+import { generateKey } from "../../db/encryption.js";
 import {
   suggestPattern,
   findCandidates,

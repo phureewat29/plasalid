@@ -28,7 +28,7 @@ export interface AccountRow {
   points_balance: number | null;
   metadata_json: string | null;
   pii_flag: number;
-  has_unknown: number;
+  has_question: number;
   created_at: string;
 }
 

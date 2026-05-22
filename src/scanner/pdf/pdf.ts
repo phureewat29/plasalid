@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "fs";
 import { createHash } from "crypto";
 import { basename, extname } from "path";
-import type { DocumentBlock } from "../ai/provider.js";
+import type { DocumentBlock } from "../../ai/provider.js";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",

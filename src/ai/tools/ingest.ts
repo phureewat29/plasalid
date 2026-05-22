@@ -2,16 +2,15 @@ import type Database from "libsql";
 import {
   createAccount,
   updateAccountMetadata,
-  findAccountById,
 } from "../../db/queries/account-balance.js";
 import {
   validateTransaction,
   insertTransactionRows,
   recordTransaction,
+  type TransactionInput,
 } from "../../db/queries/transactions.js";
-import { appendAction, type ActionType } from "../../db/queries/action-log.js";
-import { recordUnknown } from "../../db/queries/unknowns.js";
-import { runExclusive as runAccountExclusive } from "../../scanner/account-mutex.js";
+import { recordQuestion } from "../../db/queries/questions.js";
+import { runExclusive as runAccountExclusive } from "./account-mutex.js";
 import { ACCOUNT_TYPE_DESCRIPTIONS } from "../../accounts/taxonomy.js";
 import type {
   AgentExecutionContext,
@@ -85,16 +84,6 @@ const TRANSACTION_ITEM_SCHEMA = {
   },
   required: ["date", "description", "postings"],
 } as const;
-
-/**
- * Account + transaction write primitives
- *
- * Shared by scan, resolve, and record. Each tool branches once on
- * `ctx.correlationId`: when set (record path), the data write and the
- * action_log insert run inside a single transaction so the audit row is
- * atomic with the change. Without it (scan / resolve), the write goes through
- * the existing path unchanged.
- */
 
 const ACCOUNT_DEFS: ToolDefinition[] = [
   {
@@ -182,7 +171,7 @@ const ACCOUNT_DEFS: ToolDefinition[] = [
   },
   {
     name: "record_transactions",
-    description: `Post many balanced double-entry transactions in a single tool call. **Strongly preferred over record_transaction whenever you have more than one row to post** — the scan tool-step budget is finite (100 per file) and the singular form burns one step per row. Each item has the same shape as record_transaction. Validation runs per item: valid items are buffered and their ids returned; invalid items are reported back so you can fix and retry just those indices. Limit each call to ≤${BATCH_MAX} transactions; chunk larger statements across multiple calls.`,
+    description: `Post many balanced double-entry transactions in a single tool call. **Strongly preferred over record_transaction whenever you have more than one row to post** — the scan tool-step budget is finite (100 per file) and the singular form burns one step per row. Each item has the same shape as record_transaction. Validation runs per item: valid items are written directly to the DB and their ids returned; invalid items are reported back so you can fix and retry just those indices. Limit each call to ≤${BATCH_MAX} transactions; chunk larger statements across multiple calls.`,
     input_schema: {
       type: "object",
       properties: {
@@ -297,43 +286,10 @@ const ACCOUNT_LABELS: Record<string, string> = {
   record_transactions: "Posting transactions",
 };
 
-interface AuditRecord {
-  actionType: ActionType;
-  targetId: string;
-  payload: Record<string, unknown>;
-}
-
-/**
- * Run a write inside an audit-wrapping transaction. When the caller has a
- * correlation id, the write + action_log insert land atomically; otherwise
- * it's just the write. The write closure can return an AuditRecord (logged)
- * or null (no audit row this call — used when an update was a no-op).
- */
-function writeWithAudit(
-  db: Database.Database,
-  ctx: AgentExecutionContext | undefined,
-  write: () => AuditRecord | null,
-): void {
-  if (!ctx?.correlationId) { write(); return; }
-  const op = db.transaction(() => {
-    const audit = write();
-    if (!audit) return;
-    appendAction(db, {
-      correlation_id: ctx.correlationId!,
-      command: ctx.command ?? "record",
-      user_input: ctx.userInput ?? null,
-      action_type: audit.actionType,
-      target_id: audit.targetId,
-      payload: audit.payload,
-    });
-  });
-  op();
-}
-
 function buildTransactionInput(
   input: any,
   ctx: AgentExecutionContext,
-): import("../../db/queries/transactions.js").TransactionInput {
+): TransactionInput {
   return {
     date: input.date,
     description: input.description,
@@ -352,6 +308,44 @@ function buildTransactionInput(
   };
 }
 
+async function persistOneTransaction(
+  db: Database.Database,
+  ctx: AgentExecutionContext,
+  txInput: TransactionInput,
+): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  try {
+    const validated = validateTransaction(txInput);
+    const tx = db.transaction((): void => {
+      insertTransactionRows(db, validated);
+    });
+    tx();
+    if (ctx.progress && ctx.chunkId) {
+      ctx.progress.emit({ chunkId: ctx.chunkId, kind: "tx" });
+    }
+    return { ok: true, id: validated.id };
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    if (ctx.scanId) {
+      try {
+        recordQuestion(db, {
+          file_id: ctx.fileId ?? null,
+          scan_id: ctx.scanId,
+          transaction_id: null,
+          account_id: null,
+          kind: "scan_commit_failure",
+          prompt: `Could not record "${txInput.description}" on ${txInput.date}: ${message}. Review the source statement and re-enter via the record flow.`,
+        });
+        if (ctx.progress && ctx.chunkId) {
+          ctx.progress.emit({ chunkId: ctx.chunkId, kind: "question" });
+        }
+      } catch {
+        // failure to record a failure shouldn't crash the scan
+      }
+    }
+    return { ok: false, error: message };
+  }
+}
+
 async function accountExecute(
   db: Database.Database,
   name: string,
@@ -365,25 +359,18 @@ async function accountExecute(
       }
       return await runAccountExclusive(() => {
         try {
-          writeWithAudit(db, ctx, () => {
-            createAccount(db, {
-              id: input.id,
-              name: input.name,
-              type: input.type,
-              parent_id: input.parent_id ?? null,
-              subtype: input.subtype ?? null,
-              bank_name: input.bank_name ?? null,
-              account_number_masked: input.account_number_masked ?? null,
-              currency: input.currency,
-              due_day: input.due_day ?? null,
-              statement_day: input.statement_day ?? null,
-              metadata: input.metadata ?? null,
-            });
-            return {
-              actionType: "create_account",
-              targetId: input.id,
-              payload: { row: findAccountById(db, input.id) },
-            };
+          createAccount(db, {
+            id: input.id,
+            name: input.name,
+            type: input.type,
+            parent_id: input.parent_id ?? null,
+            subtype: input.subtype ?? null,
+            bank_name: input.bank_name ?? null,
+            account_number_masked: input.account_number_masked ?? null,
+            currency: input.currency,
+            due_day: input.due_day ?? null,
+            statement_day: input.statement_day ?? null,
+            metadata: input.metadata ?? null,
           });
           return `Account created: ${input.id} (${input.name}, ${input.type}).`;
         } catch (err: any) {
@@ -398,25 +385,15 @@ async function accountExecute(
     case "update_account_metadata": {
       return await runAccountExclusive(() => {
         try {
-          let changed = false;
-          writeWithAudit(db, ctx, () => {
-            const result = updateAccountMetadata(db, input.account_id, {
-              due_day: input.due_day,
-              statement_day: input.statement_day,
-              points_balance: input.points_balance,
-              account_number_masked: input.account_number_masked,
-              bank_name: input.bank_name,
-              metadata: input.metadata,
-            });
-            changed = result.changed;
-            if (!result.changed) return null;
-            return {
-              actionType: "update_account_metadata",
-              targetId: input.account_id,
-              payload: { before: result.before, after: result.after },
-            };
+          const result = updateAccountMetadata(db, input.account_id, {
+            due_day: input.due_day,
+            statement_day: input.statement_day,
+            points_balance: input.points_balance,
+            account_number_masked: input.account_number_masked,
+            bank_name: input.bank_name,
+            metadata: input.metadata,
           });
-          return changed ? `Updated ${input.account_id}.` : "Nothing to update.";
+          return result.changed ? `Updated ${input.account_id}.` : "Nothing to update.";
         } catch (err: any) {
           if (String(err.message).includes("not found")) {
             return `Account "${input.account_id}" not found.`;
@@ -428,7 +405,6 @@ async function accountExecute(
 
     case "record_transactions": {
       if (!ctx) return "record_transactions is only available inside an agent session.";
-      if (!ctx.buffer) return "record_transactions is only available during a scan (no buffer in this context).";
       const items: any[] = Array.isArray(input?.transactions) ? input.transactions : [];
       if (items.length === 0) return "record_transactions requires at least one transaction.";
       if (items.length > BATCH_MAX) {
@@ -438,16 +414,14 @@ async function accountExecute(
       const posted: { index: number; transactionId: string; date: string }[] = [];
       const failed: { index: number; error: string }[] = [];
 
-      const chunkId = ctx.chunkId ?? "unattributed";
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        try {
-          const txInput = buildTransactionInput(item, ctx);
-          validateTransaction(txInput);
-          const transactionId = await ctx.buffer.appendTransaction(txInput, chunkId);
-          posted.push({ index: i, transactionId, date: item.date });
-        } catch (err: any) {
-          failed.push({ index: i, error: err?.message ?? "unknown error" });
+        const txInput = buildTransactionInput(item, ctx);
+        const outcome = await persistOneTransaction(db, ctx, txInput);
+        if (outcome.ok) {
+          posted.push({ index: i, transactionId: outcome.id, date: item.date });
+        } else {
+          failed.push({ index: i, error: outcome.error });
         }
       }
 
@@ -466,37 +440,15 @@ async function accountExecute(
     case "record_transaction": {
       if (!ctx) return "record_transaction is only available inside an agent session.";
       const txInput = buildTransactionInput(input, ctx);
+      if (ctx.scanId) {
+        const outcome = await persistOneTransaction(db, ctx, txInput);
+        return outcome.ok
+          ? `Posted transaction ${outcome.id} (${input.date}).`
+          : `Could not post transaction: ${outcome.error}`;
+      }
       try {
-        if (ctx.buffer) {
-          validateTransaction(txInput);
-          const transactionId = await ctx.buffer.appendTransaction(txInput, ctx.chunkId ?? "unattributed");
-          return `Posted transaction ${transactionId} (${input.date}).`;
-        }
-        // No-audit path uses recordTransaction (validates + inserts in one go).
-        // Audit path validates ahead so the validated id can be returned without
-        // re-reading from disk after the transaction commits.
-        if (!ctx.correlationId) {
-          const transactionId = recordTransaction(db, txInput);
-          return `Posted transaction ${transactionId} (${input.date}).`;
-        }
-        const validated = validateTransaction(txInput);
-        writeWithAudit(db, ctx, () => {
-          insertTransactionRows(db, validated);
-          return {
-            actionType: "record_transaction",
-            targetId: validated.id,
-            payload: {
-              transaction: {
-                date: validated.date,
-                description: validated.description,
-                source_page: validated.source_page ?? null,
-                raw_descriptor: validated.raw_descriptor ?? null,
-              },
-              postings: validated.postings,
-            },
-          };
-        });
-        return `Posted transaction ${validated.id} (${input.date}).`;
+        const transactionId = recordTransaction(db, txInput);
+        return `Posted transaction ${transactionId} (${input.date}).`;
       } catch (err: any) {
         return `Could not post transaction: ${err.message}`;
       }
@@ -513,31 +465,23 @@ export const accountIngestTools: ToolModule = {
   execute: accountExecute,
 };
 
-/**
- * Scan-only unknowns
- *
- * `note_unknown` records a clarification mid-scan without ever prompting the
- * user — only scan needs this. Record uses `clarify` (transient prompt, no
- * unknowns-table residue); resolve uses `ask_user` (prompts and resolves).
- */
-
-const UNKNOWN_DEFS: ToolDefinition[] = [
+const QUESTION_DEFS: ToolDefinition[] = [
   {
-    name: "note_unknown",
+    name: "note_question",
     description:
-      "Record a clarification request without pausing the run. Use during scan when a row is ambiguous (post your best-guess transaction first, then call this with the transaction's id), when a row is unparseable (skip the transaction, call this with no transaction_id), or when you have a unknown about an account itself (pass account_id). Use kind='uncategorized_expense' when posting an expense to expense:uncategorized so resolve can group these. The resolver picks these up later with the full picture.",
+      "Record a clarification question without pausing the run. Use SPARINGLY during scan — best-guess expense categorization is preferred (small misses are cheap to fix; a flood of open questions is not). Call note_question only when (a) the row is unparseable (skip the row, no transaction_id), (b) you have a doubt about an account itself (pass account_id), or (c) the amount/sign/date/counter-party is genuinely unclear (post your best-guess transaction first, then call this with the transaction_id). Use kind='uncategorized_expense' only for genuinely opaque expense descriptors that landed in expense:uncategorized. The resolver picks these up later with the full picture.",
     input_schema: {
       type: "object",
       properties: {
         prompt: {
           type: "string",
           description:
-            "The question or unknown in a complete sentence, with date, ฿-formatted amount, and human account names. Never reference internal ids.",
+            "The question in a complete sentence, with date, ฿-formatted amount, and human account names. Never reference internal ids.",
         },
         kind: {
           type: "string",
           description:
-            "Optional category for the unknown. Use 'uncategorized_expense' when the posting landed in expense:uncategorized; the resolver batches these into one cleanup pass.",
+            "Optional category for the question. Use 'uncategorized_expense' when the posting landed in expense:uncategorized; the resolver batches these into one cleanup pass.",
         },
         options: {
           type: "array",
@@ -548,12 +492,12 @@ const UNKNOWN_DEFS: ToolDefinition[] = [
         transaction_id: {
           type: "string",
           description:
-            "Id of the transaction this unknown relates to (returned by record_transaction). Omit for file-level unknowns about an unparseable row.",
+            "Id of the transaction this question relates to (returned by record_transaction). Omit for file-level questions about an unparseable row.",
         },
         account_id: {
           type: "string",
           description:
-            "Id of the account this unknown relates to. Set when the statement's bank name, currency, statement_day, due_day, or other metadata disagrees with the stored account, or when you suspect a new account you're about to create duplicates an existing one. Can be combined with transaction_id.",
+            "Id of the account this question relates to. Set when the statement's bank name, currency, statement_day, due_day, or other metadata disagrees with the stored account, or when you suspect a new account you're about to create duplicates an existing one. Can be combined with transaction_id.",
         },
       },
       required: ["prompt"],
@@ -561,44 +505,171 @@ const UNKNOWN_DEFS: ToolDefinition[] = [
   },
 ];
 
-const UNKNOWN_LABELS: Record<string, string> = {
-  note_unknown: "Noting unknown",
+const QUESTION_LABELS: Record<string, string> = {
+  note_question: "Noting question",
 };
 
-async function unknownExecute(
+async function questionExecute(
   db: Database.Database,
   name: string,
   input: any,
   ctx: AgentExecutionContext | undefined,
 ): Promise<string | undefined> {
-  if (name !== "note_unknown") return undefined;
-  if (!ctx) return "note_unknown is only available inside an agent session.";
-  const transaction_id = input.transaction_id ?? null;
-  const account_id = input.account_id ?? null;
-  if (ctx.buffer) {
-    await ctx.buffer.appendUnknown({
-      chunkId: ctx.chunkId ?? null,
-      transaction_id,
-      account_id,
-      kind: input.kind ?? null,
-      prompt: input.prompt,
-      options: input.options,
-    });
-    return `Unknown noted (buffered). Continue with the next row.`;
-  }
-  const id = recordUnknown(db, {
+  if (name !== "note_question") return undefined;
+  if (!ctx) return "note_question is only available inside an agent session.";
+  const id = recordQuestion(db, {
     file_id: ctx.fileId ?? null,
-    transaction_id,
-    account_id,
+    scan_id: ctx.scanId ?? null,
+    transaction_id: input.transaction_id ?? null,
+    account_id: input.account_id ?? null,
     kind: input.kind ?? null,
     prompt: input.prompt,
     options: input.options,
   });
-  return `Unknown noted (${id}). Continue with the next row.`;
+  if (ctx.progress && ctx.chunkId) {
+    ctx.progress.emit({ chunkId: ctx.chunkId, kind: "question" });
+  }
+  return `Question noted (${id}). Continue with the next row.`;
 }
 
-export const scanUnknownTools: ToolModule = {
-  DEFS: UNKNOWN_DEFS,
-  LABELS: UNKNOWN_LABELS,
-  execute: unknownExecute,
+export const scanQuestionTools: ToolModule = {
+  DEFS: QUESTION_DEFS,
+  LABELS: QUESTION_LABELS,
+  execute: questionExecute,
+};
+
+const RESOLVE_DEFS: ToolDefinition[] = [
+  {
+    name: "ask_user",
+    description:
+      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid resolve`. Not exposed during `plasalid scan` — use `note_question` instead. Pass `question_id` to close an existing open question in place. Pass `related_question_ids` to apply the user's single answer to a whole group of sibling questions at once.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "The question to ask in plain language.",
+        },
+        options: {
+          type: "array",
+          description: "Optional list of candidate answers.",
+          items: { type: "string" },
+        },
+        question_id: {
+          type: "string",
+          description:
+            "Id of the primary open question this resolves. The user's answer closes (deletes) that row.",
+        },
+        related_question_ids: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional: ids of additional open questions that share the same answer as `question_id`. The user is prompted once; every listed question (plus the primary) is closed with the same answer.",
+        },
+        facts: {
+          type: "object",
+          description:
+            "Optional structured highlights rendered as a single colored header line above the question.",
+          properties: {
+            amount: { type: "string" },
+            date: { type: "string" },
+            merchant: { type: "string" },
+            accounts: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+        },
+      },
+      required: ["prompt", "question_id"],
+    },
+  },
+  {
+    name: "close_question",
+    description:
+      "Close an open question by writing its answer and deleting the row WITHOUT prompting the user. Use after applying a mutation that a memory rule or heuristic already implied. Pass `related_question_ids` to close a sibling group in one call.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" },
+        answer: {
+          type: "string",
+          description: "The implied answer to record.",
+        },
+        related_question_ids: { type: "array", items: { type: "string" } },
+      },
+      required: ["question_id", "answer"],
+    },
+  },
+];
+
+const RESOLVE_LABELS: Record<string, string> = {
+  ask_user: "Asking for clarification",
+  close_question: "Closing question",
+};
+
+async function resolveIngestExecute(
+  db: Database.Database,
+  name: string,
+  input: any,
+  ctx: AgentExecutionContext | undefined,
+): Promise<string | undefined> {
+  if (name === "close_question") return closeQuestionTool(db, input, ctx);
+  if (name !== "ask_user") return undefined;
+  if (!ctx) return "ask_user is only available inside an agent session.";
+
+  const primary = String(input.question_id ?? "");
+  if (!primary) return "ask_user requires question_id.";
+
+  if (ctx.interactive && ctx.promptUser) {
+    const answer = await ctx.promptUser(input.prompt, input.options, input.facts);
+    const { closeQuestion } = await import("../../db/queries/questions.js");
+    const captured = closeQuestion(db, primary, answer);
+    if (!captured) return `Question ${primary} not found.`;
+    ctx.onQuestionClosed?.(captured);
+    let propagated = 0;
+    const siblings: string[] = Array.isArray(input.related_question_ids) ? input.related_question_ids : [];
+    for (const sibId of siblings) {
+      if (sibId === primary) continue;
+      const sibClosed = closeQuestion(db, String(sibId), answer);
+      if (sibClosed) {
+        ctx.onQuestionClosed?.(sibClosed);
+        propagated++;
+      }
+    }
+    const total = 1 + propagated;
+    return `User answered: ${answer}${total > 1 ? ` (applied to ${total} questions)` : ""}`;
+  }
+  return `Awaiting user input — cannot proceed in non-interactive mode.`;
+}
+
+async function closeQuestionTool(
+  db: Database.Database,
+  input: any,
+  ctx: AgentExecutionContext | undefined,
+): Promise<string> {
+  const { closeQuestion } = await import("../../db/queries/questions.js");
+  const primary = String(input.question_id ?? "");
+  const answer = String(input.answer ?? "");
+  if (!primary || !answer) return "close_question requires question_id and answer.";
+  const captured = closeQuestion(db, primary, answer);
+  if (!captured) return `Question ${primary} not found.`;
+  ctx?.onQuestionClosed?.(captured);
+  let count = 1;
+  const siblings: string[] = Array.isArray(input.related_question_ids) ? input.related_question_ids : [];
+  for (const sibId of siblings) {
+    if (sibId === primary) continue;
+    const sibClosed = closeQuestion(db, String(sibId), answer);
+    if (sibClosed) {
+      ctx?.onQuestionClosed?.(sibClosed);
+      count++;
+    }
+  }
+  return `Closed ${count} question${count === 1 ? "" : "s"}.`;
+}
+
+export const resolveIngestTools: ToolModule = {
+  DEFS: RESOLVE_DEFS,
+  LABELS: RESOLVE_LABELS,
+  execute: resolveIngestExecute,
 };

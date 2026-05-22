@@ -1,26 +1,26 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
-import { runScan } from "../../scanner/engine/scanEngine.js";
-import type { Chunk, ScanHooks, ScanState } from "../../scanner/engine/types.js";
-import type {
-  DashboardEvent,
-  ScanDashboardController,
-} from "../ink/scan_dashboard.js";
+import { runScan } from "../../scanner/engine.js";
+import type { Chunk, ScanState } from "../../scanner/engine.js";
+import type { ScanHooks } from "../../scanner/hooks.js";
+import type { ScanDashboardController } from "../ink/ScanDashboard.js";
 
 export interface ScanCommandOptions {
   regex?: string;
   force?: boolean;
   parallel?: number;
-  review?: boolean;
-  autoCommit?: boolean;
 }
 
 export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
-  if (opts.regex !== undefined) {
+  if (opts.regex) {
     try {
       new RegExp(opts.regex, "i");
-    } catch (err: any) {
-      console.error(chalk.red(`Invalid regex: ${err.message}`));
+    } catch (err: unknown) {
+      console.error(
+        chalk.red(
+          `Invalid regex: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
       process.exitCode = 1;
       return;
     }
@@ -28,7 +28,7 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
 
   const parallel = opts.parallel ?? 5;
   const isTTY = !!process.stdout.isTTY;
-  const hooks = isTTY ? await buildTtyHooks(parallel) : buildPlainHooks();
+  const hooks = isTTY ? await buildTtyHooks() : buildPlainHooks();
 
   const result = await runScan(
     getDb(),
@@ -37,8 +37,6 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
       force: opts.force,
       interactive: true,
       maxFileWorkers: parallel,
-      review: opts.review,
-      autoCommit: opts.autoCommit,
     },
     hooks,
   );
@@ -48,15 +46,16 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
 
 /* TTY mode — Ink dashboard with one in-place row per file. */
 
-async function buildTtyHooks(parallel: number): Promise<ScanHooks> {
+async function buildTtyHooks(): Promise<ScanHooks> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
-  const { ScanDashboard, ScanDashboardController } = await import("../ink/scan_dashboard.js");
+  const { ScanDashboard, createScanDashboardController } =
+    await import("../ink/ScanDashboard.js");
 
-  const controller: ScanDashboardController = new ScanDashboardController();
+  const controller: ScanDashboardController = createScanDashboardController();
   let inkInstance: { unmount: () => void } | null = null;
-  let unsubscribeBus: (() => void) | null = null;
-  const fileNameByChunkId = new Map<string, { fileId: string; fileName: string }>();
+  let unsubscribeProgress: (() => void) | null = null;
+  const chunkLookup = new Map<string, { fileId: string; pageNumber: number }>();
 
   return {
     afterDecrypt: (s) => {
@@ -65,42 +64,58 @@ async function buildTtyHooks(parallel: number): Promise<ScanHooks> {
         console.log(chalk.dim("No files to scan."));
         return;
       }
-      console.log(chalk.dim(`Decrypted ${s.decrypted.length}, skipped ${s.skipped.length}, failed ${s.failed.length}.`));
+      console.log(
+        chalk.dim(
+          `Decrypted ${s.decrypted.length}, skipped ${s.skipped.length}, failed ${s.failed.length}.`,
+        ),
+      );
     },
 
     afterChunk: (s) => {
       if (s.chunks.length === 0) return;
-      console.log(chalk.dim(`Chunked into ${s.chunks.length} page(s).`));
-      console.log("");
+      console.log(
+        chalk.dim(
+          `Chunked into ${s.chunks.length} page(s). Mounting dashboard…`,
+        ),
+      );
     },
 
     beforeParse: (s) => {
-      // chunkId → fileId lookup for translating bus events to dashboard events.
-      for (const c of s.chunks) fileNameByChunkId.set(c.chunkId, { fileId: c.fileId, fileName: c.fileName });
+      for (const c of s.chunks)
+        chunkLookup.set(c.chunkId, {
+          fileId: c.fileId,
+          pageNumber: c.pageNumber,
+        });
 
-      if (s.decrypted.length > 0) {
-        inkInstance = render(
-          createElement(ScanDashboard, {
-            controller,
-            totalFiles: s.decrypted.length,
-            parallel,
-          }),
-        );
-      }
+      if (s.decrypted.length === 0) return;
 
-      // Tick the per-file transaction counter as chunk agents call record_transactions.
-      unsubscribeBus = s.bus.subscribe(event => {
-        if (event.kind === "transaction_appended") {
-          const map = fileNameByChunkId.get(event.chunkId);
-          if (map) {
-            controller.publish({ type: "tx-appended", fileId: map.fileId } as DashboardEvent);
-          }
-        } else if (event.kind === "unknown_appended" && event.chunkId) {
-          const map = fileNameByChunkId.get(event.chunkId);
-          if (map) {
-            controller.publish({ type: "unknown-appended", fileId: map.fileId } as DashboardEvent);
-          }
-        }
+      process.stdout.write("\x1b[2J\x1b[H\x1b[?25l");
+
+      const files = s.decrypted.map((d) => ({
+        fileId: d.path,
+        fileName: d.fileName,
+        totalPages: s.chunks.filter((c) => c.fileId === d.path).length,
+      }));
+
+      inkInstance = render(
+        createElement(ScanDashboard, {
+          controller,
+          files,
+        }),
+        {
+          exitOnCtrlC: false,
+          patchConsole: false,
+        },
+      );
+
+      unsubscribeProgress = s.progress.subscribe((event) => {
+        const map = chunkLookup.get(event.chunkId);
+        if (!map) return;
+        controller.publish({
+          type: event.kind === "tx" ? "chunk-tx" : "chunk-question",
+          fileId: map.fileId,
+          pageNumber: map.pageNumber,
+        });
       });
     },
 
@@ -115,19 +130,29 @@ async function buildTtyHooks(parallel: number): Promise<ScanHooks> {
     },
 
     onWorkerEnd: (_id, chunk, ok) => {
-      controller.publish({ type: "chunk-end", fileId: chunk.fileId, ok });
+      controller.publish({
+        type: "chunk-end",
+        fileId: chunk.fileId,
+        pageNumber: chunk.pageNumber,
+        ok,
+      });
     },
 
     afterParse: () => {
-      unsubscribeBus?.();
-      unsubscribeBus = null;
-      // Ink preserves the final frame as static output on unmount, so the
-      // per-file rows stay visible while subsequent phases print below them.
-      inkInstance?.unmount();
-      inkInstance = null;
+      unsubscribeProgress?.();
+      unsubscribeProgress = null;
     },
 
-    beforeCommit: () => { console.log(chalk.dim("Committing...")); },
+    beforeResolve: () => {
+      controller.publish({ type: "phase-set", phase: "resolve" });
+    },
+
+    afterResolve: () => {
+      controller.publish({ type: "phase-set", phase: "done" });
+      inkInstance?.unmount();
+      inkInstance = null;
+      process.stdout.write("\x1b[?25h");
+    },
   };
 }
 
@@ -139,33 +164,47 @@ interface FileTally {
   completedChunks: number;
   failedChunks: number;
   txAdded: number;
-  unknownsAdded: number;
+  questionsAdded: number;
+}
+
+type FinalizeKind = "success" | "all-failed" | "partial";
+
+const FINALIZE_RULES: readonly {
+  when: (t: FileTally) => boolean;
+  kind: FinalizeKind;
+}[] = [
+  { when: (t) => t.failedChunks === 0, kind: "success" },
+  { when: (t) => t.failedChunks === t.totalChunks, kind: "all-failed" },
+  { when: () => true, kind: "partial" },
+];
+
+const FINALIZE_RENDER: Record<FinalizeKind, (t: FileTally) => string> = {
+  success: (t) =>
+    `  ${chalk.green("ok")} ${t.fileName} ${chalk.dim(
+      `${t.completedChunks} of ${t.totalChunks} pages · ${t.txAdded} transactions${t.questionsAdded > 0 ? `, ${t.questionsAdded} questions` : ""}`,
+    )}`,
+  "all-failed": (t) =>
+    `  ${chalk.red("fail")} ${t.fileName} ${chalk.dim("every chunk failed")}`,
+  partial: (t) =>
+    `  ${chalk.yellow("partial")} ${t.fileName} ${chalk.dim(
+      `${t.completedChunks} of ${t.totalChunks} pages · ${t.failedChunks} chunks failed · ${t.txAdded} transactions`,
+    )}`,
+};
+
+function classifyFinalize(t: FileTally): FinalizeKind {
+  for (const r of FINALIZE_RULES) if (r.when(t)) return r.kind;
+  return "partial";
 }
 
 function buildPlainHooks(): ScanHooks {
   const tallies = new Map<string, FileTally>();
   const fileIdByChunkId = new Map<string, string>();
-  let unsubscribeBus: (() => void) | null = null;
+  let unsubscribeProgress: (() => void) | null = null;
 
   const finalize = (fileId: string) => {
     const t = tallies.get(fileId);
-    if (!t) return;
-    if (t.completedChunks + t.failedChunks < t.totalChunks) return;
-    if (t.failedChunks === 0) {
-      console.log(
-        `  ${chalk.green("✓")} ${t.fileName} ${chalk.dim(
-          `${t.completedChunks} of ${t.totalChunks} pages · ${t.txAdded} transactions${t.unknownsAdded > 0 ? `, ${t.unknownsAdded} unknowns` : ""}`,
-        )}`,
-      );
-    } else if (t.failedChunks === t.totalChunks) {
-      console.log(`  ${chalk.red("✗")} ${t.fileName} ${chalk.dim(`every chunk failed`)}`);
-    } else {
-      console.log(
-        `  ${chalk.yellow("⚠")} ${t.fileName} ${chalk.dim(
-          `${t.completedChunks} of ${t.totalChunks} pages · ${t.failedChunks} chunks failed · ${t.txAdded} transactions`,
-        )}`,
-      );
-    }
+    if (!t || t.completedChunks + t.failedChunks < t.totalChunks) return;
+    console.log(FINALIZE_RENDER[classifyFinalize(t)](t));
   };
 
   return {
@@ -175,27 +214,25 @@ function buildPlainHooks(): ScanHooks {
         console.log("No files to scan.");
         return;
       }
-      console.log(`Decrypted ${s.decrypted.length}, skipped ${s.skipped.length}, failed ${s.failed.length}.`);
+      console.log(
+        `Decrypted ${s.decrypted.length}, skipped ${s.skipped.length}, failed ${s.failed.length}.`,
+      );
     },
 
     afterChunk: (s) => {
-      if (s.chunks.length > 0) console.log(`Chunked into ${s.chunks.length} page(s).`);
+      if (s.chunks.length > 0)
+        console.log(`Chunked into ${s.chunks.length} page(s).`);
     },
 
     beforeParse: (s) => {
       for (const c of s.chunks) fileIdByChunkId.set(c.chunkId, c.fileId);
-      unsubscribeBus = s.bus.subscribe(event => {
-        if (event.kind === "transaction_appended") {
-          const fileId = fileIdByChunkId.get(event.chunkId);
-          if (!fileId) return;
-          const t = tallies.get(fileId);
-          if (t) t.txAdded++;
-        } else if (event.kind === "unknown_appended" && event.chunkId) {
-          const fileId = fileIdByChunkId.get(event.chunkId);
-          if (!fileId) return;
-          const t = tallies.get(fileId);
-          if (t) t.unknownsAdded++;
-        }
+      unsubscribeProgress = s.progress.subscribe((event) => {
+        const fileId = fileIdByChunkId.get(event.chunkId);
+        if (!fileId) return;
+        const t = tallies.get(fileId);
+        if (!t) return;
+        if (event.kind === "tx") t.txAdded++;
+        else t.questionsAdded++;
       });
     },
 
@@ -207,7 +244,7 @@ function buildPlainHooks(): ScanHooks {
           completedChunks: 0,
           failedChunks: 0,
           txAdded: 0,
-          unknownsAdded: 0,
+          questionsAdded: 0,
         });
       }
     },
@@ -221,34 +258,72 @@ function buildPlainHooks(): ScanHooks {
     },
 
     afterParse: () => {
-      unsubscribeBus?.();
-      unsubscribeBus = null;
+      unsubscribeProgress?.();
+      unsubscribeProgress = null;
     },
 
-    beforeCommit: () => { console.log("Committing..."); },
+    beforeResolve: () => {
+      console.log("Resolving...");
+    },
   };
 }
 
 function renderSummary(state: Readonly<ScanState>): void {
   console.log("");
-  if (!state.committed) {
-    console.log(chalk.yellow(`Scan ${state.scanId} did not commit (review=${state.review ?? "?"}).`));
-    return;
-  }
-  const c = state.committed;
-  console.log(chalk.bold(
-    `Scanned ${state.decrypted.length} file(s) → ${c.transactions} transactions, ${c.unknowns} unknowns. scan_id=${state.scanId}`,
-  ));
-  if (Object.keys(state.auditApplied).length > 0) {
-    console.log(chalk.dim("Audit applied:"));
-    for (const [name, count] of Object.entries(state.auditApplied)) {
-      console.log(chalk.dim(`  · ${name}: ${count}`));
+  const txCount = countTransactions(state);
+  console.log(
+    chalk.bold(
+      `Scanned ${state.decrypted.length} file(s) → ${txCount} transactions.`,
+    ),
+  );
+
+  const r = state.resolveSummary;
+  if (r && r.total > 0) {
+    console.log(`Resolved ${r.resolved}/${r.total} questions.`);
+    if (r.remaining > 0) {
+      console.log(
+        chalk.yellow(
+          `${r.remaining} question(s) remain — run ${chalk.cyan("plasalid resolve")} to finish them.`,
+        ),
+      );
     }
   }
+
   if (state.errors.length > 0) {
     console.log(chalk.yellow(`${state.errors.length} phase error(s):`));
     for (const e of state.errors) {
-      console.log(chalk.dim(`  - [${e.phase}] ${e.target ?? ""} ${(e.error as Error)?.message ?? ""}`));
+      console.log(
+        chalk.dim(
+          `  - [${e.phase}] ${e.target ?? ""} ${(e.error as Error)?.message ?? ""}`,
+        ),
+      );
     }
   }
+
+  if (txCount > 0) {
+    console.log("");
+    console.log(
+      chalk.dim(
+        `Next: run ${chalk.cyan("plasalid")} to chat with your ledger about what just landed.`,
+      ),
+    );
+  }
+}
+
+/**
+ * Snapshot transaction count attributable to this scan. Reads from
+ * scanned_files via the file ids assigned in decryptPhase.
+ */
+function countTransactions(state: Readonly<ScanState>): number {
+  const ids = state.decrypted
+    .map((d) => d.scannedFileId)
+    .filter((s): s is string => !!s);
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transactions WHERE source_file_id IN (${placeholders})`,
+    )
+    .get(...ids) as { n: number };
+  return row.n;
 }

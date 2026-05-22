@@ -3,8 +3,9 @@ import type { ToolDefinition } from "../provider.js";
 import type { AgentExecutionContext, ToolModule, ToolProfile } from "./types.js";
 import { commonTools } from "./common.js";
 import { readTools } from "./read.js";
-import { accountIngestTools, scanUnknownTools } from "./ingest.js";
+import { accountIngestTools, scanQuestionTools, resolveIngestTools } from "./ingest.js";
 import { scanTools } from "./scan.js";
+import { resolveTools } from "./resolve.js";
 import { recordTools } from "./record.js";
 import { merchantTools } from "./merchants.js";
 
@@ -14,18 +15,11 @@ export type { AgentExecutionContext, ToolProfile } from "./types.js";
  * Profile composition. Each profile is the union of one or more tool modules;
  * the dispatcher iterates every module on each tool call so we never need a
  * central switch.
- *
- * `accountIngestTools` (create_account / update_account_metadata /
- * record_transaction) ships with scan, resolve, and record — they're the
- * shared write primitives. `scanUnknownTools` (note_unknown) is scan-only;
- * record uses `clarify` from `recordTools` for transient prompts, resolve uses
- * `ask_user` from `resolveIngestTools` for resolve-in-place clarifications.
- * `merchantTools` ships with scan, resolve, and record so any write profile can
- * upsert / look up / re-cache merchants alongside the posting flow.
  */
 const PROFILES: Record<ToolProfile, ToolModule[]> = {
-  scan:    [commonTools, accountIngestTools, scanUnknownTools, scanTools, merchantTools],
+  scan:    [commonTools, accountIngestTools, scanQuestionTools, scanTools, merchantTools],
   chat:    [commonTools, readTools],
+  resolve: [commonTools, readTools, accountIngestTools, resolveIngestTools, resolveTools, merchantTools],
   record:  [commonTools, readTools, accountIngestTools, recordTools, merchantTools],
 };
 
@@ -42,8 +36,10 @@ const MODULES = [
   commonTools,
   readTools,
   accountIngestTools,
-  scanUnknownTools,
+  scanQuestionTools,
+  resolveIngestTools,
   scanTools,
+  resolveTools,
   recordTools,
   merchantTools,
 ];
@@ -70,8 +66,10 @@ export const TOOL_LABELS: Record<string, string> = {
   ...commonTools.LABELS,
   ...readTools.LABELS,
   ...accountIngestTools.LABELS,
-  ...scanUnknownTools.LABELS,
+  ...scanQuestionTools.LABELS,
+  ...resolveIngestTools.LABELS,
   ...scanTools.LABELS,
+  ...resolveTools.LABELS,
   ...recordTools.LABELS,
   ...merchantTools.LABELS,
 };

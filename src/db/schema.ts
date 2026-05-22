@@ -1,6 +1,14 @@
 import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
+  // One-shot renames for existing local data. Run BEFORE the CREATE TABLE
+  // block so the legacy table/column names get carried forward under their
+  // new identity instead of having a fresh empty `questions` table created
+  // alongside the old `unknowns` table.
+  ensureTableRenamed(db, "unknowns", "questions");
+  ensureColumnRenamed(db, "accounts", "has_unknown", "has_question");
+  ensureColumnRenamed(db, "transactions", "has_unknown", "has_question");
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,
@@ -16,7 +24,7 @@ export function migrate(db: Database.Database): void {
       points_balance REAL,
       metadata_json TEXT,
       pii_flag INTEGER NOT NULL DEFAULT 0,
-      has_unknown INTEGER NOT NULL DEFAULT 0,
+      has_question INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -76,7 +84,7 @@ export function migrate(db: Database.Database): void {
       source_file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       source_page INTEGER,
       recurrence_id TEXT REFERENCES recurrences(id) ON DELETE SET NULL,
-      has_unknown INTEGER NOT NULL DEFAULT 0,
+      has_question INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -100,8 +108,9 @@ export function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS postings_transaction_idx ON postings(transaction_id);
     CREATE INDEX IF NOT EXISTS postings_account_idx ON postings(account_id);
 
-    CREATE TABLE IF NOT EXISTS unknowns (
+    CREATE TABLE IF NOT EXISTS questions (
       id TEXT PRIMARY KEY,
+      scan_id TEXT,
       file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       transaction_id TEXT REFERENCES transactions(id) ON DELETE CASCADE,
       account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
@@ -113,6 +122,8 @@ export function migrate(db: Database.Database): void {
       resolved_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE INDEX IF NOT EXISTS questions_scan_idx ON questions(scan_id);
 
     CREATE TABLE IF NOT EXISTS conversation_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,27 +152,10 @@ export function migrate(db: Database.Database): void {
       use_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-
-    CREATE TABLE IF NOT EXISTS action_log (
-      id TEXT PRIMARY KEY,
-      correlation_id TEXT NOT NULL,
-      command TEXT NOT NULL,
-      user_input TEXT,
-      action_type TEXT NOT NULL CHECK(action_type IN (
-        'create_account','update_account_metadata','record_transaction','adjust_balance',
-        'create_merchant','update_merchant_default'
-      )),
-      target_id TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      reverted_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS action_log_correlation_idx ON action_log(correlation_id);
-    CREATE INDEX IF NOT EXISTS action_log_created_idx ON action_log(created_at);
   `);
 
-  ensureColumn(db, "unknowns", "context_json", "TEXT");
+  ensureColumn(db, "questions", "context_json", "TEXT");
+  ensureColumn(db, "questions", "scan_id", "TEXT");
 }
 
 function ensureColumn(
@@ -173,4 +167,43 @@ function ensureColumn(
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (cols.some((c) => c.name === column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+/**
+ * Rename a table on existing databases. No-op when the source table is gone
+ * (already renamed or never existed). Safe to call before `CREATE TABLE IF
+ * NOT EXISTS` so old data is carried forward under the new name instead of
+ * sitting beside a fresh empty table.
+ */
+function ensureTableRenamed(
+  db: Database.Database,
+  oldName: string,
+  newName: string,
+): void {
+  const exists = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
+    .get(oldName);
+  if (!exists) return;
+  db.exec(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
+}
+
+/**
+ * Rename a column on existing databases. No-op when the source column is
+ * gone. Pairs with `ensureTableRenamed` for one-shot schema migrations.
+ */
+function ensureColumnRenamed(
+  db: Database.Database,
+  table: string,
+  oldCol: string,
+  newCol: string,
+): void {
+  const tableExists = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
+    .get(table);
+  if (!tableExists) return;
+  const cols = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as { name: string }[];
+  if (!cols.some((c) => c.name === oldCol)) return;
+  db.exec(`ALTER TABLE ${table} RENAME COLUMN ${oldCol} TO ${newCol}`);
 }

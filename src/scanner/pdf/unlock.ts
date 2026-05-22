@@ -1,8 +1,8 @@
 import type Database from "libsql";
 import inquirer from "inquirer";
 import { basename } from "path";
-import { config } from "../config.js";
-import { statusSpinner } from "../cli/ux.js";
+import { config } from "../../config.js";
+import { statusSpinner } from "../../cli/ux.js";
 import {
   findCandidates,
   savePassword,
@@ -149,30 +149,34 @@ async function promptForPassword(
   return String(password ?? "").trim();
 }
 
+type OutcomeHandler = {
+  [K in UnlockOutcome["kind"]]: (db: Database.Database, filePath: string, outcome: Extract<UnlockOutcome, { kind: K }>) => void;
+};
+
+const PERSIST: OutcomeHandler = {
+  plaintext: () => {},
+  "from-store": (db, _filePath, o) => { recordUse(db, o.storedId); },
+  "from-user": (db, filePath, o) => {
+    const pattern = suggestPattern(filePath);
+    const spinner = statusSpinner(`Saving password for pattern ${pattern}...`);
+    try {
+      savePassword(db, pattern, o.password, config.dbEncryptionKey);
+      spinner.succeed(`Saved password for pattern ${pattern} in secure vault.`);
+    } catch (err: unknown) {
+      spinner.fail(`Could not save password: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+  },
+};
+
 /**
- * After a successful unlock, persist the outcome:
- *   from-store  → bump usage counter on the stored password
- *   from-user   → save the new password under a filename-pattern key
- *   plaintext   → no-op
+ * After a successful unlock: bump usage on a stored hit, save a fresh user
+ * password under a filename-pattern key, or no-op for plaintext.
  */
 export function persistUnlockOutcome(
   db: Database.Database,
   filePath: string,
   outcome: UnlockOutcome,
 ): void {
-  if (outcome.kind === "from-store") {
-    recordUse(db, outcome.storedId);
-    return;
-  }
-  if (outcome.kind === "from-user") {
-    const pattern = suggestPattern(filePath);
-    const spinner = statusSpinner(`Saving password for pattern ${pattern}...`);
-    try {
-      savePassword(db, pattern, outcome.password, config.dbEncryptionKey);
-      spinner.succeed(`Saved password for pattern ${pattern} in secure vault.`);
-    } catch (err: any) {
-      spinner.fail(`Could not save password: ${err.message}`);
-      throw err;
-    }
-  }
+  (PERSIST[outcome.kind] as (db: Database.Database, filePath: string, o: UnlockOutcome) => void)(db, filePath, outcome);
 }

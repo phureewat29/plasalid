@@ -8,7 +8,6 @@ import {
   findAccountById,
 } from "../../db/queries/account-balance.js";
 import { recordTransaction } from "../../db/queries/transactions.js";
-import { listActions } from "../../db/queries/action-log.js";
 import type { AgentExecutionContext } from "./types.js";
 
 function freshDb() {
@@ -20,9 +19,6 @@ function freshDb() {
 
 function ctx(overrides: Partial<AgentExecutionContext> = {}): AgentExecutionContext {
   return {
-    command: "record",
-    correlationId: "cr:test",
-    userInput: "test",
     interactive: false,
     ...overrides,
   };
@@ -67,20 +63,10 @@ describe("adjust_account_balance", () => {
       account_id: "asset:diem",
       target_balance: 180000,
       reason: "Market depreciation",
-    }, ctx({ correlationId: "cr:neg" }));
+    }, ctx());
 
     const balances = getAccountBalances(db);
     expect(balances.find(b => b.id === "asset:diem")!.balance).toBe(180000);
-
-    const actions = listActions(db, { correlationId: "cr:neg" });
-    const adjust = actions.find(a => a.action_type === "adjust_balance")!;
-    const payload = JSON.parse(adjust.payload_json);
-    const assetPosting = payload.postings.find((p: any) => p.account_id === "asset:diem");
-    const equityPosting = payload.postings.find((p: any) => p.account_id === "equity:adjustments");
-    expect(assetPosting.credit).toBeGreaterThan(0);
-    expect(assetPosting.debit ?? 0).toBe(0);
-    expect(equityPosting.debit).toBeGreaterThan(0);
-    expect(equityPosting.credit ?? 0).toBe(0);
   });
 
   it("uses the account's currency on a non-THB adjustment", async () => {
@@ -89,13 +75,11 @@ describe("adjust_account_balance", () => {
       account_id: "asset:diem-usd",
       target_balance: 500,
       reason: "Seed USD",
-    }, ctx({ correlationId: "cr:usd" }));
+    }, ctx());
 
-    const actions = listActions(db, { correlationId: "cr:usd" });
-    const adjust = actions.find(a => a.action_type === "adjust_balance")!;
-    const payload = JSON.parse(adjust.payload_json);
-    for (const posting of payload.postings) {
-      expect(posting.currency).toBe("USD");
+    const postings = db.prepare(`SELECT currency FROM postings`).all() as { currency: string }[];
+    for (const p of postings) {
+      expect(p.currency).toBe("USD");
     }
   });
 
@@ -115,30 +99,15 @@ describe("adjust_account_balance", () => {
       target_balance: 100,
       reason: "Seed",
     }, ctx());
-    const before = listActions(db).length;
+    const before = db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get() as { n: number };
     const result = await recordTools.execute(db, "adjust_account_balance", {
       account_id: "asset:diem",
       target_balance: 100,
       reason: "Same again",
     }, ctx());
     expect(result).toMatch(/already at/);
-    expect(listActions(db).length).toBe(before);
-  });
-
-  it("writes an action_log row with action_type=adjust_balance", async () => {
-    await recordTools.execute(db, "adjust_account_balance", {
-      account_id: "asset:diem",
-      target_balance: 500000,
-      reason: "Seed",
-    }, ctx({ correlationId: "cr:adj" }));
-    const actions = listActions(db, { correlationId: "cr:adj" });
-    const adjust = actions.find(a => a.action_type === "adjust_balance");
-    expect(adjust).toBeTruthy();
-    expect(adjust!.target_id).toMatch(/^tx:/);
-    const payload = JSON.parse(adjust!.payload_json);
-    expect(payload.account_id).toBe("asset:diem");
-    expect(payload.before_balance).toBe(0);
-    expect(payload.after_balance).toBe(500000);
+    const after = db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get() as { n: number };
+    expect(after.n).toBe(before.n);
   });
 
   it("auto-creates equity:adjustments only once across multiple adjustments", async () => {
@@ -146,16 +115,14 @@ describe("adjust_account_balance", () => {
       account_id: "asset:diem",
       target_balance: 100,
       reason: "First",
-    }, ctx({ correlationId: "cr:1" }));
+    }, ctx());
     await recordTools.execute(db, "adjust_account_balance", {
       account_id: "liability:mortgage",
       target_balance: 200,
       reason: "Second",
-    }, ctx({ correlationId: "cr:2" }));
+    }, ctx());
 
     expect(findAccountById(db, "equity:adjustments")).toBeTruthy();
-    const creates = listActions(db).filter(a => a.action_type === "create_account" && a.target_id === "equity:adjustments");
-    expect(creates).toHaveLength(1);
   });
 });
 

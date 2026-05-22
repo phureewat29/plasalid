@@ -1,8 +1,9 @@
 import type Database from "libsql";
 import type { ToolDefinition } from "../provider.js";
-import type { SharedBuffer } from "../../scanner/buffer/sharedBuffer.js";
+import type { ScanProgress } from "../../scanner/progress.js";
+import type { ClosedQuestion } from "../../db/queries/questions.js";
 
-export type ToolProfile = "scan" | "chat" | "record";
+export type ToolProfile = "scan" | "chat" | "record" | "resolve";
 
 /**
  * Structured highlights an interactive agent can pass to ask_user. The prompter
@@ -26,22 +27,14 @@ export interface AgentExecutionContext {
   promptUser?: (prompt: string, options?: string[], facts?: PromptUserFacts) => Promise<string>;
   /** Called when the model declares the session is done (scan or record). */
   onComplete?: (summary: string) => void;
-  /**
-   * Which top-level command this agent serves. Mutating tools branch on this
-   * to decide whether to append an action_log row (currently only "record").
-   */
-  command?: "scan" | "record";
-  /** Per-invocation id grouping every action_log row from one CLI run. */
-  correlationId?: string;
-  /** The raw user utterance / file path that started this invocation. */
-  userInput?: string;
-  /**
-   * Scan-only: the shared buffer every chunk worker writes to. Transactions
-   * and unknowns queue here and the auditor consumes them in flight.
-   */
-  buffer?: SharedBuffer;
+  /** Scan-only: tag questions inserted during this scan run. */
+  scanId?: string;
+  /** Scan-only: per-chunk progress sink for dashboard ticks. */
+  progress?: ScanProgress;
   /** Scan-only: the chunk this agent invocation is processing. */
   chunkId?: string;
+  /** Resolve-only: notified for each closed question so the caller can synthesize memory rules. */
+  onQuestionClosed?: (closed: ClosedQuestion) => void;
 }
 
 /**

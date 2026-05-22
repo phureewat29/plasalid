@@ -93,7 +93,7 @@ export function buildScanSystemPrompt(
     `## File context\nFile: ${opts.fileName}`,
     `## Taxonomy hints\n${getThaiTaxonomyHint()}`,
     renderMemories(db, {
-      header: "Rules you've already learned (apply silently before raising an unknown)",
+      header: "Rules you've already learned (apply silently before raising a question)",
       filterCategories: ["scanning_hint", "general"],
       showCategory: false,
     }),

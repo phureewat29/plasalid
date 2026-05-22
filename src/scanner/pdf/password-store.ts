@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 import { basename } from "path";
-import { encryptSecret, decryptSecret } from "../db/encryption.js";
+import { encryptSecret, decryptSecret } from "../../db/encryption.js";
 
 export interface StoredPassword {
   id: string;

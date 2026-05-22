@@ -3,12 +3,15 @@ import { config } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
+  buildResolveSystemPrompt,
   buildRecordSystemPrompt,
   type ScanPromptOptions,
+  type ResolvePromptOptions,
   type RecordPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
 import { getConversationHistory, saveMessage } from "./memory.js";
+import { recordQuestion } from "../db/queries/questions.js";
 import { redact, unredact } from "./redactor.js";
 import { createProvider } from "./providers/index.js";
 import {
@@ -124,6 +127,7 @@ async function runAgent({
 }
 
 const SCAN_MAX_TOOL_STEPS = 100;
+const RESOLVE_MAX_TOOL_STEPS = 60;
 
 /**
  * Conversational chat used by the Ink TUI. Reuses conversation_history for context
@@ -188,7 +192,8 @@ export async function handleChatMessage(
 /**
  * Scan-time agent loop. Caller supplies the initial user message (which carries
  * the PDF as a content block) and a AgentExecutionContext that scopes the file
- * id, scanner version, and interactivity for ask_user.
+ * id, scanId, and progress sink. A truncated run records a scan_truncated
+ * question so resolve can surface it later.
  */
 export async function runScanAgent(opts: {
   db: Database.Database;
@@ -209,22 +214,25 @@ export async function runScanAgent(opts: {
     signal: opts.signal,
     maxToolSteps: SCAN_MAX_TOOL_STEPS,
   });
-  if (truncated && opts.agentCtx.buffer) {
-    await opts.agentCtx.buffer.appendUnknown({
-      chunkId: opts.agentCtx.chunkId ?? null,
+  if (truncated) {
+    recordQuestion(opts.db, {
+      file_id: opts.agentCtx.fileId ?? null,
+      scan_id: opts.agentCtx.scanId ?? null,
       transaction_id: null,
       account_id: null,
       kind: "scan_truncated",
       prompt: `Scan stopped at the tool-step cap (${SCAN_MAX_TOOL_STEPS}) before the agent finished parsing this chunk. Some transactions may be missing. Split the PDF further or raise the cap.`,
     });
+    if (opts.agentCtx.progress && opts.agentCtx.chunkId) {
+      opts.agentCtx.progress.emit({ chunkId: opts.agentCtx.chunkId, kind: "question" });
+    }
   }
   return text;
 }
 
 /**
  * Record-time agent loop. Takes one natural-language utterance and walks the
- * record tool profile (read tools + account/entry writers + adjust_balance +
- * clarify). Single-shot — does not persist conversation history.
+ * record tool profile. Single-shot — does not persist conversation history.
  */
 export async function runRecordAgent(opts: {
   db: Database.Database;
@@ -248,3 +256,29 @@ export async function runRecordAgent(opts: {
   return text;
 }
 
+/**
+ * Resolve-time agent loop. Driven by RESOLVE_PERSONA. Surveys every open
+ * question, applies memory/heuristic resolutions silently, groups whatever
+ * remains and asks the user once per group via ask_user.
+ */
+export async function runResolveAgent(opts: {
+  db: Database.Database;
+  initialMessages: NormalizedMessage[];
+  prompt: ResolvePromptOptions;
+  agentCtx: AgentExecutionContext;
+  onProgress?: ProgressCallback;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const systemPrompt = redact(buildResolveSystemPrompt(opts.db, opts.prompt));
+  const { text } = await runAgent({
+    db: opts.db,
+    systemPrompt,
+    tools: getToolDefinitions("resolve"),
+    initialMessages: opts.initialMessages,
+    agentCtx: opts.agentCtx,
+    onProgress: opts.onProgress,
+    signal: opts.signal,
+    maxToolSteps: RESOLVE_MAX_TOOL_STEPS,
+  });
+  return text;
+}

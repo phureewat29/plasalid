@@ -5,7 +5,6 @@ import {
   findMerchantById,
   setMerchantDefaultAccount,
 } from "../../db/queries/merchants.js";
-import { appendAction } from "../../db/queries/action-log.js";
 import { sanitizeForPrompt } from "../sanitize.js";
 import type {
   AgentExecutionContext,
@@ -89,31 +88,15 @@ async function execute(
   db: Database.Database,
   name: string,
   input: any,
-  ctx: AgentExecutionContext | undefined,
+  _ctx: AgentExecutionContext | undefined,
 ): Promise<string | undefined> {
   switch (name) {
     case "find_or_create_merchant": {
-      const existing = db
-        .prepare(`SELECT id FROM merchants WHERE canonical_name = ?`)
-        .get(input.canonical_name) as { id: string } | undefined;
       const merchant = upsertMerchant(db, {
         canonical_name: input.canonical_name,
         alias: input.alias,
         default_account_id: input.default_account_id,
       });
-      if (ctx?.correlationId && !existing) {
-        appendAction(db, {
-          correlation_id: ctx.correlationId,
-          command: ctx.command ?? "record",
-          user_input: ctx.userInput ?? null,
-          action_type: "create_merchant",
-          target_id: merchant.id,
-          payload: {
-            canonical_name: merchant.canonical_name,
-            default_account_id: merchant.default_account_id,
-          },
-        });
-      }
       const defaultStr = merchant.default_account_id
         ? ` (default → ${merchant.default_account_id})`
         : "";
@@ -139,16 +122,6 @@ async function execute(
           input.merchant_id,
           input.account_id,
         );
-        if (ctx?.correlationId) {
-          appendAction(db, {
-            correlation_id: ctx.correlationId,
-            command: ctx.command ?? "record",
-            user_input: ctx.userInput ?? null,
-            action_type: "update_merchant_default",
-            target_id: input.merchant_id,
-            payload: { before: result.before, after: result.after },
-          });
-        }
         return `Merchant ${input.merchant_id}: default ${result.before ?? "(none)"} → ${result.after}.`;
       } catch (err: any) {
         return `Could not set merchant default: ${err.message}`;

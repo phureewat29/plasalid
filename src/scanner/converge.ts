@@ -1,14 +1,13 @@
 /**
- * Generic "drive a loop with named hooks" helper.
+ * Drive a stateful loop toward convergence: keep running passes until the
+ * caller's `isDone` predicate is true (success), `isStalled` returns true
+ * across two passes (stall), or `maxAttempts` is exhausted (fail).
  *
  * The driver owns counting passes, stall detection, and the iteration cap.
- * Everything else (work performed each pass, what to print when, how to react
- * to stall vs success vs failure) lives in the hooks the caller supplies.
- *
- * The state `S` is whatever quantity decides "are we done?" — typically a
- * remaining-work count, but it can be any value you can compare.
+ * Everything else (work per pass, callbacks per terminal state) lives in the
+ * hooks the caller supplies. `S` is whatever quantity decides "are we done?".
  */
-export interface RunPassesOpts<S> {
+export interface ConvergeOpts<S> {
   /** Initial state (e.g. `countOpenUnknowns(db)`). */
   initial: S;
   /** Maximum number of passes before declaring failure. Must be >= 1. */
@@ -28,7 +27,7 @@ export interface RunPassesOpts<S> {
   onFail?: (state: S) => void;
 }
 
-export async function runPasses<S>(opts: RunPassesOpts<S>): Promise<S> {
+export async function converge<S>(opts: ConvergeOpts<S>): Promise<S> {
   let state = opts.initial;
   let prev = state;
   opts.onStart?.(state);

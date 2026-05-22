@@ -5,7 +5,7 @@ import { getNetWorth } from "../../db/queries/account-balance.js";
 import { countTransactions } from "../../db/queries/transactions.js";
 import { getRecurringSummary } from "../../db/queries/recurrences.js";
 import { countScannedFiles } from "../../db/queries/files.js";
-import { countOpenUnknowns } from "../../db/queries/unknowns.js";
+import { countOpenQuestions } from "../../db/queries/questions.js";
 import { countMemories } from "../../ai/memory.js";
 import { formatAmount } from "../../currency.js";
 import { visibleLength } from "../format.js";

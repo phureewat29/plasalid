@@ -171,14 +171,12 @@ program
   });
 
 program
-  .command("revert <regex>")
-  .description(
-    "Delete scanned files matching <regex> and all their transactions",
-  )
-  .action(async (regex) => {
+  .command("resolve")
+  .description("Resolve every open unknown across the ledger")
+  .action(async () => {
     ensureConfigured();
-    const { runRevertCommand } = await import("./commands/revert.js");
-    await runRevertCommand(regex);
+    const { runResolveCommand } = await import("./commands/resolve.js");
+    await runResolveCommand();
   });
 
 program.configureHelp({
@@ -215,8 +213,8 @@ program.configureHelp({
         desc: "Delete learned rules whose ids match <regex> (anchored)",
       },
       {
-        name: "revert",
-        desc: "Delete scanned files matching <regex> and their transactions",
+        name: "resolve",
+        desc: "Resolve every open unknown across the ledger",
       },
     ]),
 });

@@ -12,7 +12,6 @@ import {
   insertTransactionRows,
   type TransactionInput,
 } from "../../db/queries/transactions.js";
-import { appendAction } from "../../db/queries/action-log.js";
 import { formatAmount } from "../../currency.js";
 import { sanitizeForPrompt } from "../sanitize.js";
 import type {
@@ -31,9 +30,7 @@ function todayIso(): string {
  * Record-only tool definitions
  *
  * `find_similar_accounts` and `clarify` are reads / prompts; `adjust_account_balance`,
- * `rename_account`, and `delete_account` mutate the DB. Of those, only
- * `adjust_account_balance` writes an action_log row (with `action_type='adjust_balance'`);
- * rename and delete are simple shape changes without an audit entry.
+ * `rename_account`, and `delete_account` mutate the DB.
  */
 
 const DEFS: ToolDefinition[] = [
@@ -109,7 +106,7 @@ const DEFS: ToolDefinition[] = [
   {
     name: "clarify",
     description:
-      "Ask the user a clarifying question and return their answer as a string. Use when the utterance is ambiguous (multiple matching accounts, missing amount, unclear date, can't tell expense vs transfer, plan confirmation before a multi-step action). Unlike resolve's ask_user, this does NOT write to the unknowns table — record-time questions are transient.",
+      "Ask the user a clarifying question and return their answer as a string. Use when the utterance is ambiguous (multiple matching accounts, missing amount, unclear date, can't tell expense vs transfer, plan confirmation before a multi-step action). Unlike resolve's ask_user, this does NOT write to the questions table — record-time questions are transient.",
     input_schema: {
       type: "object",
       properties: {
@@ -264,40 +261,10 @@ async function adjustAccountBalance(
 
   try {
     const tx = db.transaction((): void => {
-      const equityExisted = !!findAccountById(db, EQUITY_ADJUST_ID);
-      if (!equityExisted) {
+      if (!findAccountById(db, EQUITY_ADJUST_ID)) {
         ensureStructuralAccount(db, "equity:adjustments");
-        if (ctx.correlationId) {
-          appendAction(db, {
-            correlation_id: ctx.correlationId,
-            command: ctx.command ?? "record",
-            user_input: ctx.userInput ?? null,
-            action_type: "create_account",
-            target_id: EQUITY_ADJUST_ID,
-            payload: { row: findAccountById(db, EQUITY_ADJUST_ID) },
-          });
-        }
       }
       insertTransactionRows(db, validated);
-      if (ctx.correlationId) {
-        appendAction(db, {
-          correlation_id: ctx.correlationId,
-          command: ctx.command ?? "record",
-          user_input: ctx.userInput ?? null,
-          action_type: "adjust_balance",
-          target_id: validated.id,
-          payload: {
-            account_id: account.id,
-            before_balance: current,
-            after_balance: target,
-            transaction: {
-              date: validated.date,
-              description: validated.description,
-            },
-            postings: validated.postings,
-          },
-        });
-      }
     });
     tx();
   } catch (err: any) {

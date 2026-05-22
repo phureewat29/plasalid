@@ -76,8 +76,8 @@ export function forgetRules(
   let re: RegExp;
   try {
     re = new RegExp(`^${pattern}$`);
-  } catch (err: any) {
-    return { ok: false, error: `Invalid regex /${pattern}/: ${err.message}` };
+  } catch (err: unknown) {
+    return { ok: false, error: `Invalid regex /${pattern}/: ${err instanceof Error ? err.message : String(err)}` };
   }
   const snapshot = collectRules(db);
   const hits = snapshot.filter((r) => re.test(r.displayId));

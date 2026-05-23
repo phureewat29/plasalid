@@ -32,14 +32,7 @@ function formatSummary(summary: ClarifySummary): string {
   if (summary.total === 0) {
     return chalk.dim("No questions.");
   }
-  const tally = Object.entries(summary.tally)
-    .map(([k, v]) => `${k}×${v}`)
-    .join(", ");
-  const lines = [
-    chalk.bold(
-      `Clarified ${summary.clarified}/${summary.total} questions${tally ? ` (${tally})` : ""}.`,
-    ),
-  ];
+  const lines = [chalk.bold(`Clarified ${summary.clarified}/${summary.total} questions.`)];
   if (summary.remaining > 0) {
     lines.push(chalk.yellow(`${summary.remaining} question(s) remain.`));
   }

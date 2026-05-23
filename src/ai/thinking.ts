@@ -28,7 +28,7 @@ const THINKING_PHRASES = [
   "Doing math, the slow kind...",
   "Computing... probably correctly...",
   "Pondering quietly...",
-  "Joining the dots...",
+  "Connecting the dots...",
   "Making sense of it...",
   "Sharpening the pencil...",
   "Catching up on the details...",

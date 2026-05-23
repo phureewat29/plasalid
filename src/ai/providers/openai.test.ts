@@ -9,7 +9,7 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { createOpenAICompatibleProvider } from "./openai.js";
+import { createOpenAIProvider } from "./openai.js";
 import { ApiAuthError, ApiError, RateLimitError } from "../errors.js";
 
 const baseParams = {
@@ -33,19 +33,20 @@ class HttpError extends Error {
   }
 }
 
-describe("OpenAICompatibleProvider", () => {
+describe("OpenAIProvider", () => {
   beforeEach(() => {
     mockCreate.mockReset();
   });
 
-  it("has correct name", () => {
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
-    expect(p.name).toBe("openai-compatible");
+  it("identifies itself and accepts native documents", () => {
+    const p = createOpenAIProvider({ apiKey: "k" });
+    expect(p.name).toBe("openai");
+    expect(p.acceptsDocuments).toBe(true);
   });
 
   it("normalizes a text response", async () => {
     mockCreate.mockResolvedValueOnce(textCompletion("Hi there"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     const res = await p.sendMessage(baseParams);
     expect(res.content).toEqual([{ type: "text", text: "Hi there" }]);
     expect(res.stopReason).toBe("end_turn");
@@ -70,7 +71,7 @@ describe("OpenAICompatibleProvider", () => {
       ],
       usage: { prompt_tokens: 20, completion_tokens: 8 },
     });
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     const res = await p.sendMessage(baseParams);
     expect(res.content).toEqual([
       { type: "text", text: "let me check" },
@@ -83,7 +84,7 @@ describe("OpenAICompatibleProvider", () => {
     mockCreate
       .mockRejectedValueOnce(new HttpError(400, "Unsupported parameter: 'max_tokens'"))
       .mockResolvedValueOnce(textCompletion("ok"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     const res = await p.sendMessage(baseParams);
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -98,35 +99,116 @@ describe("OpenAICompatibleProvider", () => {
 
   it("does not retry on a 400 that names a different parameter", async () => {
     mockCreate.mockRejectedValueOnce(new HttpError(400, "Invalid value for temperature"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     await expect(p.sendMessage(baseParams)).rejects.toBeInstanceOf(ApiError);
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
   it("classifies 401 as ApiAuthError", async () => {
     mockCreate.mockRejectedValueOnce(new HttpError(401, "Invalid API key"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     await expect(p.sendMessage(baseParams)).rejects.toBeInstanceOf(ApiAuthError);
   });
 
   it("classifies 429 as RateLimitError", async () => {
     mockCreate.mockRejectedValueOnce(new HttpError(429, "Too many requests"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     await expect(p.sendMessage(baseParams)).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it("classifies an unknown error as ApiError", async () => {
     mockCreate.mockRejectedValueOnce(new HttpError(500, "Internal server error"));
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     await expect(p.sendMessage(baseParams)).rejects.toBeInstanceOf(ApiError);
   });
 
   it("handles an empty choices array", async () => {
     mockCreate.mockResolvedValueOnce({ choices: [], usage: undefined });
-    const p = createOpenAICompatibleProvider({ apiKey: "k", baseURL: "http://x" });
+    const p = createOpenAIProvider({ apiKey: "k" });
     const res = await p.sendMessage(baseParams);
     expect(res.content).toEqual([]);
     expect(res.stopReason).toBe("end_turn");
     expect(res.usage).toBeUndefined();
+  });
+
+  it("forwards a DocumentBlock as an OpenAI file content part", async () => {
+    mockCreate.mockResolvedValueOnce(textCompletion("ok"));
+    const p = createOpenAIProvider({ apiKey: "k" });
+    await p.sendMessage({
+      ...baseParams,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: "QkFTRTY0" },
+              title: "statement.pdf",
+            },
+            { type: "text", text: "Parse this page." },
+          ],
+        },
+      ],
+    });
+
+    const sent = mockCreate.mock.calls[0][0];
+    const userMsg = sent.messages.find((m: { role: string }) => m.role === "user");
+    expect(Array.isArray(userMsg.content)).toBe(true);
+    expect(userMsg.content).toEqual([
+      {
+        type: "file",
+        file: {
+          filename: "statement.pdf",
+          file_data: "data:application/pdf;base64,QkFTRTY0",
+        },
+      },
+      { type: "text", text: "Parse this page." },
+    ]);
+  });
+
+  it("keeps user content as a plain string when there is no attachment", async () => {
+    mockCreate.mockResolvedValueOnce(textCompletion("ok"));
+    const p = createOpenAIProvider({ apiKey: "k" });
+    await p.sendMessage({
+      ...baseParams,
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    });
+
+    const sent = mockCreate.mock.calls[0][0];
+    const userMsg = sent.messages.find((m: { role: string }) => m.role === "user");
+    expect(userMsg.content).toBe("hello");
+  });
+
+  it("maps finish_reason=length to stopReason=max_tokens", async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ finish_reason: "length", message: { content: "partial output" } }],
+      usage: { prompt_tokens: 10, completion_tokens: 4096 },
+    });
+    const p = createOpenAIProvider({ apiKey: "k" });
+    const res = await p.sendMessage(baseParams);
+    expect(res.stopReason).toBe("max_tokens");
+  });
+
+  it("throws when a tool_call's arguments are not valid JSON", async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          finish_reason: "length",
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                type: "function",
+                id: "call_x",
+                function: { name: "record_transactions", arguments: '{"rows":[{"date":"2025-' },
+              },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 4096 },
+    });
+    const p = createOpenAIProvider({ apiKey: "k" });
+    await expect(p.sendMessage(baseParams)).rejects.toThrow(/record_transactions/);
   });
 });

@@ -13,6 +13,12 @@ export interface ToolUseBlock {
   id: string;
   name: string;
   input: any;
+  /**
+   * Opaque, vendor-specific signature that some providers (Gemini 2.5+) attach
+   * to function-call parts and require us to echo back on the next turn.
+   * Anthropic and OpenAI ignore it.
+   */
+  thoughtSignature?: string;
 }
 
 export interface DocumentBlock {
@@ -25,7 +31,16 @@ export interface DocumentBlock {
   title?: string;
 }
 
-export type NormalizedContentBlock = TextBlock | ToolUseBlock | DocumentBlock;
+export interface ImageBlock {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: "image/png" | "image/jpeg";
+    data: string;
+  };
+}
+
+export type NormalizedContentBlock = TextBlock | ToolUseBlock | DocumentBlock | ImageBlock;
 
 export interface NormalizedResponse {
   content: NormalizedContentBlock[];
@@ -68,5 +83,11 @@ export interface SendMessageParams {
 export interface Provider {
   name: string;
   supportsThinking: boolean;
+  /**
+   * True for providers that accept PDF document blocks natively. False for
+   * plain OpenAI-compat endpoints — the scanner rasterizes pages to PNG for
+   * those and ships `image_url` parts instead.
+   */
+  acceptsDocuments: boolean;
   sendMessage(params: SendMessageParams): Promise<NormalizedResponse>;
 }

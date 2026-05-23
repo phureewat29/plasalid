@@ -47,7 +47,7 @@ We also built strict boundaries around your privacy. The database is encrypted l
 
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database. There are no cloud aggregators or upstream accounts. No third party ever touches your data.
 * **PII redacted by default.** Your name, phone numbers, and full account details are completely scrubbed before any prompt leaves your hardware.
-* **Bring your own AI.** Choose Anthropic or any OpenAI-compatible local model during setup. If you run a local model, your setup stays 100% private and offline.
+* **Bring your own AI.** Choose Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible local model during setup. If you run a local model, your setup stays 100% private and offline.
 * **A harness layer for AI agents.** The structured ledger acts as your baseline data layer. It is designed to be open and ready for any external tools you want to plug in.
 
 
@@ -144,11 +144,27 @@ Plasalid stores everything in `~/.plasalid/`:
 ### Environment Variables
 
 ```bash
-ANTHROPIC_API_KEY=            # Anthropic API key (required when provider is anthropic)
-PLASALID_MODEL=               # Model name; default for Anthropic: claude-sonnet-4-6
-PLASALID_PROVIDER=            # anthropic | openai-compatible. default: anthropic
-OPENAI_COMPATIBLE_BASE_URL=   # e.g. http://localhost:11434/v1 (ollama)
-OPENAI_COMPATIBLE_API_KEY=    # API key for the OpenAI-compatible server (often unused)
+# Provider selection
+PLASALID_PROVIDER=            # anthropic | openai | gemini | openai-compat (default: anthropic)
+
+# Anthropic
+ANTHROPIC_API_KEY=            # required when provider is anthropic
+ANTHROPIC_MODEL=              # default: claude-sonnet-4-6
+
+# OpenAI
+OPENAI_API_KEY=               # required when provider is openai
+OPENAI_MODEL=                 # default: gpt-5.4-mini
+
+# Google Gemini
+GEMINI_API_KEY=               # required when provider is gemini
+GEMINI_MODEL=                 # default: gemini-3.5-flash
+
+# OpenAI-compatible (LM Studio, Ollama, vLLM, etc.)
+OPENAI_COMPAT_BASE_URL=       # e.g. http://localhost:1234/v1
+OPENAI_COMPAT_API_KEY=        # often blank for local servers
+OPENAI_COMPAT_MODEL=          # e.g. qwen/qwen3-vl-7b
+
+# Storage
 PLASALID_DB_ENCRYPTION_KEY=   # DB encryption passphrase
 PLASALID_DB_PATH=             # Default: ~/.plasalid/db.sqlite
 PLASALID_DATA_DIR=            # Default: ~/.plasalid/data

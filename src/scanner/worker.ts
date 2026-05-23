@@ -1,8 +1,9 @@
 import { randomUUID } from "crypto";
 import type Database from "libsql";
 import { runScanAgent } from "../ai/agent.js";
+import { getProvider } from "../ai/providers/index.js";
 import { recordQuestion } from "../db/queries/questions.js";
-import { buildDocumentBlock } from "./pdf/pdf.js";
+import { buildScanAttachment } from "./pdf/pdf.js";
 import { tryExecute } from "./result.js";
 import type { Chunk } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
@@ -27,13 +28,14 @@ export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Pro
   const workerId = `cw:${randomUUID()}`;
   hooks.onWorkerStart?.(workerId, deps.chunk);
 
+  const attachment = await buildScanAttachment(deps.chunk, getProvider());
   const outcome = await tryExecute(() => runScanAgent({
     db: deps.db,
     initialMessages: [
       {
         role: "user",
         content: [
-          buildDocumentBlock(deps.chunk.bytes, deps.chunk.fileName, deps.chunk.mime),
+          attachment,
           { type: "text", text: buildChunkPrompt(deps.chunk) },
         ],
       },

@@ -3,7 +3,12 @@ import { getDb } from "../../db/connection.js";
 import { runScan } from "../../scanner/engine.js";
 import type { Chunk, ScanState } from "../../scanner/engine.js";
 import type { ScanHooks } from "../../scanner/hooks.js";
-import type { ScanDashboardController } from "../ink/ScanDashboard.js";
+import { getActiveModel } from "../../config.js";
+import { getProvider } from "../../ai/providers/index.js";
+import type {
+  AttachmentInfo,
+  ScanDashboardController,
+} from "../ink/ScanDashboard.js";
 
 export interface ScanCommandOptions {
   regex?: string;
@@ -97,10 +102,18 @@ async function buildTtyHooks(): Promise<ScanHooks> {
         totalPages: s.chunks.filter((c) => c.fileId === d.path).length,
       }));
 
+      const provider = getProvider();
+      const attachment: AttachmentInfo = {
+        format: provider.acceptsDocuments ? "pdf" : "png",
+        providerName: provider.name,
+        modelName: getActiveModel(),
+      };
+
       inkInstance = render(
         createElement(ScanDashboard, {
           controller,
           files,
+          attachment,
         }),
         {
           exitOnCtrlC: false,

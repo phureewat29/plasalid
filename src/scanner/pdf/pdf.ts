@@ -1,7 +1,9 @@
 import { readFileSync, statSync } from "fs";
 import { createHash } from "crypto";
 import { basename, extname } from "path";
-import type { DocumentBlock } from "../../ai/provider.js";
+import type { DocumentBlock, ImageBlock, Provider } from "../../ai/provider.js";
+import type { Chunk } from "../engine.js";
+import { rasterizePage } from "./rasterize.js";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -38,11 +40,24 @@ export function readPdf(path: string): LoadedFile {
   return { bytes, hash, mime, fileName: basename(path) };
 }
 
-/** Build an Anthropic-compatible document content block from PDF bytes. */
 export function buildDocumentBlock(bytes: Buffer, fileName: string, mime = "application/pdf"): DocumentBlock {
   return {
     type: "document",
     source: { type: "base64", media_type: mime, data: bytes.toString("base64") },
     title: fileName,
+  };
+}
+
+export async function buildScanAttachment(
+  chunk: Chunk,
+  provider: Provider,
+): Promise<DocumentBlock | ImageBlock> {
+  if (provider.acceptsDocuments) {
+    return buildDocumentBlock(chunk.bytes, chunk.fileName, chunk.mime);
+  }
+  const { bytes, mime } = await rasterizePage(chunk.bytes);
+  return {
+    type: "image",
+    source: { type: "base64", media_type: mime, data: bytes.toString("base64") },
   };
 }

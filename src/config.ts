@@ -1,14 +1,25 @@
 import "dotenv/config";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  chmodSync,
+} from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
 
 export interface PlasalidConfig {
+  providerType: "anthropic" | "openai" | "gemini" | "openai-compat";
   anthropicKey: string;
-  model: string;
-  providerType: "anthropic" | "openai-compatible";
-  openaiCompatibleKey: string;
-  openaiCompatibleBaseURL: string;
+  anthropicModel: string;
+  openaiKey: string;
+  openaiModel: string;
+  geminiKey: string;
+  geminiModel: string;
+  openaiCompatKey: string;
+  openaiCompatBaseURL: string;
+  openaiCompatModel: string;
   displayLocale: string;
   displayCurrency: string;
   dbPath: string;
@@ -47,19 +58,36 @@ function buildConfig(): PlasalidConfig {
   // Precedence: env > file > default. Env is checked first so a shell-exported
   // override always wins over whatever is in ~/.plasalid/config.json.
   return {
-    anthropicKey: process.env.ANTHROPIC_API_KEY || file.anthropicKey || "",
-    model: process.env.PLASALID_MODEL || file.model || "claude-sonnet-4-6",
     providerType:
       (process.env.PLASALID_PROVIDER as PlasalidConfig["providerType"]) ||
       (file.providerType as PlasalidConfig["providerType"]) ||
       "anthropic",
-    openaiCompatibleKey: process.env.OPENAI_COMPATIBLE_API_KEY || file.openaiCompatibleKey || "",
-    openaiCompatibleBaseURL: process.env.OPENAI_COMPATIBLE_BASE_URL || file.openaiCompatibleBaseURL || "",
+    anthropicKey: process.env.ANTHROPIC_API_KEY || file.anthropicKey || "",
+    anthropicModel:
+      process.env.ANTHROPIC_MODEL || file.anthropicModel || "claude-sonnet-4-6",
+    openaiKey: process.env.OPENAI_API_KEY || file.openaiKey || "",
+    openaiModel: process.env.OPENAI_MODEL || file.openaiModel || "gpt-5.4-mini",
+    openaiCompatKey:
+      process.env.OPENAI_COMPAT_API_KEY || file.openaiCompatKey || "",
+    openaiCompatBaseURL:
+      process.env.OPENAI_COMPAT_BASE_URL || file.openaiCompatBaseURL || "",
+    openaiCompatModel:
+      process.env.OPENAI_COMPAT_MODEL || file.openaiCompatModel || "",
+    geminiKey: process.env.GEMINI_API_KEY || file.geminiKey || "",
+    geminiModel:
+      process.env.GEMINI_MODEL || file.geminiModel || "gemini-3.5-flash",
     displayLocale: file.displayLocale || "th-TH",
     displayCurrency: file.displayCurrency || "THB",
-    dbPath: process.env.PLASALID_DB_PATH || file.dbPath || resolve(PLASALID_DIR, "db.sqlite"),
-    dbEncryptionKey: process.env.PLASALID_DB_ENCRYPTION_KEY || file.dbEncryptionKey || "",
-    dataDir: process.env.PLASALID_DATA_DIR || file.dataDir || resolve(PLASALID_DIR, "data"),
+    dbPath:
+      process.env.PLASALID_DB_PATH ||
+      file.dbPath ||
+      resolve(PLASALID_DIR, "db.sqlite"),
+    dbEncryptionKey:
+      process.env.PLASALID_DB_ENCRYPTION_KEY || file.dbEncryptionKey || "",
+    dataDir:
+      process.env.PLASALID_DATA_DIR ||
+      file.dataDir ||
+      resolve(PLASALID_DIR, "data"),
     userName: file.userName || "User",
     thinkingBudget: file.thinkingBudget ?? 8000,
   };
@@ -68,10 +96,29 @@ function buildConfig(): PlasalidConfig {
 export const config = buildConfig();
 
 export function isConfigured(): boolean {
-  if (config.providerType === "openai-compatible") {
-    return !!config.openaiCompatibleBaseURL;
+  switch (config.providerType) {
+    case "anthropic":
+      return !!config.anthropicKey;
+    case "openai":
+      return !!config.openaiKey;
+    case "gemini":
+      return !!config.geminiKey;
+    case "openai-compat":
+      return !!config.openaiCompatBaseURL;
   }
-  return !!config.anthropicKey;
+}
+
+export function getActiveModel(): string {
+  switch (config.providerType) {
+    case "anthropic":
+      return config.anthropicModel;
+    case "openai":
+      return config.openaiModel;
+    case "gemini":
+      return config.geminiModel;
+    case "openai-compat":
+      return config.openaiCompatModel;
+  }
 }
 
 export function saveConfig(partial: Partial<PlasalidConfig>): void {
@@ -80,8 +127,12 @@ export function saveConfig(partial: Partial<PlasalidConfig>): void {
 
   const existing = loadFileConfig();
   const merged = { ...existing, ...partial };
-  writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
-  try { chmodSync(configPath, 0o600); } catch {}
+  writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", {
+    mode: 0o600,
+  });
+  try {
+    chmodSync(configPath, 0o600);
+  } catch {}
 
   Object.assign(config, merged);
 }

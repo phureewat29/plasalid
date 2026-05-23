@@ -2,19 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { classifyProviderError } from "../errors.js";
 import type { Provider, SendMessageParams, NormalizedResponse, NormalizedContentBlock } from "../provider.js";
 
-export function createAnthropicProvider(opts: {
-  apiKey: string;
-  baseURL?: string;
-}): Provider {
-  const client = new Anthropic(
-    opts.baseURL
-      ? { apiKey: opts.apiKey, baseURL: opts.baseURL }
-      : { apiKey: opts.apiKey }
-  );
+export function createAnthropicProvider(opts: { apiKey: string }): Provider {
+  const client = new Anthropic({ apiKey: opts.apiKey });
 
   return {
     name: "anthropic",
     supportsThinking: true,
+    acceptsDocuments: true,
 
     async sendMessage(params: SendMessageParams): Promise<NormalizedResponse> {
       const apiParams: any = {

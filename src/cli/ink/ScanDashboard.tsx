@@ -77,16 +77,18 @@ export interface FileSeed {
   readonly totalPages: number;
 }
 
+export interface AttachmentInfo {
+  format: "pdf" | "png";
+  providerName: string;
+  modelName: string;
+}
+
 interface Props {
   controller: ScanDashboardController;
   files: ReadonlyArray<FileSeed>;
+  attachment: AttachmentInfo;
 }
 
-/**
- * Tree-layout scan dashboard. Header carries the only animated element (one
- * `<Spinner>`). All other status indicators are static glyphs that only
- * redraw when their data changes.
- */
 export function ScanDashboard(props: Props) {
   const rows = useFileGroups(props.controller, props.files);
   const phase = usePhase(props.controller);
@@ -95,6 +97,7 @@ export function ScanDashboard(props: Props) {
   return (
     <Box flexDirection="column">
       <Header phase={phase} />
+      <AttachmentLine info={props.attachment} />
       <Box marginTop={1}>
         <ColumnHeader />
       </Box>
@@ -104,6 +107,15 @@ export function ScanDashboard(props: Props) {
       ))}
       <Divider width={ruleWidth} />
     </Box>
+  );
+}
+
+function AttachmentLine({ info }: { info: AttachmentInfo }) {
+  const detail = info.format === "pdf" ? "pdf (native)" : "png (rasterized)";
+  return (
+    <Text dimColor>
+      sending: {detail} · {info.providerName} · {info.modelName}
+    </Text>
   );
 }
 

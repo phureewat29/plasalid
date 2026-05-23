@@ -13,30 +13,20 @@ import {
 import { generateKey } from "../db/encryption.js";
 import { createContextTemplate } from "../ai/context.js";
 import { printLogo } from "./logo.js";
+import { statusSpinner } from "./ux.js";
 
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
-const DEFAULT_OPENAI_BASE_URL = "http://localhost:11434/v1";
+const DEFAULT_LOCAL_OPENAI_BASE_URL = "http://localhost:11434/v1";
 
-type ProviderType = PlasalidConfig["providerType"];
+type Vendor = PlasalidConfig["providerType"];
 
-interface EnvDefaults {
-  anthropicKey: string;
-  userName: string;
-  openaiBaseURL: string;
-  openaiKey: string;
-}
+const RECOMMENDED_MODEL: Record<Exclude<Vendor, "openai-compat">, string> = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-5.4-mini",
+  gemini: "gemini-3.5-flash",
+};
 
 function ensureDir(p: string): void {
   if (!existsSync(p)) mkdirSync(p, { recursive: true });
-}
-
-function readEnvDefaults(): EnvDefaults {
-  return {
-    anthropicKey: process.env.ANTHROPIC_API_KEY?.trim() || "",
-    userName: process.env.PLASALID_USER_NAME?.trim() || "",
-    openaiBaseURL: process.env.OPENAI_COMPATIBLE_BASE_URL?.trim() || "",
-    openaiKey: process.env.OPENAI_COMPATIBLE_API_KEY?.trim() || "",
-  };
 }
 
 function printBanner(): void {
@@ -47,6 +37,11 @@ function printBanner(): void {
     "Welcome to Plasalid. Let's get you set up — a few quick questions.",
   );
   console.log("");
+  console.log(
+    chalk.dim(
+      "Time to power up your engine — wire in an AI, pick a model, seal your vault.",
+    ),
+  );
 }
 
 function printSummary(dataDir: string): void {
@@ -75,9 +70,10 @@ function printSummary(dataDir: string): void {
 }
 
 /**
- * Wraps inquirer's list prompt with a blank line above and below, and inserts
- * a Separator(" ") row above the first choice so the question and the first
- * option don't crowd each other. Mirrors `makePromptUser` in `src/cli/ux.ts`.
+ * Each helper prints one leading blank line. Inquirer collapses the resolved
+ * prompt to a single line, so each new helper produces exactly one blank row
+ * between adjacent questions. passwordPrompt has no `default` because the
+ * masked-but-pre-filled state confuses "press Enter to keep".
  */
 async function listPrompt<T extends string>(opts: {
   name: string;
@@ -91,158 +87,225 @@ async function listPrompt<T extends string>(opts: {
       type: "list",
       name: opts.name,
       message: opts.message,
-      choices: [new inquirer.Separator(" "), ...opts.choices],
+      choices: opts.choices,
       default: opts.default,
     },
   ]);
-  console.log("");
   return answer[opts.name] as T;
 }
 
-async function promptUserName(env: EnvDefaults): Promise<string> {
-  const { userName } = await inquirer.prompt([
+async function inputPrompt(opts: {
+  name: string;
+  message: string;
+  default?: string;
+  validate?: (v: string) => true | string;
+}): Promise<string> {
+  console.log("");
+  const answer = await inquirer.prompt([
     {
       type: "input",
-      name: "userName",
-      message: "What should I call you? (Your name)",
-      default:
-        env.userName || (config.userName === "User" ? "" : config.userName),
+      name: opts.name,
+      message: opts.message,
+      default: opts.default,
+      validate: opts.validate,
     },
   ]);
-  return String(userName || "").trim();
+  return String(answer[opts.name] ?? "").trim();
 }
 
-async function promptProviderChoice(): Promise<ProviderType> {
-  return listPrompt<ProviderType>({
-    name: "providerChoice",
+async function passwordPrompt(opts: {
+  name: string;
+  message: string;
+  validate?: (v: string) => true | string;
+}): Promise<string> {
+  console.log("");
+  const answer = await inquirer.prompt([
+    {
+      type: "password",
+      name: opts.name,
+      message: opts.message,
+      mask: "*",
+      validate: opts.validate,
+    },
+  ]);
+  return String(answer[opts.name] ?? "");
+}
+
+function savedModelFor(vendor: Vendor): string {
+  switch (vendor) {
+    case "anthropic":
+      return config.anthropicModel;
+    case "openai":
+      return config.openaiModel;
+    case "gemini":
+      return config.geminiModel;
+    case "openai-compat":
+      return config.openaiCompatModel;
+  }
+}
+
+async function promptUserName(): Promise<string> {
+  return inputPrompt({
+    name: "userName",
+    message: "What should I call you? (Your name)",
+  });
+}
+
+async function promptProviderChoice(): Promise<Vendor> {
+  return listPrompt<Vendor>({
+    name: "vendor",
     message: "Which AI provider would you like to use?",
     choices: [
-      { name: "Anthropic (Claude)", value: "anthropic" },
+      { name: "Anthropic", value: "anthropic" },
+      { name: "OpenAI", value: "openai" },
+      { name: "Google Gemini", value: "gemini" },
       {
-        name: "OpenAI compatible (OpenAI, LM Studio, vLLM, Ollama)",
-        value: "openai-compatible",
+        name: "OpenAI Compatible (LM Studio, vLLM, Ollama, other)",
+        value: "openai-compat",
       },
     ],
     default: "anthropic",
   });
 }
 
-async function promptAnthropicCredentials(
-  env: EnvDefaults,
-): Promise<Partial<PlasalidConfig>> {
-  const { key, model } = await inquirer.prompt([
-    {
-      type: "password",
-      name: "key",
-      message: "Paste your Anthropic API key (https://console.anthropic.com):",
-      mask: "*",
-      default: env.anthropicKey || config.anthropicKey || undefined,
-      validate: (v: string) =>
-        v.startsWith("sk-") ? true : "Enter a key starting with sk-...",
-    },
-    {
-      type: "input",
-      name: "model",
-      message: "Which Claude model?",
-      default:
-        config.providerType === "anthropic" && config.model
-          ? config.model
-          : DEFAULT_ANTHROPIC_MODEL,
-    },
-  ]);
-  return {
-    anthropicKey: key,
-    model: model || DEFAULT_ANTHROPIC_MODEL,
-  };
+/**
+ * Model default: the value previously saved for this vendor, else its
+ * recommended flagship. openai-compat has none, so it starts blank and the
+ * required-non-empty validator catches blank submissions.
+ */
+async function promptModelInput(vendor: Vendor): Promise<string> {
+  const carriedOver = savedModelFor(vendor);
+  const recommended =
+    vendor === "openai-compat" ? "" : RECOMMENDED_MODEL[vendor];
+  const defaultValue = carriedOver || recommended;
+
+  return inputPrompt({
+    name: "model",
+    message: "Which AI model?",
+    default: defaultValue || undefined,
+    validate: (v) => v.trim().length > 0 || "Required",
+  });
 }
 
-async function promptOpenAICompatCredentials(
-  env: EnvDefaults,
-): Promise<Partial<PlasalidConfig>> {
-  const { baseURL, apiKey, model } = await inquirer.prompt([
-    {
-      type: "input",
-      name: "baseURL",
-      message: "What's the base URL of your OpenAI-compatible server?",
-      default:
-        env.openaiBaseURL ||
-        config.openaiCompatibleBaseURL ||
-        DEFAULT_OPENAI_BASE_URL,
-      validate: (v: string) =>
-        /^https?:\/\//.test(v) || "Must start with http:// or https://",
+/**
+ * Empty submit silently keeps the existing key when one is on file. Otherwise
+ * the validator rejects empty (or accepts empty when `optional`, e.g. local
+ * servers that need no auth).
+ */
+async function promptApiKey(opts: {
+  label: string;
+  existing: string;
+  optional?: boolean;
+  prefix?: string;
+}): Promise<string> {
+  const hasExisting = opts.existing.length > 0;
+
+  const fresh = await passwordPrompt({
+    name: "key",
+    message: `${opts.label}:`,
+    validate: (v) => {
+      if (v === "" && (hasExisting || opts.optional)) return true;
+      if (opts.prefix && !v.startsWith(opts.prefix)) {
+        return `Enter a key starting with ${opts.prefix}...`;
+      }
+      if (v.length === 0) return "Required";
+      return true;
     },
-    {
-      type: "password",
-      name: "apiKey",
-      message: "API key (leave blank if your server doesn't need one):",
-      mask: "*",
-      default: env.openaiKey || config.openaiCompatibleKey || undefined,
-    },
-    {
-      type: "input",
-      name: "model",
-      message:
-        "Which model? (e.g. gpt-5, qwen3-coder:480b, deepseek-v3.1:671b)",
-      default:
-        config.providerType === "openai-compatible" && config.model
-          ? config.model
-          : "",
-      validate: (v: string) => v.trim().length > 0 || "Required",
-    },
-  ]);
+  });
+  return fresh === "" && hasExisting ? opts.existing : fresh;
+}
+
+async function promptAnthropicCredentials(): Promise<Partial<PlasalidConfig>> {
+  const anthropicKey = await promptApiKey({
+    label: "Paste your Anthropic API key (https://console.anthropic.com)",
+    existing: config.anthropicKey,
+    prefix: "sk-",
+  });
+  const anthropicModel = await promptModelInput("anthropic");
+  return { providerType: "anthropic", anthropicKey, anthropicModel };
+}
+
+async function promptOpenAICredentials(): Promise<Partial<PlasalidConfig>> {
+  const openaiKey = await promptApiKey({
+    label: "Paste your OpenAI API key (https://platform.openai.com/api-keys)",
+    existing: config.openaiKey,
+    prefix: "sk-",
+  });
+  const openaiModel = await promptModelInput("openai");
+  return { providerType: "openai", openaiKey, openaiModel };
+}
+
+async function promptGeminiCredentials(): Promise<Partial<PlasalidConfig>> {
+  const geminiKey = await promptApiKey({
+    label:
+      "Paste your Google AI Studio API key (https://aistudio.google.com/apikey)",
+    existing: config.geminiKey,
+  });
+  const geminiModel = await promptModelInput("gemini");
+  return { providerType: "gemini", geminiKey, geminiModel };
+}
+
+async function promptOpenAICompatCredentials(): Promise<
+  Partial<PlasalidConfig>
+> {
+  const baseURLDefault =
+    config.providerType === "openai-compat" && config.openaiCompatBaseURL
+      ? config.openaiCompatBaseURL
+      : DEFAULT_LOCAL_OPENAI_BASE_URL;
+
+  const openaiCompatBaseURL = await inputPrompt({
+    name: "baseURL",
+    message: "What's the base URL of your LLM server?",
+    default: baseURLDefault,
+    validate: (v) =>
+      /^https?:\/\//.test(v) || "Must start with http:// or https://",
+  });
+
+  const openaiCompatKey = await promptApiKey({
+    label: "Paste your LLM server API key",
+    existing: config.openaiCompatKey,
+    optional: true,
+  });
+
+  const openaiCompatModel = await promptModelInput("openai-compat");
+
   return {
-    openaiCompatibleBaseURL: baseURL,
-    openaiCompatibleKey: apiKey || "",
-    model: model.trim(),
+    providerType: "openai-compat",
+    openaiCompatBaseURL,
+    openaiCompatKey,
+    openaiCompatModel,
   };
 }
 
 async function promptCredentials(
-  provider: ProviderType,
-  env: EnvDefaults,
+  vendor: Vendor,
 ): Promise<Partial<PlasalidConfig>> {
-  return provider === "openai-compatible"
-    ? promptOpenAICompatCredentials(env)
-    : promptAnthropicCredentials(env);
+  switch (vendor) {
+    case "anthropic":
+      return promptAnthropicCredentials();
+    case "openai":
+      return promptOpenAICredentials();
+    case "gemini":
+      return promptGeminiCredentials();
+    case "openai-compat":
+      return promptOpenAICompatCredentials();
+  }
 }
 
-async function ensureEncryptionKey(): Promise<void> {
-  if (config.dbEncryptionKey) {
-    console.log("");
-    console.log(chalk.dim("Using the encryption key already on file."));
-    return;
-  }
-  const mode = await listPrompt<"auto" | "manual" | "none">({
-    name: "mode",
-    message: "Encrypt the local database? (recommended)",
-    choices: [
-      { name: "Yes (generate a strong key automatically)", value: "auto" },
-      { name: "Yes (I'll provide my own passphrase)", value: "manual" },
-      { name: "No (store plaintext)", value: "none" },
-    ],
-    default: "auto",
-  });
-  if (mode === "auto") {
+/**
+ * Encryption key is auto-generated. The work is microseconds,
+ * but the banner just told the user to "seal your vault" — hold the spinner
+ * so the step is visible.
+ */
+async function sealVault(): Promise<void> {
+  const spinner = statusSpinner("Sealing your vault…");
+  const start = Date.now();
+  if (!config.dbEncryptionKey) {
     saveConfig({ dbEncryptionKey: generateKey() });
-    console.log(
-      chalk.dim(
-        `Generated a new DB encryption key and saved it to ${getConfigPath()}.`,
-      ),
-    );
-    return;
   }
-  if (mode === "manual") {
-    const { key: passphrase } = await inquirer.prompt([
-      {
-        type: "password",
-        name: "key",
-        message: "Choose a passphrase (at least 8 characters):",
-        mask: "*",
-        validate: (v: string) => v.length >= 8 || "Use at least 8 characters.",
-      },
-    ]);
-    saveConfig({ dbEncryptionKey: passphrase });
-  }
+  const remaining = 600 - (Date.now() - start);
+  if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+  spinner.succeed("Vault sealed.");
 }
 
 function finalizeDataDir(userName: string): string {
@@ -257,19 +320,16 @@ export async function runSetup(): Promise<void> {
   printBanner();
   ensureDir(getPlasalidDir());
 
-  const env = readEnvDefaults();
-
-  const userName = await promptUserName(env);
-  const provider = await promptProviderChoice();
-  const credentials = await promptCredentials(provider, env);
+  const userName = await promptUserName();
+  const vendor = await promptProviderChoice();
+  const credentials = await promptCredentials(vendor);
 
   saveConfig({
-    providerType: provider,
     userName: userName || "User",
     ...credentials,
   });
 
-  await ensureEncryptionKey();
+  await sealVault();
   const dataDir = finalizeDataDir(userName || "User");
 
   printSummary(dataDir);

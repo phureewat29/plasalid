@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { config } from "../config.js";
+import { config, getActiveModel } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
@@ -13,7 +13,7 @@ import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./t
 import { getConversationHistory, saveMessage } from "./memory.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import { redact, unredact } from "./redactor.js";
-import { createProvider } from "./providers/index.js";
+import { getProvider } from "./providers/index.js";
 import {
   AbortedError,
   ApiAuthError,
@@ -29,7 +29,7 @@ import type {
 
 export { AbortedError } from "./errors.js";
 
-const provider = createProvider();
+const provider = getProvider();
 
 const MAX_TOOL_STEPS = 20;
 
@@ -40,6 +40,8 @@ export type ProgressCallback = (event: {
   elapsedMs: number;
 }) => void;
 
+export type TruncationReason = "tool_steps" | "max_tokens";
+
 interface RunAgentArgs {
   db: Database.Database;
   systemPrompt: string;
@@ -49,6 +51,7 @@ interface RunAgentArgs {
   onProgress?: ProgressCallback;
   signal?: AbortSignal;
   maxToolSteps?: number;
+  maxOutputTokens?: number;
 }
 
 async function runAgent({
@@ -60,21 +63,28 @@ async function runAgent({
   onProgress,
   signal,
   maxToolSteps,
-}: RunAgentArgs): Promise<{ text: string; messages: NormalizedMessage[]; truncated: boolean }> {
+  maxOutputTokens,
+}: RunAgentArgs): Promise<{
+  text: string;
+  messages: NormalizedMessage[];
+  truncated: TruncationReason | null;
+}> {
   const messages: NormalizedMessage[] = [...initialMessages];
   const useThinking = config.thinkingBudget > 0 && provider.supportsThinking;
   const throwIfAborted = () => {
     if (signal?.aborted) throw new AbortedError();
   };
   const stepLimit = maxToolSteps ?? MAX_TOOL_STEPS;
+  const baseMaxTokens = maxOutputTokens ?? 4096;
+  const requestMaxTokens = useThinking ? 16000 : baseMaxTokens;
 
   const startTime = Date.now();
   let toolCount = 0;
 
   throwIfAborted();
   let response = await provider.sendMessage({
-    model: config.model,
-    maxTokens: useThinking ? 16000 : 4096,
+    model: getActiveModel(),
+    maxTokens: requestMaxTokens,
     system: systemPrompt,
     tools,
     messages,
@@ -106,8 +116,8 @@ async function runAgent({
 
     throwIfAborted();
     response = await provider.sendMessage({
-      model: config.model,
-      maxTokens: useThinking ? 16000 : 4096,
+      model: getActiveModel(),
+      maxTokens: requestMaxTokens,
       system: systemPrompt,
       tools,
       messages,
@@ -116,8 +126,12 @@ async function runAgent({
     });
   }
 
-  const truncated =
-    response.stopReason === "tool_use" && toolCount >= stepLimit;
+  let truncated: TruncationReason | null = null;
+  if (response.stopReason === "max_tokens") {
+    truncated = "max_tokens";
+  } else if (response.stopReason === "tool_use" && toolCount >= stepLimit) {
+    truncated = "tool_steps";
+  }
 
   const textBlocks = response.content.filter(
     (b): b is Extract<NormalizedContentBlock, { type: "text" }> => b.type === "text",
@@ -128,6 +142,10 @@ async function runAgent({
 
 const SCAN_MAX_TOOL_STEPS = 100;
 const RESOLVE_MAX_TOOL_STEPS = 60;
+// Statement pages routinely produce a single batched record_transactions call
+// holding 100+ rows; 4096 tokens cuts those off mid-array. 8192 is the
+// smallest cap that fits a dense page without forcing the agent to chunk.
+const SCAN_MAX_OUTPUT_TOKENS = 8192;
 
 /**
  * Conversational chat used by the Ink TUI. Reuses conversation_history for context
@@ -213,6 +231,7 @@ export async function runScanAgent(opts: {
     onProgress: opts.onProgress,
     signal: opts.signal,
     maxToolSteps: SCAN_MAX_TOOL_STEPS,
+    maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
   });
   if (truncated) {
     recordQuestion(opts.db, {
@@ -221,7 +240,10 @@ export async function runScanAgent(opts: {
       transaction_id: null,
       account_id: null,
       kind: "scan_truncated",
-      prompt: `Scan stopped at the tool-step cap (${SCAN_MAX_TOOL_STEPS}) before the agent finished parsing this chunk. Some transactions may be missing. Split the PDF further or raise the cap.`,
+      prompt:
+        truncated === "max_tokens"
+          ? `Scan hit the output-token budget (${SCAN_MAX_OUTPUT_TOKENS}) mid-response, so the last tool call was cut off. Some transactions may be missing. Re-scan after splitting the PDF further, or raise the budget.`
+          : `Scan stopped at the tool-step cap (${SCAN_MAX_TOOL_STEPS}) before the agent finished parsing this chunk. Some transactions may be missing. Split the PDF further or raise the cap.`,
     });
     if (opts.agentCtx.progress && opts.agentCtx.chunkId) {
       opts.agentCtx.progress.emit({ chunkId: opts.agentCtx.chunkId, kind: "question" });

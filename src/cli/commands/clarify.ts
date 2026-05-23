@@ -19,7 +19,7 @@ export async function runClarifyCommand(): Promise<void> {
       promptUser,
       onProgress,
     });
-    spinner.succeed("Clarify done.");
+    spinner.succeed("Done.");
     console.log("");
     console.log(formatSummary(summary));
   } catch (err: unknown) {
@@ -36,7 +36,9 @@ function formatSummary(summary: ClarifySummary): string {
     .map(([k, v]) => `${k}×${v}`)
     .join(", ");
   const lines = [
-    chalk.bold(`Clarified ${summary.clarified}/${summary.total} questions${tally ? ` (${tally})` : ""}.`),
+    chalk.bold(
+      `Clarified ${summary.clarified}/${summary.total} questions${tally ? ` (${tally})` : ""}.`,
+    ),
   ];
   if (summary.remaining > 0) {
     lines.push(chalk.yellow(`${summary.remaining} question(s) remain.`));

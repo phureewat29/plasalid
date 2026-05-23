@@ -101,7 +101,8 @@ export interface ScanResult {
 
 const chunkPhase: Phase = async (_db, state, hooks) => {
   await hooks.beforeChunk?.(state);
-  for (const file of state.decrypted) state.chunks.push(...await chunkPdf(file));
+  for (const file of state.decrypted)
+    state.chunks.push(...(await chunkPdf(file)));
   await hooks.afterChunk?.(state);
 };
 

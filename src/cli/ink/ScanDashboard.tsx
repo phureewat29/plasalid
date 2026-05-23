@@ -109,11 +109,13 @@ export function ScanDashboard(props: Props) {
 
 function usePhase(controller: ScanDashboardController): CurrentPhase {
   const [phase, setPhase] = useState<CurrentPhase>("parse");
-  useEffect(() =>
-    controller.subscribe(event => {
-      if (event.type === "phase-set") setPhase(event.phase);
-    }),
-  [controller]);
+  useEffect(
+    () =>
+      controller.subscribe((event) => {
+        if (event.type === "phase-set") setPhase(event.phase);
+      }),
+    [controller],
+  );
   return phase;
 }
 
@@ -124,7 +126,9 @@ function useRuleWidth(): number {
     if (!stdout) return;
     const onResize = () => setCols(stdout.columns ?? 100);
     stdout.on("resize", onResize);
-    return () => { stdout.off("resize", onResize); };
+    return () => {
+      stdout.off("resize", onResize);
+    };
   }, [stdout]);
   return Math.min(cols, 120);
 }
@@ -133,13 +137,20 @@ type PhaseState = "pending" | "running" | "done";
 
 const PHASE_RENDER: Record<PhaseState, (label: string) => JSX.Element> = {
   pending: (label) => <Text dimColor>{label}</Text>,
-  running: (label) => <Text color="yellow"><Spinner type="dots" /> {label}</Text>,
-  done:    (label) => <Text color="green">✓ {label}</Text>,
+  running: (label) => (
+    <Text color="yellow">
+      <Spinner type="dots" /> {label}
+    </Text>
+  ),
+  done: (label) => <Text color="green">✓ {label}</Text>,
 };
 
 const PHASE_ORDER: readonly CurrentPhase[] = ["parse", "clarify", "done"];
 
-function phaseStateOf(label: "parse" | "clarify", current: CurrentPhase): PhaseState {
+function phaseStateOf(
+  label: "parse" | "clarify",
+  current: CurrentPhase,
+): PhaseState {
   const li = PHASE_ORDER.indexOf(label);
   const ci = PHASE_ORDER.indexOf(current);
   if (ci > li) return "done";
@@ -255,15 +266,15 @@ function FileGroupView({ group }: { group: FileGroupState }) {
         transactions={agg.totalTx}
         questions={agg.totalQuestions}
       />
-      {chunks.map((c, i) => (
-        <ChunkRow key={c.pageNumber} chunk={c} last={i === chunks.length - 1} />
+      {chunks.map((c) => (
+        <ChunkRow key={c.pageNumber} chunk={c} />
       ))}
     </Box>
   );
 }
 
-function ChunkRow({ chunk, last }: { chunk: ChunkRowState; last: boolean }) {
-  const connector = last ? "`-" : "|-";
+function ChunkRow({ chunk }: { chunk: ChunkRowState }) {
+  const connector = "|-";
   return (
     <Row
       status={<StatusText status={chunk.status} />}
@@ -409,6 +420,8 @@ function applyDashboardEvent(
   if (event.type === "phase-set") return false;
   const chunk = rows.get(event.fileId)?.chunks.get(event.pageNumber);
   if (!chunk) return false;
-  const reducer = REDUCERS[event.type] as EventReducer<Exclude<DashboardEvent["type"], "phase-set">>;
+  const reducer = REDUCERS[event.type] as EventReducer<
+    Exclude<DashboardEvent["type"], "phase-set">
+  >;
   return reducer(event, chunk);
 }

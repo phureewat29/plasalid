@@ -33,22 +33,22 @@ We also built strict boundaries around your privacy. The database is encrypted l
 
 ## Features
 
-### Unified ledger from any financial documents
+### Unified ledger from any financial document
 
-- **Drop PDFs, get a complete ledger.** Bank statements, credit-card statements, payslips, brokerage statements, and etc. — Plasalid uses AI to parse every transaction, balance, and holding into double-entry ledger.
-- **No aggregator, no per-bank login.** The picture assembles itself from documents you already receive each month. No manual entry. No fragile connector to maintain.
+* **Drop PDFs, get a complete ledger.** Just drag in your bank statements, credit card bills, payslips, or brokerage summaries. Plasalid uses AI to extract every transaction, balance, and holding straight into a double-entry database.
+* **No aggregators or per-bank logins.** The big picture builds itself from the documents you already get every month. Zero manual data entry and no fragile bank connectors to maintain.
 
-### Build in AI agent that queries your real data
+### Built-in AI agent that queries your real data
 
-- **Ask in plain language.** "Which subscriptions are still active?" "Where did money go last month?" "How much did I spend at Starbucks this year?" "What's my net worth right now?"
-- **Answers from actual records.** Figures, dates, and merchants are drawn straight from double-entry ledger — never an estimate, never invented.
+* **Ask in plain English.** Type questions like "Which subscriptions are still active?", "Where did my money go last month?", or "What is my net worth right now?".
+* **Answers from actual records.** The dates, merchants, and numbers are pulled directly from your ledger. You get hard facts. Nothing is estimated and nothing is invented.
 
-### Local-first, private, and open as harness
+### Local-first, private, and open as a harness
 
-- **Everything runs on your machine.** AES-256-encrypted SQLite ledger. Fully encrypted sensitive data. No cloud aggregator, no upstream account, no third-party can touch your data.
-- **PII redacted on the way out.** Your names, your identity, phone numbers, and full account/card numbers are scrubbed before any prompt leaves your machine.
-- **Pluggable AI provider.** Anthropic, or any OpenAI compatible local model — pick at setup; local models keep inference 100% offline.
-- **A harness layer for AI agents.** Plasalid's standard double-entry ledger is the baseline data layer — open for extensibility by design.
+* **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database. There are no cloud aggregators or upstream accounts. No third party ever touches your data.
+* **PII redacted by default.** Your name, phone numbers, and full account details are completely scrubbed before any prompt leaves your hardware.
+* **Bring your own AI.** Choose Anthropic or any OpenAI-compatible local model during setup. If you run a local model, your setup stays 100% private and offline.
+* **A harness layer for AI agents.** The structured ledger acts as your baseline data layer. It is designed to be open and ready for any external tools you want to plug in.
 
 
 ## Install
@@ -76,7 +76,7 @@ Other day-to-day commands:
 
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip). Zero-arg; processes everything.
+- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, link recurrences, etc). 
 
 ## Commands
 

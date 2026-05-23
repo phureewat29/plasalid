@@ -8,7 +8,7 @@
  * hooks the caller supplies. `S` is whatever quantity decides "are we done?".
  */
 export interface ConvergeOpts<S> {
-  /** Initial state (e.g. `countOpenUnknowns(db)`). */
+  /** Initial state (e.g. `countQuestions(db)`). */
   initial: S;
   /** Maximum number of passes before declaring failure. Must be >= 1. */
   maxAttempts: number;

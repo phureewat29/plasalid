@@ -3,7 +3,7 @@ import type { ToolDefinition } from "../provider.js";
 import type { ScanProgress } from "../../scanner/progress.js";
 import type { ClosedQuestion } from "../../db/queries/questions.js";
 
-export type ToolProfile = "scan" | "chat" | "record" | "resolve";
+export type ToolProfile = "scan" | "chat" | "record" | "clarify";
 
 /**
  * Structured highlights an interactive agent can pass to ask_user. The prompter
@@ -33,7 +33,7 @@ export interface AgentExecutionContext {
   progress?: ScanProgress;
   /** Scan-only: the chunk this agent invocation is processing. */
   chunkId?: string;
-  /** Resolve-only: notified for each closed question so the caller can synthesize memory rules. */
+  /** Clarify-only: notified for each closed question so the caller can synthesize memory rules. */
   onQuestionClosed?: (closed: ClosedQuestion) => void;
 }
 

@@ -29,7 +29,7 @@ export function renderTodayHuman(): string {
   })}.`;
 }
 
-/** ISO date for scan/resolve ("Today is 2026-03-05."). */
+/** ISO date for scan/clarify ("Today is 2026-03-05."). */
 export function renderTodayIso(): string {
   return `Today is ${new Date().toISOString().slice(0, 10)}.`;
 }
@@ -38,8 +38,8 @@ export function renderTodayIso(): string {
 
 export interface ChartOfAccountsOptions {
   withBalance: boolean;
-  /** Empty-state copy. `scan` hints at creating accounts; `resolve` is terse. */
-  emptyState: "scan" | "resolve";
+  /** Empty-state copy. `scan` hints at creating accounts; `clarify` is terse. */
+  emptyState: "scan" | "clarify";
 }
 
 export function renderChartOfAccounts(
@@ -119,7 +119,7 @@ export function renderMemories(
   return `## ${opts.header}\n${lines.join("\n")}`;
 }
 
-/** Resolve scope */
+/** Clarify scope */
 
 export interface ScopeOptions {
   accountId?: string;

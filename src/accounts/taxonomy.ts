@@ -207,7 +207,7 @@ const SUGGESTED_INCOME_SUBTYPES = [
 ];
 
 /**
- * Stringified Thai taxonomy block for the scan/resolve system prompts.
+ * Stringified Thai taxonomy block for the scan/clarify system prompts.
  * Lists known Thai institutions and suggested subtypes so the model picks
  * consistent `bank_name` and `subtype` values across statements.
  */

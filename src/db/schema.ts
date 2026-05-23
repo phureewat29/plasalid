@@ -1,14 +1,6 @@
 import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
-  // One-shot renames for existing local data. Run BEFORE the CREATE TABLE
-  // block so the legacy table/column names get carried forward under their
-  // new identity instead of having a fresh empty `questions` table created
-  // alongside the old `unknowns` table.
-  ensureTableRenamed(db, "unknowns", "questions");
-  ensureColumnRenamed(db, "accounts", "has_unknown", "has_question");
-  ensureColumnRenamed(db, "transactions", "has_unknown", "has_question");
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,
@@ -154,56 +146,4 @@ export function migrate(db: Database.Database): void {
     );
   `);
 
-  ensureColumn(db, "questions", "context_json", "TEXT");
-  ensureColumn(db, "questions", "scan_id", "TEXT");
-}
-
-function ensureColumn(
-  db: Database.Database,
-  table: string,
-  column: string,
-  type: string,
-): void {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (cols.some((c) => c.name === column)) return;
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-}
-
-/**
- * Rename a table on existing databases. No-op when the source table is gone
- * (already renamed or never existed). Safe to call before `CREATE TABLE IF
- * NOT EXISTS` so old data is carried forward under the new name instead of
- * sitting beside a fresh empty table.
- */
-function ensureTableRenamed(
-  db: Database.Database,
-  oldName: string,
-  newName: string,
-): void {
-  const exists = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
-    .get(oldName);
-  if (!exists) return;
-  db.exec(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
-}
-
-/**
- * Rename a column on existing databases. No-op when the source column is
- * gone. Pairs with `ensureTableRenamed` for one-shot schema migrations.
- */
-function ensureColumnRenamed(
-  db: Database.Database,
-  table: string,
-  oldCol: string,
-  newCol: string,
-): void {
-  const tableExists = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
-    .get(table);
-  if (!tableExists) return;
-  const cols = db
-    .prepare(`PRAGMA table_info(${table})`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === oldCol)) return;
-  db.exec(`ALTER TABLE ${table} RENAME COLUMN ${oldCol} TO ${newCol}`);
 }

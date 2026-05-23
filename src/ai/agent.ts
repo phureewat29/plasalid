@@ -3,10 +3,10 @@ import { config } from "../config.js";
 import {
   buildChatSystemPrompt,
   buildScanSystemPrompt,
-  buildResolveSystemPrompt,
+  buildClarifySystemPrompt,
   buildRecordSystemPrompt,
   type ScanPromptOptions,
-  type ResolvePromptOptions,
+  type ClarifyPromptOptions,
   type RecordPromptOptions,
 } from "./system-prompt.js";
 import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
@@ -193,7 +193,7 @@ export async function handleChatMessage(
  * Scan-time agent loop. Caller supplies the initial user message (which carries
  * the PDF as a content block) and a AgentExecutionContext that scopes the file
  * id, scanId, and progress sink. A truncated run records a scan_truncated
- * question so resolve can surface it later.
+ * question so clarify can surface it later.
  */
 export async function runScanAgent(opts: {
   db: Database.Database;
@@ -257,23 +257,23 @@ export async function runRecordAgent(opts: {
 }
 
 /**
- * Resolve-time agent loop. Driven by RESOLVE_PERSONA. Surveys every open
+ * Clarify-time agent loop. Driven by CLARIFY_PERSONA. Surveys every open
  * question, applies memory/heuristic resolutions silently, groups whatever
  * remains and asks the user once per group via ask_user.
  */
-export async function runResolveAgent(opts: {
+export async function runClarifyAgent(opts: {
   db: Database.Database;
   initialMessages: NormalizedMessage[];
-  prompt: ResolvePromptOptions;
+  prompt: ClarifyPromptOptions;
   agentCtx: AgentExecutionContext;
   onProgress?: ProgressCallback;
   signal?: AbortSignal;
 }): Promise<string> {
-  const systemPrompt = redact(buildResolveSystemPrompt(opts.db, opts.prompt));
+  const systemPrompt = redact(buildClarifySystemPrompt(opts.db, opts.prompt));
   const { text } = await runAgent({
     db: opts.db,
     systemPrompt,
-    tools: getToolDefinitions("resolve"),
+    tools: getToolDefinitions("clarify"),
     initialMessages: opts.initialMessages,
     agentCtx: opts.agentCtx,
     onProgress: opts.onProgress,

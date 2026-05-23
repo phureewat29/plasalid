@@ -5,7 +5,7 @@ import { getNetWorth } from "../../db/queries/account-balance.js";
 import { countTransactions } from "../../db/queries/transactions.js";
 import { getRecurringSummary } from "../../db/queries/recurrences.js";
 import { countScannedFiles } from "../../db/queries/files.js";
-import { countOpenQuestions } from "../../db/queries/questions.js";
+import { countQuestions } from "../../db/queries/questions.js";
 import { countMemories } from "../../ai/memory.js";
 import { formatAmount } from "../../currency.js";
 import { visibleLength } from "../format.js";
@@ -51,7 +51,7 @@ function systemRows(db: Database.Database): Row[] {
   const tx = countTransactions(db);
   const files = countScannedFiles(db);
   const memories = countMemories(db);
-  const questions = countOpenQuestions(db);
+  const questions = countQuestions(db);
 
   const rows: Row[] = [
     {
@@ -84,7 +84,7 @@ function systemRows(db: Database.Database): Row[] {
     rows.push({
       label: "Questions",
       value: chalk.yellow(formatInteger(questions)),
-      suffix: chalk.dim("run `plasalid resolve`"),
+      suffix: chalk.dim("run `plasalid clarify`"),
     });
   }
 

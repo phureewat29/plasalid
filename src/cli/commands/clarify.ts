@@ -4,7 +4,7 @@ import { runResolve, type ResolveSummary } from "../../scanner/resolver.js";
 import { makePromptUser, makeAgentOnProgress, statusSpinner } from "../ux.js";
 
 /**
- * Zero-arg resolver. Hands every open question to the resolver (deterministic
+ * Zero-arg resolver. Hands every question to the resolver (deterministic
  * passes first, then the LLM agent) and prints a colored summary on completion.
  */
 export async function runResolveCommand(): Promise<void> {
@@ -30,7 +30,7 @@ export async function runResolveCommand(): Promise<void> {
 
 function formatSummary(summary: ResolveSummary): string {
   if (summary.total === 0) {
-    return chalk.dim("No open questions.");
+    return chalk.dim("No questions.");
   }
   const tally = Object.entries(summary.tally)
     .map(([k, v]) => `${k}×${v}`)

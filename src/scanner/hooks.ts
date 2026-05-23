@@ -1,5 +1,5 @@
 import type { Chunk, ScanState, PhaseName } from "./engine.js";
-import type { ResolveSummary } from "./resolver.js";
+import type { ClarifySummary } from "./clarifier.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -18,8 +18,8 @@ export interface ScanHooks {
   onWorkerStart?(workerId: string, chunk: Chunk): void;
   onWorkerEnd?(workerId: string, chunk: Chunk, ok: boolean): void;
   afterParse?(s: Readonly<ScanState>): MaybePromise<void>;
-  beforeResolve?(s: Readonly<ScanState>): MaybePromise<void>;
-  afterResolve?(s: Readonly<ScanState>, summary: ResolveSummary): MaybePromise<void>;
+  beforeClarify?(s: Readonly<ScanState>): MaybePromise<void>;
+  afterClarify?(s: Readonly<ScanState>, summary: ClarifySummary): MaybePromise<void>;
   onError?(err: unknown, phase: PhaseName, s: Readonly<ScanState>): MaybePromise<void>;
   onFinish?(s: Readonly<ScanState>): MaybePromise<void>;
 }

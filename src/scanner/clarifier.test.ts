@@ -4,7 +4,7 @@ import { migrate } from "../db/schema.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
 import { recordTransaction } from "../db/queries/transactions.js";
-import { recordQuestion, listOpenQuestions } from "../db/queries/questions.js";
+import { recordQuestion, listQuestions } from "../db/queries/questions.js";
 import { saveMemory } from "../ai/memory.js";
 import { RESOLVER_PASSES, runResolve } from "./resolver.js";
 import { synthesizeMemoryRules } from "./resolver-memory.js";
@@ -47,7 +47,7 @@ describe("memoryRulePass", () => {
     expect(summary.resolved).toBe(1);
     expect(summary.remaining).toBe(0);
     expect(summary.tally.memory_rule).toBe(1);
-    expect(listOpenQuestions(db).find(u => u.id === id)).toBeUndefined();
+    expect(listQuestions(db).find(u => u.id === id)).toBeUndefined();
   });
 
   it("leaves unmatched kinds open", async () => {
@@ -151,13 +151,13 @@ describe("synthesizeMemoryRules", () => {
 });
 
 describe("runResolve outer loop", () => {
-  it("returns an empty summary when there are no open questions", async () => {
+  it("returns an empty summary when there are no questions", async () => {
     const db = freshDb();
     const summary = await runResolve({ db, interactive: false });
     expect(summary).toEqual({ total: 0, resolved: 0, remaining: 0, tally: {} });
   });
 
-  it("re-fetches open questions live across passes (deterministic only)", async () => {
+  it("re-fetches questions live across passes (deterministic only)", async () => {
     const db = freshDb();
     // Pre-loaded memory closes the first one.
     saveMemory(db, "[uncategorized_expense] First -> expense:food", "scanning_hint");
@@ -178,7 +178,7 @@ describe("runResolve outer loop", () => {
     expect(summary.total).toBe(1);
     expect(summary.resolved).toBe(1);
     expect(summary.remaining).toBe(0);
-    expect(listOpenQuestions(db, { scanId: "sc:b" })).toHaveLength(1);
+    expect(listQuestions(db, { scanId: "sc:b" })).toHaveLength(1);
   });
 
   it("compacts closures into scanning_hint memories", async () => {

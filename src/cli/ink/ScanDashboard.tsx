@@ -6,7 +6,7 @@ import Spinner from "ink-spinner";
  * Events the CLI publishes into the dashboard. The CLI subscribes to the
  * scanner's ScanProgress sink and routes per-chunk ticks here via chunkLookup.
  */
-export type CurrentPhase = "parse" | "resolve" | "done";
+export type CurrentPhase = "parse" | "clarify" | "done";
 
 export type DashboardEvent =
   | {
@@ -137,9 +137,9 @@ const PHASE_RENDER: Record<PhaseState, (label: string) => JSX.Element> = {
   done:    (label) => <Text color="green">✓ {label}</Text>,
 };
 
-const PHASE_ORDER: readonly CurrentPhase[] = ["parse", "resolve", "done"];
+const PHASE_ORDER: readonly CurrentPhase[] = ["parse", "clarify", "done"];
 
-function phaseStateOf(label: "parse" | "resolve", current: CurrentPhase): PhaseState {
+function phaseStateOf(label: "parse" | "clarify", current: CurrentPhase): PhaseState {
   const li = PHASE_ORDER.indexOf(label);
   const ci = PHASE_ORDER.indexOf(current);
   if (ci > li) return "done";
@@ -158,7 +158,7 @@ function Header({ phase }: { phase: CurrentPhase }) {
       <Text dimColor> -&gt; </Text>
       {PHASE_RENDER[phaseStateOf("parse", phase)]("parse")}
       <Text dimColor> -&gt; </Text>
-      {PHASE_RENDER[phaseStateOf("resolve", phase)]("resolve")}
+      {PHASE_RENDER[phaseStateOf("clarify", phase)]("clarify")}
     </Text>
   );
 }

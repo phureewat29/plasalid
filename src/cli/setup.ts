@@ -63,7 +63,7 @@ function printSummary(dataDir: string): void {
   );
   console.log(`  2. Run ${chalk.cyan("plasalid scan")} to parse them.`);
   console.log(
-    `  3. Run ${chalk.cyan("plasalid resolve")} to work through anything the scanner flagged.`,
+    `  3. Run ${chalk.cyan("plasalid clarify")} to work through anything the scanner flagged.`,
   );
   console.log(`  4. Run ${chalk.cyan("plasalid")} to chat with your money.`);
   console.log("");

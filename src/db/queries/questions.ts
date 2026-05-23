@@ -16,7 +16,7 @@ export interface RecordQuestionInput extends QuestionTarget {
   context?: Record<string, unknown> | null;
 }
 
-export interface OpenQuestionRow {
+export interface QuestionRow {
   id: string;
   scan_id: string | null;
   file_id: string | null;
@@ -67,7 +67,7 @@ export function recordQuestion(db: Database.Database, input: RecordQuestionInput
 }
 
 /**
- * Close an open question by capturing its (prompt, kind, answer) tuple and
+ * Close a question by capturing its (prompt, kind, answer) tuple and
  * deleting the row outright. Returns the captured tuple so callers can
  * synthesize memory rules; returns null when the id doesn't exist.
  */
@@ -104,7 +104,7 @@ export function getQuestionTarget(db: Database.Database, id: string): QuestionTa
 }
 
 /**
- * Clear `has_question` on the named transaction / account if no other open
+ * Clear `has_question` on the named transaction / account if no other
  * questions still reference it. Safe to call after any resolution; idempotent.
  */
 function maybeClearHasQuestionFlags(db: Database.Database, target: QuestionTarget): void {
@@ -122,7 +122,7 @@ function maybeClearHasQuestionFlags(db: Database.Database, target: QuestionTarge
   }
 }
 
-export interface CountOpenQuestionsScope {
+export interface CountQuestionsScope {
   file_id?: string;
   transaction_id?: string;
   account_id?: string;
@@ -130,7 +130,7 @@ export interface CountOpenQuestionsScope {
   scan_id?: string;
 }
 
-export function countOpenQuestions(db: Database.Database, scope: CountOpenQuestionsScope = {}): number {
+export function countQuestions(db: Database.Database, scope: CountQuestionsScope = {}): number {
   const conditions: string[] = [];
   const params: any[] = [];
   if (scope.file_id)        { conditions.push("file_id = ?");        params.push(scope.file_id); }
@@ -145,15 +145,15 @@ export function countOpenQuestions(db: Database.Database, scope: CountOpenQuesti
   return row.n;
 }
 
-export interface ListOpenQuestionsOptions {
+export interface ListQuestionsOptions {
   limit?: number;
   scanId?: string;
 }
 
-export function listOpenQuestions(
+export function listQuestions(
   db: Database.Database,
-  opts: ListOpenQuestionsOptions = {},
-): OpenQuestionRow[] {
+  opts: ListQuestionsOptions = {},
+): QuestionRow[] {
   const capped = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
   if (opts.scanId) {
     return db.prepare(
@@ -162,12 +162,12 @@ export function listOpenQuestions(
        WHERE scan_id = ?
        ORDER BY created_at ASC
        LIMIT ?`,
-    ).all(opts.scanId, capped) as OpenQuestionRow[];
+    ).all(opts.scanId, capped) as QuestionRow[];
   }
   return db.prepare(
     `SELECT id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, created_at
      FROM questions
      ORDER BY created_at ASC
      LIMIT ?`,
-  ).all(capped) as OpenQuestionRow[];
+  ).all(capped) as QuestionRow[];
 }

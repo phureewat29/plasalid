@@ -104,9 +104,9 @@ const DEFS: ToolDefinition[] = [
     },
   },
   {
-    name: "clarify",
+    name: "confirm",
     description:
-      "Ask the user a clarifying question and return their answer as a string. Use when the utterance is ambiguous (multiple matching accounts, missing amount, unclear date, can't tell expense vs transfer, plan confirmation before a multi-step action). Unlike resolve's ask_user, this does NOT write to the questions table — record-time questions are transient.",
+      "Ask the user to confirm or pick an option and return their answer as a string. Use when the utterance is ambiguous (multiple matching accounts, missing amount, unclear date, can't tell expense vs transfer, plan confirmation before a multi-step action). Unlike clarify's ask_user, this does NOT write to the questions table — record-time questions are transient.",
     input_schema: {
       type: "object",
       properties: {
@@ -141,7 +141,7 @@ const LABELS: Record<string, string> = {
   adjust_account_balance: "Adjusting balance",
   rename_account: "Renaming account",
   delete_account: "Deleting account",
-  clarify: "Asking for clarification",
+  confirm: "Asking for confirmation",
 };
 
 async function execute(
@@ -187,8 +187,8 @@ async function execute(
       }
     }
 
-    case "clarify": {
-      if (!ctx) return "clarify is only available inside an agent session.";
+    case "confirm": {
+      if (!ctx) return "confirm is only available inside an agent session.";
       if (!ctx.interactive || !ctx.promptUser) {
         return `Awaiting user input — cannot proceed in non-interactive mode. Question was: ${sanitizeForPrompt(input.prompt)}`;
       }

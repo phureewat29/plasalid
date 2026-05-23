@@ -143,11 +143,11 @@ async function buildTtyHooks(): Promise<ScanHooks> {
       unsubscribeProgress = null;
     },
 
-    beforeResolve: () => {
-      controller.publish({ type: "phase-set", phase: "resolve" });
+    beforeClarify: () => {
+      controller.publish({ type: "phase-set", phase: "clarify" });
     },
 
-    afterResolve: () => {
+    afterClarify: () => {
       controller.publish({ type: "phase-set", phase: "done" });
       inkInstance?.unmount();
       inkInstance = null;
@@ -262,8 +262,8 @@ function buildPlainHooks(): ScanHooks {
       unsubscribeProgress = null;
     },
 
-    beforeResolve: () => {
-      console.log("Resolving...");
+    beforeClarify: () => {
+      console.log("Clarifying...");
     },
   };
 }
@@ -277,13 +277,13 @@ function renderSummary(state: Readonly<ScanState>): void {
     ),
   );
 
-  const r = state.resolveSummary;
+  const r = state.clarifySummary;
   if (r && r.total > 0) {
-    console.log(`Resolved ${r.resolved}/${r.total} questions.`);
+    console.log(`Clarified ${r.clarified}/${r.total} questions.`);
     if (r.remaining > 0) {
       console.log(
         chalk.yellow(
-          `${r.remaining} question(s) remain — run ${chalk.cyan("plasalid resolve")} to finish them.`,
+          `${r.remaining} question(s) remain — run ${chalk.cyan("plasalid clarify")} to finish them.`,
         ),
       );
     }
@@ -303,9 +303,7 @@ function renderSummary(state: Readonly<ScanState>): void {
   if (txCount > 0) {
     console.log("");
     console.log(
-      chalk.dim(
-        `Next: run ${chalk.cyan("plasalid")} to chat with your ledger about what just landed.`,
-      ),
+      `Next: run ${chalk.cyan("plasalid")} to chat with your ledger about what just landed.`,
     );
   }
 }

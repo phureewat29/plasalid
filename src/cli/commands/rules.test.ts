@@ -32,7 +32,7 @@ describe("renderRules", () => {
   it("prints an empty-state hint when nothing has been learned", () => {
     const out = strip(renderRules(db));
     expect(out).toContain("No rules yet.");
-    expect(out).toContain("plasalid resolve");
+    expect(out).toContain("plasalid clarify");
   });
 
   it("lists memory rules and merchant rules under a single unified header with running mch ids", () => {

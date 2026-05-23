@@ -3,9 +3,9 @@ import type { ToolDefinition } from "../provider.js";
 import type { AgentExecutionContext, ToolModule, ToolProfile } from "./types.js";
 import { commonTools } from "./common.js";
 import { readTools } from "./read.js";
-import { accountIngestTools, scanQuestionTools, resolveIngestTools } from "./ingest.js";
+import { accountIngestTools, scanQuestionTools, clarifyIngestTools } from "./ingest.js";
 import { scanTools } from "./scan.js";
-import { resolveTools } from "./resolve.js";
+import { clarifyTools } from "./clarify.js";
 import { recordTools } from "./record.js";
 import { merchantTools } from "./merchants.js";
 
@@ -19,7 +19,7 @@ export type { AgentExecutionContext, ToolProfile } from "./types.js";
 const PROFILES: Record<ToolProfile, ToolModule[]> = {
   scan:    [commonTools, accountIngestTools, scanQuestionTools, scanTools, merchantTools],
   chat:    [commonTools, readTools],
-  resolve: [commonTools, readTools, accountIngestTools, resolveIngestTools, resolveTools, merchantTools],
+  clarify: [commonTools, readTools, accountIngestTools, clarifyIngestTools, clarifyTools, merchantTools],
   record:  [commonTools, readTools, accountIngestTools, recordTools, merchantTools],
 };
 
@@ -37,9 +37,9 @@ const MODULES = [
   readTools,
   accountIngestTools,
   scanQuestionTools,
-  resolveIngestTools,
+  clarifyIngestTools,
   scanTools,
-  resolveTools,
+  clarifyTools,
   recordTools,
   merchantTools,
 ];
@@ -67,9 +67,9 @@ export const TOOL_LABELS: Record<string, string> = {
   ...readTools.LABELS,
   ...accountIngestTools.LABELS,
   ...scanQuestionTools.LABELS,
-  ...resolveIngestTools.LABELS,
+  ...clarifyIngestTools.LABELS,
   ...scanTools.LABELS,
-  ...resolveTools.LABELS,
+  ...clarifyTools.LABELS,
   ...recordTools.LABELS,
   ...merchantTools.LABELS,
 };

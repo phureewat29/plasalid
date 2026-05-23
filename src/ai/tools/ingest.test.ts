@@ -3,7 +3,7 @@ import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { accountIngestTools, scanQuestionTools } from "./ingest.js";
 import { createAccount, findAccountById } from "../../db/queries/account-balance.js";
-import { listOpenQuestions } from "../../db/queries/questions.js";
+import { listQuestions } from "../../db/queries/questions.js";
 import { createProgress } from "../../scanner/progress.js";
 import type { AgentExecutionContext } from "./types.js";
 
@@ -164,7 +164,7 @@ describe("accountIngestTools — record_transactions (batch)", () => {
     }, ctx({ scanId: "sc:test" }));
 
     expect(res).toMatch(/Posted 0 of 1/);
-    const questions = listOpenQuestions(db, { scanId: "sc:test" });
+    const questions = listQuestions(db, { scanId: "sc:test" });
     expect(questions).toHaveLength(1);
     expect(questions[0].kind).toBe("scan_commit_failure");
   });
@@ -191,7 +191,7 @@ describe("scanQuestionTools — note_question", () => {
     }, ctx({ scanId: "sc:test", chunkId: "f.pdf#p1", progress }));
 
     expect(res).toMatch(/Question noted/);
-    const questions = listOpenQuestions(db, { scanId: "sc:test" });
+    const questions = listQuestions(db, { scanId: "sc:test" });
     expect(questions).toHaveLength(1);
     expect(questions[0].kind).toBe("uncategorized_expense");
     expect(ticks.filter(t => t.kind === "question")).toHaveLength(1);

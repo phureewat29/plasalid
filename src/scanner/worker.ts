@@ -21,7 +21,7 @@ export interface ScanWorkerDeps {
  * scanId + progress sink + scanned_files row injected through the agent
  * context. Agent's record_transactions / note_question calls write directly to
  * the DB; per-row ticks fan out via `progress.emit`. Failures land in the DB
- * as a `chunk_failed` question so the resolver can pick them up.
+ * as a `chunk_failed` question so the clarifier can pick them up.
  */
 export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Promise<void> {
   const workerId = `cw:${randomUUID()}`;

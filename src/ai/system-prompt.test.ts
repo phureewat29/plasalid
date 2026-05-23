@@ -13,7 +13,7 @@ import { createAccount } from "../db/queries/account-balance.js";
 import { saveMemory } from "./memory.js";
 import {
   buildChatSystemPrompt,
-  buildResolveSystemPrompt,
+  buildClarifySystemPrompt,
   buildRecordSystemPrompt,
   buildScanSystemPrompt,
 } from "./system-prompt.js";
@@ -76,9 +76,9 @@ describe("system prompt builders", () => {
     });
   });
 
-  describe("buildResolveSystemPrompt", () => {
+  describe("buildClarifySystemPrompt", () => {
     it("composes the expected sections in order", () => {
-      const out = buildResolveSystemPrompt(db, {});
+      const out = buildClarifySystemPrompt(db, {});
       expect(out).toContain(`You are Plasalid ("ปลาสลิด")`);
       expect(out).toContain("Today is ");
       expect(out).toContain("## Current chart of accounts");
@@ -87,7 +87,7 @@ describe("system prompt builders", () => {
     });
 
     it("contains no emoji", () => {
-      const out = buildResolveSystemPrompt(db, {});
+      const out = buildClarifySystemPrompt(db, {});
       expect(out).not.toMatch(EMOJI_RE);
     });
   });

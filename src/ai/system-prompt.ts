@@ -1,7 +1,7 @@
 import type Database from "libsql";
 import { config } from "../config.js";
 import { readContext } from "./context.js";
-import { chatPersona, SCAN_PERSONA, RESOLVE_PERSONA, RECORD_PERSONA } from "./personas.js";
+import { chatPersona, SCAN_PERSONA, CLARIFY_PERSONA, RECORD_PERSONA } from "./personas.js";
 import { getThaiTaxonomyHint } from "../accounts/taxonomy.js";
 import {
   renderChartOfAccounts,
@@ -17,7 +17,7 @@ export interface ScanPromptOptions {
   fileName: string;
 }
 
-export interface ResolvePromptOptions {
+export interface ClarifyPromptOptions {
   accountId?: string;
   from?: string;
   to?: string;
@@ -49,14 +49,14 @@ export function buildChatSystemPrompt(db: Database.Database): string {
   ]);
 }
 
-export function buildResolveSystemPrompt(
+export function buildClarifySystemPrompt(
   db: Database.Database,
-  opts: ResolvePromptOptions,
+  opts: ClarifyPromptOptions,
 ): string {
   return joinSections([
-    RESOLVE_PERSONA,
+    CLARIFY_PERSONA,
     renderTodayIso(),
-    renderChartOfAccounts(db, { withBalance: true, emptyState: "resolve" }),
+    renderChartOfAccounts(db, { withBalance: true, emptyState: "clarify" }),
     renderScope(opts),
     renderMemories(db, {
       header: "Rules you've already learned (apply directly; do not re-ask the user)",

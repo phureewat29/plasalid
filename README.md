@@ -15,15 +15,17 @@
 
 <br />
 
-In the US/EU, a financial data aggregator like Plaid empowers most finance apps: one connection, and every app sees the same unified view of your accounts. Most of the world doesn't have that, including Thailand, where there's no such aggregator platform. All bank data is siloed: to know where your financial status stands means logging into five bank apps one by one. Creating a unified view of personal financial data is very challenging.
+In US and Europe, the most of financial apps is likely powered by a hidden aggregators engine like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
 
-That's why Plasalid emerged to resolve this pain point. Your data has stayed fragmented for decades, with no way to bring it together. You can't manage a mortgage effectively without the full picture, and you may be completely blind to your recurring monthly income and expenses. Subscriptions stay active long after they're forgotten, unknown charges go unverified, bank accounts opened years ago drift unchecked, and unexpected spending may silently grow beyond what any single statement shows. When your finances are hard to manage, your life definitely becomes more difficult. Your plans toward financial stability or freedom slip further out of reach. Plasalid is built to solve this.
+Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
-Plasalid addresses this with a simple founding concept: let users drop all their financial documents - bank statements, credit-card statements, payslips, brokerage statements - onto their own machine, where Plasalid leverages AI to extract every transaction, balance, and holding into a single, structured, double-entry database that serves as context for future processing.
+Plasalid is a local data harness built to fix this. Think of it as a personal financial harness.
 
-Moreover, Plasalid comes with a built-in agentic chat that queries the data directly, so questions like which subscriptions are still active, where money went last month, or what your current net worth is can be answered against actual records rather than estimates. You can talk with your money on Plasalid to help you understand your financial situation and plan efficiently.
+You drop your raw financial documents (bank statements, credit card bills, payslips) straight into a folder on your machine. Plasalid parses those files and extracts every transaction, balance, and holding. It transforms a messy pile of PDFs into a clean, double-entry ledger. You only have to build this foundation once. The result is an open, structured backend for your finances, ready to plug into any tool you want.
 
-The data ledger also serves as a harness, open to any AI agent that connects to it, so the picture you assemble once is reusable across whatever tools you choose to use.
+To show you the power of this harness out of the box, Plasalid includes a built-in AI agent. Because your ledger is fully structured, you can actually talk to your money. Ask a question like "Which subscriptions are still active?" or "What did I spend on food last month?". You get exact numbers pulled directly from your records, not estimates or AI hallucinations.
+
+We also built strict boundaries around your privacy. The database is encrypted locally. Plasalid automatically strips out all PII before sending data to an external API. This mean if you swap in a local AI model, your setup runs can stay 100% private and offline.
 
 <p align="center">
   <img src=".github/plasalid-demo.png" alt="demo" width="100%" />
@@ -67,15 +69,14 @@ Then:
 
 1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
 2. Run `plasalid scan` — it parses your PDFs end-to-end without stopping.
-3. Run `plasalid resolve` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a unknown.
+3. Run `plasalid clarify` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a question.
 4. Run `plasalid` to chat with what was scanned.
 
 Other day-to-day commands:
 
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid resolve` — walk every open unknown one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip). Filter with `--account`, `--from`, `--to`, or `--kind`.
-- `plasalid revert <regex>` — delete scanned files matching the regex and every transaction derived from them.
+- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, link recurrences, skip). Zero-arg; processes everything.
 
 ## Commands
 
@@ -90,8 +91,7 @@ plasalid transactions               # List transactions and their postings (filt
 plasalid status                     # Net worth and this-month income/expense totals
 plasalid record [utterance]         # Add a manual transaction, account, balance, or merchant from a plain-language line
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
-plasalid revert [regex]             # Delete scanned files matching <regex> and their transactions
-plasalid resolve                    # Walk every open unknown and apply your decision (--account, --from, --to, --kind also accepted)
+plasalid clarify                    # Walk every open question and apply your decision
 ```
 
 ## How It Works
@@ -110,7 +110,7 @@ plasalid resolve                    # Walk every open unknown and apply your dec
        AI provider (PII-redacted)
                   │
        ┌──────────▼──────────┐
-       │     Encrypted DB    │◀──── plasalid resolve
+       │     Encrypted DB    │◀──── plasalid clarify
        └──────────┬──────────┘       
                   │                   
                plasalid               
@@ -139,15 +139,15 @@ Plasalid stores everything in `~/.plasalid/`:
   data/                # Drop any PDFs here (subfolders allowed; AI classifies)
 ```
 
-`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with learned default categories, transactions and postings), scan history, open unknowns awaiting resolve, recurring transactions (Spotify, salary, rent — recognized during resolve and linked from each member transaction), an action log for record-mode audit, persisted long-term memories, and AES-GCM-encrypted PDF passwords keyed by filename pattern. Everything is wrapped in libsql's AES-256 page encryption.
+`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with categories, transactions and postings), scan history, open questions awaiting clarify, recurring transactions (Spotify, salary, rent — recognized during clarify transaction), persisted long-term memories, and AES-GCM-encrypted passwords. Everything is wrapped in libsql's AES-256 page encryption.
 
 ### Environment Variables
 
 ```bash
 ANTHROPIC_API_KEY=            # Anthropic API key (required when provider is anthropic)
 PLASALID_MODEL=               # Model name; default for Anthropic: claude-sonnet-4-6
-PLASALID_PROVIDER=            # anthropic | openai-compatible. Default: anthropic
-OPENAI_COMPATIBLE_BASE_URL=   # e.g. http://localhost:11434/v1 (Ollama)
+PLASALID_PROVIDER=            # anthropic | openai-compatible. default: anthropic
+OPENAI_COMPATIBLE_BASE_URL=   # e.g. http://localhost:11434/v1 (ollama)
 OPENAI_COMPATIBLE_API_KEY=    # API key for the OpenAI-compatible server (often unused)
 PLASALID_DB_ENCRYPTION_KEY=   # DB encryption passphrase
 PLASALID_DB_PATH=             # Default: ~/.plasalid/db.sqlite

@@ -1,9 +1,9 @@
 import type Database from "libsql";
 import {
   closeQuestion,
-  listOpenQuestions,
-  countOpenQuestions,
-  type OpenQuestionRow,
+  listQuestions,
+  countQuestions,
+  type QuestionRow,
   type ClosedQuestion,
 } from "../db/queries/questions.js";
 import { updatePosting } from "../db/queries/transactions.js";
@@ -20,7 +20,7 @@ export interface ResolverPass {
   readonly name: string;
   readonly kinds: readonly string[];
   /** Try to close one question. Returns the answer if closed, else null. */
-  tryResolve(u: OpenQuestionRow, ctx: ResolverContext): Promise<string | null>;
+  tryResolve(u: QuestionRow, ctx: ResolverContext): Promise<string | null>;
 }
 
 export interface ResolveSummary {
@@ -32,7 +32,7 @@ export interface ResolveSummary {
 
 export interface RunResolveOpts {
   db: Database.Database;
-  /** Narrows to a single scan's open questions. Omit = every open question. */
+  /** Narrows to a single scan's questions. Omit = every question. */
   scanId?: string;
   interactive?: boolean;
   promptUser?: (prompt: string, options?: string[], facts?: any) => Promise<string>;
@@ -112,7 +112,7 @@ export async function runResolve(opts: RunResolveOpts): Promise<ResolveSummary> 
   const tally: Record<string, number> = {};
   const closures: ClosedQuestion[] = [];
 
-  const initial = listOpenQuestions(db, { scanId: opts.scanId, limit: 1000 });
+  const initial = listQuestions(db, { scanId: opts.scanId, limit: 1000 });
   const total = initial.length;
   if (total === 0) {
     return { total: 0, resolved: 0, remaining: 0, tally };
@@ -139,13 +139,13 @@ export async function runResolve(opts: RunResolveOpts): Promise<ResolveSummary> 
   return { total, resolved: total - remaining, remaining, tally };
 }
 
-function matchingPasses(u: OpenQuestionRow): readonly ResolverPass[] {
+function matchingPasses(u: QuestionRow): readonly ResolverPass[] {
   if (!u.kind) return [];
   return RESOLVER_PASSES.filter(p => p.kinds.includes(u.kind!));
 }
 
 async function tryPasses(
-  u: OpenQuestionRow,
+  u: QuestionRow,
   passes: readonly ResolverPass[],
   ctx: ResolverContext,
 ): Promise<{ passName: string; answer: string } | null> {
@@ -163,7 +163,7 @@ async function tryPasses(
 }
 
 function countRemaining(db: Database.Database, scanId?: string): number {
-  return scanId ? countOpenQuestions(db, { scan_id: scanId }) : countOpenQuestions(db);
+  return scanId ? countQuestions(db, { scan_id: scanId }) : countQuestions(db);
 }
 
 /**
@@ -186,7 +186,7 @@ async function runAgentLoop(
     isDone: (n) => n === 0,
     isStalled: (curr, prev) => curr >= prev,
     onPass: async () => {
-      const before = listOpenQuestions(db, { scanId: opts.scanId, limit: 1000 });
+      const before = listQuestions(db, { scanId: opts.scanId, limit: 1000 });
       if (before.length === 0) return 0;
       await runResolveAgent({
         db,
@@ -207,8 +207,8 @@ async function runAgentLoop(
   });
 }
 
-function buildResolveUserMessage(questions: readonly OpenQuestionRow[]): string {
-  const lines = [`${questions.length} open question(s) to resolve.`, ``, `Questions:`];
+function buildResolveUserMessage(questions: readonly QuestionRow[]): string {
+  const lines = [`${questions.length} question(s) to resolve.`, ``, `Questions:`];
   for (const c of questions) {
     const options = parseOptions(c.options_json);
     const optionsStr = options.length > 0 ? ` | options=[${options.join(" / ")}]` : "";
@@ -230,7 +230,7 @@ function parseOptions(json: string | null): string[] {
   }
 }
 
-function canonicalKey(u: OpenQuestionRow): string {
+function canonicalKey(u: QuestionRow): string {
   return `[${u.kind ?? "general"}] ${u.prompt.replace(/\s+/g, " ").trim()}`;
 }
 

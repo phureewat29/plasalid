@@ -55,7 +55,7 @@ export function renderRules(db: Database.Database): string {
     return (
       "No rules yet.\n\n" +
       chalk.dim(
-        "Rules accumulate as you resolve unknowns. Run `plasalid resolve` after a scan.",
+        "Rules accumulate as you clarify questions. Run `plasalid clarify` after a scan.",
       )
     );
   }

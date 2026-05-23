@@ -469,7 +469,7 @@ const QUESTION_DEFS: ToolDefinition[] = [
   {
     name: "note_question",
     description:
-      "Record a clarification question without pausing the run. Use SPARINGLY during scan — best-guess expense categorization is preferred (small misses are cheap to fix; a flood of open questions is not). Call note_question only when (a) the row is unparseable (skip the row, no transaction_id), (b) you have a doubt about an account itself (pass account_id), or (c) the amount/sign/date/counter-party is genuinely unclear (post your best-guess transaction first, then call this with the transaction_id). Use kind='uncategorized_expense' only for genuinely opaque expense descriptors that landed in expense:uncategorized. The resolver picks these up later with the full picture.",
+      "Record a clarification question without pausing the run. Use SPARINGLY during scan — best-guess expense categorization is preferred (small misses are cheap to fix; a flood of questions is not). Call note_question only when (a) the row is unparseable (skip the row, no transaction_id), (b) you have a doubt about an account itself (pass account_id), or (c) the amount/sign/date/counter-party is genuinely unclear (post your best-guess transaction first, then call this with the transaction_id). Use kind='uncategorized_expense' only for genuinely opaque expense descriptors that landed in expense:uncategorized. The clarifier picks these up later with the full picture.",
     input_schema: {
       type: "object",
       properties: {
@@ -481,12 +481,12 @@ const QUESTION_DEFS: ToolDefinition[] = [
         kind: {
           type: "string",
           description:
-            "Optional category for the question. Use 'uncategorized_expense' when the posting landed in expense:uncategorized; the resolver batches these into one cleanup pass.",
+            "Optional category for the question. Use 'uncategorized_expense' when the posting landed in expense:uncategorized; the clarifier batches these into one cleanup pass.",
         },
         options: {
           type: "array",
           description:
-            "Optional list of candidate answers the resolver can offer the user.",
+            "Optional list of candidate answers the clarifier can offer the user.",
           items: { type: "string" },
         },
         transaction_id: {
@@ -542,7 +542,7 @@ const RESOLVE_DEFS: ToolDefinition[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid resolve`. Not exposed during `plasalid scan` — use `note_question` instead. Pass `question_id` to close an existing open question in place. Pass `related_question_ids` to apply the user's single answer to a whole group of sibling questions at once.",
+      "Ask the user a clarifying question when you cannot confidently proceed. The pipeline pauses and prompts the user interactively. Available during `plasalid clarify`. Not exposed during `plasalid scan` — use `note_question` instead. Pass `question_id` to close an existing question in place. Pass `related_question_ids` to apply the user's single answer to a whole group of sibling questions at once.",
     input_schema: {
       type: "object",
       properties: {
@@ -558,13 +558,13 @@ const RESOLVE_DEFS: ToolDefinition[] = [
         question_id: {
           type: "string",
           description:
-            "Id of the primary open question this resolves. The user's answer closes (deletes) that row.",
+            "Id of the primary question this clarifies. The user's answer closes (deletes) that row.",
         },
         related_question_ids: {
           type: "array",
           items: { type: "string" },
           description:
-            "Optional: ids of additional open questions that share the same answer as `question_id`. The user is prompted once; every listed question (plus the primary) is closed with the same answer.",
+            "Optional: ids of additional questions that share the same answer as `question_id`. The user is prompted once; every listed question (plus the primary) is closed with the same answer.",
         },
         facts: {
           type: "object",
@@ -587,7 +587,7 @@ const RESOLVE_DEFS: ToolDefinition[] = [
   {
     name: "close_question",
     description:
-      "Close an open question by writing its answer and deleting the row WITHOUT prompting the user. Use after applying a mutation that a memory rule or heuristic already implied. Pass `related_question_ids` to close a sibling group in one call.",
+      "Close an question by writing its answer and deleting the row WITHOUT prompting the user. Use after applying a mutation that a memory rule or heuristic already implied. Pass `related_question_ids` to close a sibling group in one call.",
     input_schema: {
       type: "object",
       properties: {
@@ -608,7 +608,7 @@ const RESOLVE_LABELS: Record<string, string> = {
   close_question: "Closing question",
 };
 
-async function resolveIngestExecute(
+async function clarifyIngestExecute(
   db: Database.Database,
   name: string,
   input: any,
@@ -668,8 +668,8 @@ async function closeQuestionTool(
   return `Closed ${count} question${count === 1 ? "" : "s"}.`;
 }
 
-export const resolveIngestTools: ToolModule = {
+export const clarifyIngestTools: ToolModule = {
   DEFS: RESOLVE_DEFS,
   LABELS: RESOLVE_LABELS,
-  execute: resolveIngestExecute,
+  execute: clarifyIngestExecute,
 };

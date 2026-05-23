@@ -3,12 +3,12 @@ import type Database from "libsql";
 import type { ScannedFile } from "./walker.js";
 import type { ScanHooks } from "./hooks.js";
 import type { ScanProgress } from "./progress.js";
-import type { ResolveSummary } from "./resolver.js";
+import type { ClarifySummary } from "./clarifier.js";
 import { createProgress } from "./progress.js";
 import { decryptPhase } from "./decrypt.js";
 import { parsePhase } from "./parse.js";
 import { chunkPdf } from "./pdf/chunker.js";
-import { runResolve } from "./resolver.js";
+import { runClarify } from "./clarifier.js";
 import { errorMessage } from "./result.js";
 
 export interface Chunk {
@@ -50,7 +50,7 @@ export interface PhaseError {
   readonly error: unknown;
 }
 
-export type PhaseName = "decrypt" | "chunk" | "parse" | "resolve";
+export type PhaseName = "decrypt" | "chunk" | "parse" | "clarify";
 
 export interface RunScanOptions {
   regex?: string;
@@ -84,7 +84,7 @@ export interface ScanState {
   failed: FailedFile[];
   chunks: Chunk[];
 
-  resolveSummary: ResolveSummary | null;
+  clarifySummary: ClarifySummary | null;
   errors: PhaseError[];
 }
 
@@ -105,22 +105,22 @@ const chunkPhase: Phase = async (_db, state, hooks) => {
   await hooks.afterChunk?.(state);
 };
 
-const resolvePhase: Phase = async (db, state, hooks) => {
-  await hooks.beforeResolve?.(state);
-  const summary = await runResolve({
+const clarifyPhase: Phase = async (db, state, hooks) => {
+  await hooks.beforeClarify?.(state);
+  const summary = await runClarify({
     db,
     scanId: state.scanId,
     interactive: state.options.interactive ?? true,
   });
-  state.resolveSummary = summary;
-  await hooks.afterResolve?.(state, summary);
+  state.clarifySummary = summary;
+  await hooks.afterClarify?.(state, summary);
 };
 
 export const DEFAULT_PHASES: readonly { name: PhaseName; phase: Phase }[] = [
   { name: "decrypt", phase: decryptPhase },
   { name: "chunk", phase: chunkPhase },
   { name: "parse", phase: parsePhase },
-  { name: "resolve", phase: resolvePhase },
+  { name: "clarify", phase: clarifyPhase },
 ];
 
 /**
@@ -146,7 +146,7 @@ export async function runScan(
     skipped: [],
     failed: [],
     chunks: [],
-    resolveSummary: null,
+    clarifySummary: null,
     errors: [],
   };
 

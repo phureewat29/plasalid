@@ -152,12 +152,12 @@ describe("find_similar_accounts", () => {
   });
 });
 
-describe("clarify", () => {
+describe("confirm", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("returns a non-interactive marker when no promptUser is provided", async () => {
-    const result = await recordTools.execute(db, "clarify", {
+    const result = await recordTools.execute(db, "confirm", {
       prompt: "which account?",
       options: ["A", "B"],
     }, ctx({ interactive: false }));
@@ -165,7 +165,7 @@ describe("clarify", () => {
   });
 
   it("returns the user's answer when interactive", async () => {
-    const result = await recordTools.execute(db, "clarify", {
+    const result = await recordTools.execute(db, "confirm", {
       prompt: "which account?",
     }, ctx({
       interactive: true,

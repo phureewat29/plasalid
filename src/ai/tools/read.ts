@@ -6,7 +6,7 @@ import {
   getPeriodTotals,
 } from "../../db/queries/account-balance.js";
 import { listPostings } from "../../db/queries/transactions.js";
-import { listOpenQuestions } from "../../db/queries/questions.js";
+import { listQuestions } from "../../db/queries/questions.js";
 import { searchPostings } from "../../db/queries/search.js";
 import { formatAmount } from "../../currency.js";
 import { sanitizeForPrompt, sanitizeForPromptCell } from "../sanitize.js";
@@ -79,9 +79,9 @@ const DEFS: ToolDefinition[] = [
     },
   },
   {
-    name: "list_open_questions",
+    name: "list_questions",
     description:
-      "List clarification questions recorded by the scanner that have not been resolved yet. Each row carries the prompt, optional candidate answers, and the file/transaction/account it was attached to. The resolver uses this to drive the step-by-step clarification loop.",
+      "List clarification questions recorded by the scanner that have not been resolved yet. Each row carries the prompt, optional candidate answers, and the file/transaction/account it was attached to. The clarifier uses this to drive the step-by-step clarification loop.",
     input_schema: {
       type: "object",
       properties: {
@@ -103,7 +103,7 @@ const LABELS: Record<string, string> = {
   list_postings: "Listing postings",
   search_transactions: "Searching transactions",
   get_period_totals: "Summing period totals",
-  list_open_questions: "Listing open questions",
+  list_questions: "Listing questions",
 };
 
 async function execute(
@@ -163,13 +163,13 @@ async function execute(
       const totals = getPeriodTotals(db, input.from, input.to);
       return `Income ${formatAmount(totals.income)} · Expenses ${formatAmount(totals.expenses)} · Net ${formatAmount(totals.income - totals.expenses)}`;
     }
-    case "list_open_questions": {
-      const rows = listOpenQuestions(db, input.limit ?? 50);
+    case "list_questions": {
+      const rows = listQuestions(db, input.limit ?? 50);
       const filtered = input.kind
         ? rows.filter((r) => r.kind === input.kind)
         : rows;
       if (filtered.length === 0)
-        return "No open questions. The picture is clear.";
+        return "No questions. The picture is clear.";
       return filtered
         .map((r) => {
           const targets = [

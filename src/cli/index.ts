@@ -171,12 +171,12 @@ program
   });
 
 program
-  .command("resolve")
-  .description("Resolve every open question across the ledger")
+  .command("clarify")
+  .description("Clarify every question across the ledger")
   .action(async () => {
     ensureConfigured();
-    const { runResolveCommand } = await import("./commands/resolve.js");
-    await runResolveCommand();
+    const { runClarifyCommand } = await import("./commands/clarify.js");
+    await runClarifyCommand();
   });
 
 program.configureHelp({
@@ -191,7 +191,7 @@ program.configureHelp({
         desc: "Open the data folder in your OS file explorer (alias: open)",
       },
       { name: "accounts", desc: "Browse the chart of accounts (interactive TTY) or list them (piped)" },
-      { name: "status", desc: "Show financial and system status (net worth, recurring, unknowns)" },
+      { name: "status", desc: "Show financial and system status (net worth, recurring, questions)" },
       {
         name: "transactions",
         desc: "Browse transactions (interactive TTY) or list them (piped/--no-interactive)",
@@ -213,8 +213,8 @@ program.configureHelp({
         desc: "Delete learned rules whose ids match <regex> (anchored)",
       },
       {
-        name: "resolve",
-        desc: "Resolve every open unknown across the ledger",
+        name: "clarify",
+        desc: "Clarify every question across the ledger",
       },
     ]),
 });

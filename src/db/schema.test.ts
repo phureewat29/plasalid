@@ -83,40 +83,6 @@ describe("migrate", () => {
     expect(row.parent_id).toBe("expense:food");
   });
 
-  it("renames legacy unknowns table to questions on existing dbs", () => {
-    const db = new Database(":memory:");
-    db.pragma("foreign_keys = ON");
-    // Simulate an older schema where the table was named `unknowns` and
-    // accounts/transactions still carried `has_unknown`.
-    db.exec(`
-      CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, has_unknown INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE transactions (id TEXT PRIMARY KEY, date TEXT NOT NULL, description TEXT NOT NULL, has_unknown INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE unknowns (id TEXT PRIMARY KEY, prompt TEXT NOT NULL);
-      INSERT INTO unknowns (id, prompt) VALUES ('q:1', 'legacy row');
-    `);
-
-    migrate(db);
-
-    // Old name is gone; new name carries the data.
-    const tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('questions','unknowns')`)
-      .all()
-      .map((r: any) => r.name);
-    expect(tables).toContain("questions");
-    expect(tables).not.toContain("unknowns");
-
-    const row = db.prepare(`SELECT prompt FROM questions WHERE id = ?`).get("q:1") as { prompt: string };
-    expect(row.prompt).toBe("legacy row");
-
-    const acctCols = db.prepare(`PRAGMA table_info(accounts)`).all().map((r: any) => r.name);
-    expect(acctCols).toContain("has_question");
-    expect(acctCols).not.toContain("has_unknown");
-
-    const txCols = db.prepare(`PRAGMA table_info(transactions)`).all().map((r: any) => r.name);
-    expect(txCols).toContain("has_question");
-    expect(txCols).not.toContain("has_unknown");
-  });
-
   it("dedups merchant aliases on normalized_pattern", () => {
     const db = freshDb();
     migrate(db);

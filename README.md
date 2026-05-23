@@ -19,7 +19,7 @@ In US and Europe, the most of financial apps are likely powered by aggregators e
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
-Plasalid is a local data harness built to fix this. Think of it as a personal financial harness.
+**Plasalid is built to fix this AI. Think of it as a personal financial harness**.
 
 You drop your raw financial documents (bank statements, credit card bills, payslips) straight into a folder on your machine. Plasalid parses those files and extracts every transaction, balance, and holding. It transforms a messy pile of PDFs into a clean, double-entry ledger. You only have to build this foundation once. The result is an open, structured backend for your finances, ready to plug into any tool you want.
 

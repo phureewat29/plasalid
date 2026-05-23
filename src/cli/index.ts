@@ -172,7 +172,7 @@ program
 
 program
   .command("resolve")
-  .description("Resolve every open unknown across the ledger")
+  .description("Resolve every open question across the ledger")
   .action(async () => {
     ensureConfigured();
     const { runResolveCommand } = await import("./commands/resolve.js");

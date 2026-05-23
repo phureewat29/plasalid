@@ -51,7 +51,7 @@ function systemRows(db: Database.Database): Row[] {
   const tx = countTransactions(db);
   const files = countScannedFiles(db);
   const memories = countMemories(db);
-  const unknowns = countOpenUnknowns(db);
+  const questions = countOpenQuestions(db);
 
   const rows: Row[] = [
     {
@@ -80,10 +80,10 @@ function systemRows(db: Database.Database): Row[] {
     rows.push({ label: "Memories", value: formatInteger(memories) });
   }
 
-  if (unknowns > 0) {
+  if (questions > 0) {
     rows.push({
-      label: "Unknowns",
-      value: chalk.yellow(formatInteger(unknowns)),
+      label: "Questions",
+      value: chalk.yellow(formatInteger(questions)),
       suffix: chalk.dim("run `plasalid resolve`"),
     });
   }

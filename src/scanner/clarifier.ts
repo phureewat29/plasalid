@@ -7,30 +7,30 @@ import {
   type ClosedQuestion,
 } from "../db/queries/questions.js";
 import { updatePosting } from "../db/queries/transactions.js";
-import { runResolveAgent } from "../ai/agent.js";
-import { synthesizeMemoryRules } from "./resolver-memory.js";
+import { runClarifyAgent } from "../ai/agent.js";
+import { synthesizeMemoryRules } from "./clarifier-memory.js";
 import { converge } from "./converge.js";
 
-export interface ResolverContext {
+export interface ClarifierContext {
   readonly db: Database.Database;
   readonly tally: Record<string, number>;
 }
 
-export interface ResolverPass {
+export interface ClarifierPass {
   readonly name: string;
   readonly kinds: readonly string[];
   /** Try to close one question. Returns the answer if closed, else null. */
-  tryResolve(u: QuestionRow, ctx: ResolverContext): Promise<string | null>;
+  tryResolve(u: QuestionRow, ctx: ClarifierContext): Promise<string | null>;
 }
 
-export interface ResolveSummary {
+export interface ClarifySummary {
   readonly total: number;
-  readonly resolved: number;
+  readonly clarified: number;
   readonly remaining: number;
   readonly tally: Readonly<Record<string, number>>;
 }
 
-export interface RunResolveOpts {
+export interface RunClarifyOpts {
   db: Database.Database;
   /** Narrows to a single scan's questions. Omit = every question. */
   scanId?: string;
@@ -45,7 +45,7 @@ const MAX_AGENT_PASSES = 3;
  * Apply deterministic passes via memory_rules lookups. Closes any question
  * whose prompt has a stored scanning_hint that already encodes the answer.
  */
-const memoryRulePass: ResolverPass = {
+const memoryRulePass: ClarifierPass = {
   name: "memory_rule",
   kinds: ["uncategorized", "uncategorized_expense", "duplicate", "correlation", "recurrence_candidate", "similar_accounts", "boundary_continuation", "scan_truncated", "scan_commit_failure"],
   async tryResolve(u, ctx) {
@@ -67,7 +67,7 @@ const memoryRulePass: ResolverPass = {
  * stored default_account_id, apply the default to every expense posting on
  * that transaction.
  */
-const merchantDefaultPass: ResolverPass = {
+const merchantDefaultPass: ClarifierPass = {
   name: "merchant_default",
   kinds: ["uncategorized_expense"],
   async tryResolve(u, ctx) {
@@ -96,18 +96,18 @@ const merchantDefaultPass: ResolverPass = {
   },
 };
 
-export const RESOLVER_PASSES: readonly ResolverPass[] = [
+export const CLARIFIER_PASSES: readonly ClarifierPass[] = [
   memoryRulePass,
   merchantDefaultPass,
 ];
 
 /**
  * Single entry point shared by the in-scan resolve phase and the standalone
- * `plasalid resolve` command. Runs deterministic passes first, then (when
- * interactive) hands the leftovers to the LLM resolver agent. Closed
+ * `plasalid clarify` command. Runs deterministic passes first, then (when
+ * interactive) hands the leftovers to the LLM clarifier agent. Closed
  * questions get compacted into scanning_hint memories.
  */
-export async function runResolve(opts: RunResolveOpts): Promise<ResolveSummary> {
+export async function runClarify(opts: RunClarifyOpts): Promise<ClarifySummary> {
   const { db } = opts;
   const tally: Record<string, number> = {};
   const closures: ClosedQuestion[] = [];
@@ -115,7 +115,7 @@ export async function runResolve(opts: RunResolveOpts): Promise<ResolveSummary> 
   const initial = listQuestions(db, { scanId: opts.scanId, limit: 1000 });
   const total = initial.length;
   if (total === 0) {
-    return { total: 0, resolved: 0, remaining: 0, tally };
+    return { total: 0, clarified: 0, remaining: 0, tally };
   }
 
   for (const u of initial) {
@@ -136,25 +136,25 @@ export async function runResolve(opts: RunResolveOpts): Promise<ResolveSummary> 
 
   synthesizeMemoryRules(db, closures);
   const remaining = countRemaining(db, opts.scanId);
-  return { total, resolved: total - remaining, remaining, tally };
+  return { total, clarified: total - remaining, remaining, tally };
 }
 
-function matchingPasses(u: QuestionRow): readonly ResolverPass[] {
+function matchingPasses(u: QuestionRow): readonly ClarifierPass[] {
   if (!u.kind) return [];
-  return RESOLVER_PASSES.filter(p => p.kinds.includes(u.kind!));
+  return CLARIFIER_PASSES.filter(p => p.kinds.includes(u.kind!));
 }
 
 async function tryPasses(
   u: QuestionRow,
-  passes: readonly ResolverPass[],
-  ctx: ResolverContext,
+  passes: readonly ClarifierPass[],
+  ctx: ClarifierContext,
 ): Promise<{ passName: string; answer: string } | null> {
   for (const pass of passes) {
     let answer: string | null;
     try {
       answer = await pass.tryResolve(u, ctx);
     } catch (err) {
-      console.error(`[resolver pass ${pass.name}] ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[clarifier pass ${pass.name}] ${err instanceof Error ? err.message : String(err)}`);
       answer = null;
     }
     if (answer != null) return { passName: pass.name, answer };
@@ -167,7 +167,7 @@ function countRemaining(db: Database.Database, scanId?: string): number {
 }
 
 /**
- * Stall-protected outer loop around the LLM resolver. Each pass re-fetches
+ * Stall-protected outer loop around the LLM clarifier. Each pass re-fetches
  * leftover questions, hands them to the agent, and the agent closes what it
  * can via close_question / ask_user. The loop stops when nothing closes
  * between passes. After each pass we diff the pre/post set to recover the
@@ -175,7 +175,7 @@ function countRemaining(db: Database.Database, scanId?: string): number {
  * memoryRulePass path.
  */
 async function runAgentLoop(
-  opts: RunResolveOpts,
+  opts: RunClarifyOpts,
   closures: ClosedQuestion[],
   tally: Record<string, number>,
 ): Promise<void> {
@@ -188,7 +188,7 @@ async function runAgentLoop(
     onPass: async () => {
       const before = listQuestions(db, { scanId: opts.scanId, limit: 1000 });
       if (before.length === 0) return 0;
-      await runResolveAgent({
+      await runClarifyAgent({
         db,
         prompt: {},
         initialMessages: [{ role: "user", content: buildResolveUserMessage(before) }],
@@ -197,7 +197,7 @@ async function runAgentLoop(
           promptUser: opts.promptUser,
           onQuestionClosed: (closed) => {
             closures.push(closed);
-            tally["agent_resolution"] = (tally["agent_resolution"] ?? 0) + 1;
+            tally["agent_clarification"] = (tally["agent_clarification"] ?? 0) + 1;
           },
         },
         onProgress: opts.onProgress,

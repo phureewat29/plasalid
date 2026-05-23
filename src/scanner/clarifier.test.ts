@@ -6,9 +6,9 @@ import { upsertMerchant } from "../db/queries/merchants.js";
 import { recordTransaction } from "../db/queries/transactions.js";
 import { recordQuestion, listQuestions } from "../db/queries/questions.js";
 import { saveMemory } from "../ai/memory.js";
-import { RESOLVER_PASSES, runResolve } from "./resolver.js";
-import { synthesizeMemoryRules } from "./resolver-memory.js";
-import type { ResolverPass } from "./resolver.js";
+import { CLARIFIER_PASSES, runClarify } from "./clarifier.js";
+import { synthesizeMemoryRules } from "./clarifier-memory.js";
+import type { ClarifierPass } from "./clarifier.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -22,8 +22,8 @@ function freshDb() {
   return db;
 }
 
-function pass(name: string): ResolverPass {
-  const found = RESOLVER_PASSES.find(p => p.name === name);
+function pass(name: string): ClarifierPass {
+  const found = CLARIFIER_PASSES.find(p => p.name === name);
   if (!found) throw new Error(`No pass named ${name}`);
   return found;
 }
@@ -43,8 +43,8 @@ describe("memoryRulePass", () => {
       "[uncategorized_expense] Categorize Lazada charge -> expense:food",
       "scanning_hint",
     );
-    const summary = await runResolve({ db, interactive: false });
-    expect(summary.resolved).toBe(1);
+    const summary = await runClarify({ db, interactive: false });
+    expect(summary.clarified).toBe(1);
     expect(summary.remaining).toBe(0);
     expect(summary.tally.memory_rule).toBe(1);
     expect(listQuestions(db).find(u => u.id === id)).toBeUndefined();
@@ -59,8 +59,8 @@ describe("memoryRulePass", () => {
       kind: "boundary_continuation",
       prompt: "Row continues onto next page.",
     });
-    const summary = await runResolve({ db, interactive: false });
-    expect(summary.resolved).toBe(0);
+    const summary = await runClarify({ db, interactive: false });
+    expect(summary.clarified).toBe(0);
     expect(summary.remaining).toBe(1);
   });
 });
@@ -88,8 +88,8 @@ describe("merchantDefaultPass", () => {
       kind: "uncategorized_expense",
       prompt: "Categorize Starbucks",
     });
-    const summary = await runResolve({ db, interactive: false });
-    expect(summary.resolved).toBe(1);
+    const summary = await runClarify({ db, interactive: false });
+    expect(summary.clarified).toBe(1);
     expect(summary.remaining).toBe(0);
     expect(summary.tally.merchant_default).toBe(1);
     const posting = db
@@ -119,8 +119,8 @@ describe("merchantDefaultPass", () => {
       kind: "uncategorized_expense",
       prompt: "Categorize Lazada",
     });
-    const summary = await runResolve({ db, interactive: false });
-    expect(summary.resolved).toBe(0);
+    const summary = await runClarify({ db, interactive: false });
+    expect(summary.clarified).toBe(0);
     expect(summary.remaining).toBe(1);
   });
 });
@@ -150,11 +150,11 @@ describe("synthesizeMemoryRules", () => {
   });
 });
 
-describe("runResolve outer loop", () => {
+describe("runClarify outer loop", () => {
   it("returns an empty summary when there are no questions", async () => {
     const db = freshDb();
-    const summary = await runResolve({ db, interactive: false });
-    expect(summary).toEqual({ total: 0, resolved: 0, remaining: 0, tally: {} });
+    const summary = await runClarify({ db, interactive: false });
+    expect(summary).toEqual({ total: 0, clarified: 0, remaining: 0, tally: {} });
   });
 
   it("re-fetches questions live across passes (deterministic only)", async () => {
@@ -163,9 +163,9 @@ describe("runResolve outer loop", () => {
     saveMemory(db, "[uncategorized_expense] First -> expense:food", "scanning_hint");
     recordQuestion(db, { file_id: null, transaction_id: null, account_id: null, kind: "uncategorized_expense", prompt: "First" });
     recordQuestion(db, { file_id: null, transaction_id: null, account_id: null, kind: "boundary_continuation", prompt: "Second" });
-    const summary = await runResolve({ db, interactive: false });
+    const summary = await runClarify({ db, interactive: false });
     expect(summary.total).toBe(2);
-    expect(summary.resolved).toBe(1);
+    expect(summary.clarified).toBe(1);
     expect(summary.remaining).toBe(1);
   });
 
@@ -174,9 +174,9 @@ describe("runResolve outer loop", () => {
     saveMemory(db, "[uncategorized_expense] Scoped -> expense:food", "scanning_hint");
     recordQuestion(db, { file_id: null, scan_id: "sc:a", transaction_id: null, account_id: null, kind: "uncategorized_expense", prompt: "Scoped" });
     recordQuestion(db, { file_id: null, scan_id: "sc:b", transaction_id: null, account_id: null, kind: "uncategorized_expense", prompt: "Other" });
-    const summary = await runResolve({ db, scanId: "sc:a", interactive: false });
+    const summary = await runClarify({ db, scanId: "sc:a", interactive: false });
     expect(summary.total).toBe(1);
-    expect(summary.resolved).toBe(1);
+    expect(summary.clarified).toBe(1);
     expect(summary.remaining).toBe(0);
     expect(listQuestions(db, { scanId: "sc:b" })).toHaveLength(1);
   });
@@ -185,7 +185,7 @@ describe("runResolve outer loop", () => {
     const db = freshDb();
     saveMemory(db, "[uncategorized_expense] First -> expense:food", "scanning_hint");
     recordQuestion(db, { file_id: null, transaction_id: null, account_id: null, kind: "uncategorized_expense", prompt: "First" });
-    await runResolve({ db, interactive: false });
+    await runClarify({ db, interactive: false });
     const rules = db.prepare(`SELECT content FROM memories WHERE category = 'scanning_hint'`).all() as { content: string }[];
     // Both the seed rule and the synthesized rule live there. The synthesized
     // one mirrors the seed (same prompt -> same answer) and dedupes.

@@ -199,4 +199,4 @@ async function execute(
   }
 }
 
-export const resolveTools: ToolModule = { DEFS, LABELS, execute };
+export const clarifyTools: ToolModule = { DEFS, LABELS, execute };

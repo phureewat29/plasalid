@@ -15,7 +15,7 @@
 
 <br />
 
-In US and Europe, the most of financial apps is likely powered by a hidden aggregators engine like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
+In US and Europe, the most of financial apps are likely powered by aggregators engine like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 

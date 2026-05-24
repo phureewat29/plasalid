@@ -7,8 +7,13 @@ import {
   type ClosedQuestion,
 } from "../db/queries/questions.js";
 import { updatePosting } from "../db/queries/transactions.js";
+import { findRule } from "../db/queries/rules.js";
 import { runClarifyAgent } from "../ai/agent.js";
 import { synthesizeMemoryRules } from "./clarifier-memory.js";
+import {
+  applyRecurrenceRules,
+  generateRecurrenceCandidateQuestions,
+} from "./recurrence.js";
 import { converge } from "./converge.js";
 
 export interface ClarifierContext {
@@ -44,23 +49,30 @@ export interface RunClarifyOpts {
 const MAX_AGENT_PASSES = 3;
 
 /**
- * Apply deterministic passes via memory_rules lookups. Closes any question
- * whose prompt has a stored scanning_hint that already encodes the answer.
+ * Apply deterministic resolution via a `(kind, key)` indexed lookup in the
+ * rules table. The rule's `key` was computed at question-creation time
+ * (see `src/scanner/committer.ts`) from a stable structural signature — merchant id,
+ * normalized descriptor, account pair — so the same pattern matches
+ * across scans regardless of date, amount, or prompt prose.
  */
 const memoryRulePass: ClarifierPass = {
   name: "memory_rule",
-  kinds: ["uncategorized", "uncategorized_expense", "duplicate", "correlation", "recurrence_candidate", "similar_accounts", "boundary_continuation", "scan_truncated", "scan_commit_failure"],
+  kinds: [
+    "uncategorized",
+    "uncategorized_expense",
+    "duplicate",
+    "correlation",
+    "similar_accounts",
+    "boundary_continuation",
+    "scan_truncated",
+    "unknown_merchant",
+  ],
   async tryResolve(u, ctx) {
-    const rules = ctx.db
-      .prepare(`SELECT content FROM memories WHERE category = 'scanning_hint'`)
-      .all() as { content: string }[];
-    const key = canonicalKey(u);
-    for (const r of rules) {
-      const match = parseRule(r.content);
-      if (!match) continue;
-      if (match.key === key) return match.answer;
-    }
-    return null;
+    if (!u.kind) return null;
+    const key = extractRuleKey(u.context_json);
+    if (!key) return null;
+    const rule = findRule(ctx.db, u.kind, key);
+    return rule?.target ?? null;
   },
 };
 
@@ -107,12 +119,18 @@ export const CLARIFIER_PASSES: readonly ClarifierPass[] = [
  * Single entry point shared by the in-scan resolve phase and the standalone
  * `plasalid clarify` command. Runs deterministic passes first, then (when
  * interactive) hands the leftovers to the LLM clarifier agent. Closed
- * questions get compacted into scanning_hint memories.
+ * questions get upserted into the rules table (keyed on the question's
+ * structural signature, not its prose).
  */
 export async function runClarify(opts: RunClarifyOpts): Promise<ClarifySummary> {
   const { db } = opts;
   const tally: Record<string, number> = {};
   const closures: ClosedQuestion[] = [];
+
+  const autoLinked = applyRecurrenceRules(db).linked;
+  if (autoLinked > 0) tally["recurrence_auto_link"] = autoLinked;
+  const generated = generateRecurrenceCandidateQuestions(db, opts.scanId ?? null);
+  if (generated > 0) tally["recurrence_generation"] = generated;
 
   const initial = listQuestions(db, { scanId: opts.scanId, limit: 1000 });
   const total = initial.length;
@@ -233,15 +251,12 @@ function parseOptions(json: string | null): string[] {
   }
 }
 
-function canonicalKey(u: QuestionRow): string {
-  return `[${u.kind ?? "general"}] ${u.prompt.replace(/\s+/g, " ").trim()}`;
-}
-
-function parseRule(body: string): { key: string; answer: string } | null {
-  const idx = body.lastIndexOf(" -> ");
-  if (idx < 0) return null;
-  const key = body.slice(0, idx).trim();
-  const answer = body.slice(idx + 4).trim();
-  if (!key || !answer) return null;
-  return { key, answer };
+function extractRuleKey(contextJson: string | null): string | null {
+  if (!contextJson) return null;
+  try {
+    const parsed = JSON.parse(contextJson);
+    return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
+  } catch {
+    return null;
+  }
 }

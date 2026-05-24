@@ -21,7 +21,7 @@ export function PromptFrame({ buffer, footerText, showCaret, banner }: Props) {
       <Text>{rule}</Text>
       <TextInput buffer={buffer} prompt={chalk.dim("❯ ")} showCaret={showCaret} />
       <Text>{rule}</Text>
-      <Text>{chalk.dim(`  ${footerText}`)}</Text>
+      <Text>{`  ${footerText}`}</Text>
       {banner ? <Text>{banner}</Text> : null}
     </Box>
   );

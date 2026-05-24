@@ -13,10 +13,24 @@ export function truncateMiddle(s: string, max: number): string {
 }
 
 /**
+ * Count visible terminal cells. Each code point counts as 1, except Unicode
+ * combining marks (\p{M}) which stack on the preceding base char and count
+ * as 0. Does not handle East-Asian wide characters; revisit if CJK filenames
+ * appear in real ledgers.
+ */
+export function displayWidth(s: string): number {
+  let w = 0;
+  for (const c of s) if (!/^\p{M}$/u.test(c)) w++;
+  return w;
+}
+
+/**
  * Right-pad to a fixed visible width. Assumes `s` has no ANSI codes — callers
  * working with colored strings should compose color around the padded value,
- * not inside it.
+ * not inside it. Pads by display width so Thai (and other scripts with
+ * combining marks) stay aligned with surrounding columns.
  */
 export function padRight(s: string, width: number): string {
-  return s.length >= width ? s : s + " ".repeat(width - s.length);
+  const visual = displayWidth(s);
+  return visual >= width ? s : s + " ".repeat(width - visual);
 }

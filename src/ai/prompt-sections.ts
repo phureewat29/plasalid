@@ -1,5 +1,7 @@
 import type Database from "libsql";
 import { getMemories, type Memory } from "./memory.js";
+import { listRules, type Rule } from "../db/queries/rules.js";
+import { countQuestions } from "../db/queries/questions.js";
 import {
   getAccountBalances,
   type AccountBalance,
@@ -167,4 +169,34 @@ function formatMemoryLine(m: Memory, showCategory: boolean): string {
   return showCategory
     ? `- [${m.category}] ${stripControls(m.content)}`
     : `- ${stripControls(m.content)}`;
+}
+
+/** Rules (structured scanner hints) */
+
+export function renderRules(db: Database.Database, header: string): string | null {
+  const rules = listRules(db, { limit: 500 });
+  if (rules.length === 0) return null;
+  const lines = rules.map(formatRuleLine);
+  return `## ${header}\n${lines.join("\n")}`;
+}
+
+function formatRuleLine(r: Rule): string {
+  return `- [${r.kind}] ${stripControls(r.key)} -> ${stripControls(r.target)}`;
+}
+
+/** Open clarify-questions backlog (chat surface) */
+
+/**
+ * Emit a discreet hint about open clarify questions when the backlog is
+ * non-empty. The chat agent decides when to mention it based on the user's
+ * message — don't volunteer the count out of context. Returns null when the
+ * backlog is empty so `joinSections` drops the slot entirely.
+ */
+export function renderOpenQuestionsHint(db: Database.Database): string | null {
+  const n = countQuestions(db);
+  if (n === 0) return null;
+  return [
+    "## Open clarify questions",
+    `There ${n === 1 ? "is 1 open question" : `are ${n} open questions`} in the backlog. Mention this only when the user's message is related (e.g. they ask about uncategorized spending, a specific merchant, or "what's pending"); don't volunteer it otherwise. When you do mention it, suggest \`plasalid clarify\`.`,
+  ].join("\n");
 }

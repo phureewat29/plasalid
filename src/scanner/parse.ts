@@ -2,6 +2,8 @@ import type Database from "libsql";
 import { runWithConcurrency } from "./concurrency.js";
 import { runScanWorker } from "./worker.js";
 import { errorMessage } from "./result.js";
+import { getActiveModel } from "../config.js";
+import { getProvider } from "../ai/providers/index.js";
 import type { ScanState } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
 
@@ -69,18 +71,35 @@ export async function parsePhase(
   }
 
   /**
-   * Only flip files to "scanned" for groups that actually completed. On abort
-   * the pool leaves later groups unclaimed (their settled slot is undefined);
-   * those rows stay `pending` so a future re-scan can pick them up. Partial
-   * transactions already committed during the run stay (scanner is DB-direct).
+   * Flip each file's `scanned_files` row to its terminal status. Three cases:
+   *   - settled.ok        → 'scanned'  + stamp provider/model (provenance for re-scans).
+   *   - settled, !ok      → 'failed'   so the user sees it in `plasalid status`.
+   *   - unsettled, aborted → leave 'pending' so a future scan can resume.
+   *   - unsettled, !aborted → 'failed' (defensive — shouldn't happen, but better
+   *     a visible failed row than a silent pending one).
+   * Partial transactions already committed during the run stay (scanner is DB-direct).
    */
+  const aborted = state.signal?.aborted ?? false;
+  const provider = getProvider().name;
+  const model = getActiveModel();
+  const stampScanned = db.prepare(
+    `UPDATE scanned_files SET status = 'scanned', scanned_at = datetime('now'), provider = ?, model = ? WHERE id = ?`,
+  );
+  const stampFailed = db.prepare(
+    `UPDATE scanned_files SET status = 'failed', error = ? WHERE id = ?`,
+  );
   for (let i = 0; i < fileGroups.length; i++) {
-    if (!settled[i]) continue;
     const sfId = fileGroups[i].scannedFileId;
     if (!sfId) continue;
-    db.prepare(
-      `UPDATE scanned_files SET status = 'scanned', scanned_at = datetime('now') WHERE id = ?`,
-    ).run(sfId);
+    const r = settled[i];
+    if (r?.ok) {
+      stampScanned.run(provider, model, sfId);
+    } else if (r && !r.ok) {
+      stampFailed.run(errorMessage(r.error), sfId);
+    } else if (!aborted) {
+      stampFailed.run("worker did not produce a settled result", sfId);
+    }
+    // else: aborted + unsettled → leave pending for resume
   }
 
   await hooks.afterParse?.(state);

@@ -8,8 +8,16 @@ const SUMMARY_LINES = 1;      // optional aggregate footer
 const RESERVED_LINES = HEADER_LINES + FOOTER_LINES + SUMMARY_LINES + 1; // +1 breathing room
 
 export interface ListBrowserAdapter<T> {
-  title: string;
+  /** Title row "{title} · N results · {filterSummary} · cursor/N". Omit to
+   *  hide the title row and its separator rule entirely — useful when the
+   *  adapter supplies its own `headerNode` and the auto-title would be
+   *  redundant (e.g. ScanDashboard). */
+  title?: string;
   filterSummary?: string;
+  /** Optional fixed chrome rendered above the title row. Use this when the
+   *  list needs a multi-line header (e.g. a pipeline status indicator plus
+   *  column labels) that should not scroll with the items. */
+  headerNode?: ReactNode;
   items: T[];
   getId: (item: T) => string;
   /** Returns the row as a single ANSI-colored string for the given context. */
@@ -159,15 +167,20 @@ export function ListBrowser<T>({ adapter }: { adapter: ListBrowserAdapter<T> }) 
 
   return (
     <Box flexDirection="column">
-      <Text>
-        <Text bold>{adapter.title}</Text>
-        <Text dimColor>{`  ·  ${filtered.length} results`}</Text>
-        {adapter.filterSummary ? <Text dimColor>{`  ·  ${adapter.filterSummary}`}</Text> : null}
-        {filtered.length > viewportSize ? (
-          <Text dimColor>{`  ·  ${Math.min(cursor + 1, filtered.length)}/${filtered.length}`}</Text>
-        ) : null}
-      </Text>
-      <Text dimColor>{"─".repeat(ruleWidth)}</Text>
+      {adapter.headerNode}
+      {adapter.title ? (
+        <>
+          <Text>
+            <Text bold>{adapter.title}</Text>
+            <Text dimColor>{`  ·  ${filtered.length} results`}</Text>
+            {adapter.filterSummary ? <Text dimColor>{`  ·  ${adapter.filterSummary}`}</Text> : null}
+            {filtered.length > viewportSize ? (
+              <Text dimColor>{`  ·  ${Math.min(cursor + 1, filtered.length)}/${filtered.length}`}</Text>
+            ) : null}
+          </Text>
+          <Text dimColor>{"─".repeat(ruleWidth)}</Text>
+        </>
+      ) : null}
 
       {filtered.length === 0 ? (
         <Text color="yellow">{adapter.emptyMessage ?? "No results match the current filter."}</Text>

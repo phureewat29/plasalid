@@ -217,6 +217,98 @@ export function deleteTransaction(db: Database.Database, transactionId: string):
   return db.prepare(`DELETE FROM transactions WHERE id = ?`).run(transactionId).changes;
 }
 
+export interface BulkUpdatePostingsFilter {
+  account_id?: string;
+  /** Case-insensitive substring match against `transactions.description`.
+   *  Use multiple bulk calls for descriptor variants — there is no regex. */
+  description_contains?: string;
+  currency?: string;
+  from?: string;
+  to?: string;
+  merchant_id?: string;
+}
+
+export interface BulkUpdatePostingsSet {
+  account_id?: string;
+  memo?: string | null;
+}
+
+export interface BulkUpdatePostingsResult {
+  affected: number;
+  sample_posting_ids: string[];
+}
+
+/**
+ * Backfill primitive. Update every posting matching the filter in one SQL
+ * UPDATE, return the affected count plus a sample of ids so the caller (often
+ * an AI tool) can quote evidence back to the user.
+ *
+ * Refuses to run without at least one filter field (no "update everything"
+ * escape hatch) and without at least one set field. Also refuses a no-op
+ * recategorization where `set.account_id` equals `filter.account_id` —
+ * agents shouldn't waste tool calls on identity transforms.
+ *
+ * Safe-field policy mirrors `updatePosting`: account_id + memo only.
+ * Amount/currency corrections must go through delete + re-record to keep
+ * the transaction's debit=credit invariant intact.
+ */
+export function bulkUpdatePostings(
+  db: Database.Database,
+  filter: BulkUpdatePostingsFilter,
+  set: BulkUpdatePostingsSet,
+): BulkUpdatePostingsResult {
+  const filterFields = (Object.keys(filter) as (keyof BulkUpdatePostingsFilter)[])
+    .filter((k) => filter[k] !== undefined && filter[k] !== "");
+  if (filterFields.length === 0) {
+    throw new Error("bulkUpdatePostings: at least one filter field is required.");
+  }
+  const setFields = (Object.keys(set) as (keyof BulkUpdatePostingsSet)[])
+    .filter((k) => set[k] !== undefined);
+  if (setFields.length === 0) {
+    throw new Error("bulkUpdatePostings: at least one set field is required.");
+  }
+  if (set.account_id !== undefined && set.account_id === filter.account_id) {
+    throw new Error("bulkUpdatePostings: set.account_id equals filter.account_id (no-op).");
+  }
+
+  const whereClauses: string[] = [];
+  const whereParams: any[] = [];
+  if (filter.account_id) { whereClauses.push("p.account_id = ?"); whereParams.push(filter.account_id); }
+  if (filter.currency)   { whereClauses.push("p.currency = ?");   whereParams.push(filter.currency); }
+  if (filter.merchant_id){ whereClauses.push("t.merchant_id = ?");whereParams.push(filter.merchant_id); }
+  if (filter.from)       { whereClauses.push("t.date >= ?");      whereParams.push(filter.from); }
+  if (filter.to)         { whereClauses.push("t.date <= ?");      whereParams.push(filter.to); }
+  if (filter.description_contains) {
+    whereClauses.push("LOWER(t.description) LIKE ?");
+    whereParams.push(`%${filter.description_contains.toLowerCase()}%`);
+  }
+
+  const matchIdsSql =
+    `SELECT p.id
+       FROM postings p
+       JOIN transactions t ON t.id = p.transaction_id
+      WHERE ${whereClauses.join(" AND ")}`;
+
+  const sets: string[] = [];
+  const setParams: any[] = [];
+  if (set.account_id !== undefined) { sets.push("account_id = ?"); setParams.push(set.account_id); }
+  if (set.memo !== undefined)       { sets.push("memo = ?");       setParams.push(set.memo); }
+
+  let affected = 0;
+  let sample: string[] = [];
+  const tx = db.transaction((): void => {
+    const ids = db.prepare(matchIdsSql).all(...whereParams) as { id: string }[];
+    if (ids.length === 0) return;
+    sample = ids.slice(0, 10).map((r) => r.id);
+    const placeholders = ids.map(() => "?").join(",");
+    affected = db.prepare(
+      `UPDATE postings SET ${sets.join(", ")} WHERE id IN (${placeholders})`,
+    ).run(...setParams, ...ids.map((r) => r.id)).changes;
+  });
+  tx();
+  return { affected, sample_posting_ids: sample };
+}
+
 export interface DuplicateGroupTransaction {
   id: string;
   date: string;
@@ -559,4 +651,13 @@ export function countTransactions(db: Database.Database): TransactionTotals {
     )
     .get() as TransactionTotals;
   return row;
+}
+
+export function countTransactionsBySourceFile(
+  db: Database.Database,
+  fileId: string,
+): number {
+  return (db
+    .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
+    .get(fileId) as { n: number }).n;
 }

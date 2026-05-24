@@ -7,6 +7,8 @@ import {
   renderChartOfAccounts,
   renderChatChartOrEmpty,
   renderMemories,
+  renderOpenQuestionsHint,
+  renderRules,
   renderScope,
   renderTodayHuman,
   renderTodayIso,
@@ -42,6 +44,7 @@ export function buildChatSystemPrompt(db: Database.Database): string {
     renderTodayHuman(),
     renderUserContext(name, readContext()),
     renderChatChartOrEmpty(db, name),
+    renderOpenQuestionsHint(db),
     renderMemories(db, {
       header: `Things to remember about ${name}`,
       showCategory: true,
@@ -58,8 +61,9 @@ export function buildClarifySystemPrompt(
     renderTodayIso(),
     renderChartOfAccounts(db, { withBalance: true, emptyState: "clarify" }),
     renderScope(opts),
+    renderRules(db, "Rules you've already learned (apply directly; do not re-ask the user)"),
     renderMemories(db, {
-      header: "Rules you've already learned (apply directly; do not re-ask the user)",
+      header: "User memory (general facts, preferences, life events)",
       showCategory: true,
     }),
   ]);
@@ -74,9 +78,10 @@ export function buildRecordSystemPrompt(
     renderTodayIso(),
     renderChartOfAccounts(db, { withBalance: true, emptyState: "scan" }),
     `## What the user said\n> ${opts.utterance.replace(/\n/g, " ")}`,
+    renderRules(db, "Rules you've already learned (apply silently)"),
     renderMemories(db, {
-      header: "Rules you've already learned (apply silently)",
-      filterCategories: ["scanning_hint", "general", "preference"],
+      header: "User memory (general facts, preferences)",
+      filterCategories: ["general", "preference"],
       showCategory: false,
     }),
   ]);
@@ -92,9 +97,10 @@ export function buildScanSystemPrompt(
     renderChartOfAccounts(db, { withBalance: false, emptyState: "scan" }),
     `## File context\nFile: ${opts.fileName}`,
     `## Taxonomy hints\n${getThaiTaxonomyHint()}`,
+    renderRules(db, "Rules you've already learned (apply silently before raising a question)"),
     renderMemories(db, {
-      header: "Rules you've already learned (apply silently before raising a question)",
-      filterCategories: ["scanning_hint", "general"],
+      header: "User memory (general facts)",
+      filterCategories: ["general"],
       showCategory: false,
     }),
   ]);

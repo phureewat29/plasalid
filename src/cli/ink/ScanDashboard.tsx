@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
-import { Box, Text, useStdout } from "ink";
+import { memo, useEffect, useMemo, useState } from "react";
+import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
+import chalk from "chalk";
+import { padRight, truncateMiddle } from "../helper.js";
+import { ListBrowser, type ListBrowserAdapter } from "./ListBrowser.js";
+import { keyOf } from "./keys.js";
 
 /**
  * Events the CLI publishes into the dashboard. The CLI subscribes to the
@@ -65,6 +69,7 @@ interface FileGroupState {
 }
 
 const COL = {
+  marker: 2, // "▸ " or "  "
   status: 14,
   files: 34,
   transactions: 13,
@@ -89,36 +94,80 @@ interface Props {
   attachment: AttachmentInfo;
 }
 
+interface FileItem {
+  readonly fileId: string;
+  readonly group: FileGroupState;
+}
+
 export function ScanDashboard(props: Props) {
   const rows = useFileGroups(props.controller, props.files);
   const phase = usePhase(props.controller);
-  const ruleWidth = useRuleWidth();
+  const spinnerFrame = useSpinnerFrame();
 
-  return (
-    <Box flexDirection="column">
-      <Header phase={phase} />
-      <AttachmentLine info={props.attachment} />
-      <Box marginTop={1}>
-        <ColumnHeader />
-      </Box>
-      <Divider width={ruleWidth} />
-      {Array.from(rows.entries()).map(([fileId, group]) => (
-        <FileGroupView key={fileId} group={group} />
-      ))}
-      <Divider width={ruleWidth} />
-      {phase !== "done" && <Footnote />}
-    </Box>
+  const items = useMemo<FileItem[]>(
+    () => Array.from(rows.entries(), ([fileId, group]) => ({ fileId, group })),
+    [rows],
   );
+
+  const adapter = useMemo<ListBrowserAdapter<FileItem>>(
+    () => ({
+      headerNode: (
+        <Box flexDirection="column">
+          <Header phase={phase} />
+          <AttachmentLine info={props.attachment} />
+          <ColumnHeader />
+        </Box>
+      ),
+      items,
+      getId: (i) => i.fileId,
+      renderRow: (i, ctx) =>
+        renderFileRow(
+          i.group,
+          ctx.isCursor,
+          ctx.isExpanded,
+          spinnerFrame,
+          phase,
+        ),
+      renderExpanded: (i) => (
+        <ChunkList chunks={i.group.chunks} frame={spinnerFrame} />
+      ),
+      getExpandedHeight: (i) => i.group.chunks.size,
+      matches: (i, needle) => i.group.fileName.toLowerCase().includes(needle),
+      summary: phase !== "done" ? <Footnote /> : null,
+      onKey: (input, key) => {
+        const k = keyOf(input, key);
+        return k === "q" || k === "escape";
+      },
+      emptyMessage: "No files in the scan queue.",
+    }),
+    [phase, items, props.attachment, spinnerFrame],
+  );
+
+  return <ListBrowser adapter={adapter} />;
+}
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function useSpinnerFrame(): string {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = setInterval(
+      () => setI((prev) => (prev + 1) % SPINNER_FRAMES.length),
+      80,
+    );
+    return () => clearInterval(id);
+  }, []);
+  return SPINNER_FRAMES[i];
 }
 
 function Footnote() {
   return (
     <Box flexDirection="column">
       <Text dimColor>
-        output accuracy depends on the model's vision capability.
+        Output accuracy depends on the model's vision capability.
       </Text>
       <Text>
-        <Text dimColor>by the way, user can run</Text>
+        <Text dimColor>You can run </Text>
         <Text color="cyan">clarify</Text>
         <Text dimColor>, </Text>
         <Text color="cyan">record</Text>
@@ -149,20 +198,6 @@ function usePhase(controller: ScanDashboardController): CurrentPhase {
     [controller],
   );
   return phase;
-}
-
-function useRuleWidth(): number {
-  const { stdout } = useStdout();
-  const [cols, setCols] = useState<number>(() => stdout?.columns ?? 100);
-  useEffect(() => {
-    if (!stdout) return;
-    const onResize = () => setCols(stdout.columns ?? 100);
-    stdout.on("resize", onResize);
-    return () => {
-      stdout.off("resize", onResize);
-    };
-  }, [stdout]);
-  return Math.min(cols, 120);
 }
 
 type PhaseState = "pending" | "running" | "done";
@@ -223,7 +258,8 @@ function Header({ phase }: { phase: CurrentPhase }) {
 
 function ColumnHeader() {
   return (
-    <Box flexDirection="row">
+    <Box flexDirection="row" marginTop={1}>
+      <Box width={COL.marker} />
       <Box width={COL.status}>
         <Text dimColor>status</Text>
       </Box>
@@ -240,26 +276,36 @@ function ColumnHeader() {
   );
 }
 
-function Divider({ width }: { width: number }) {
-  return <Text dimColor>{"─".repeat(width)}</Text>;
-}
-
-type FileStatus = "scanning" | "done" | "failed" | "partial";
+type FileStatus = "scanning" | "clarify" | "done" | "failed" | "partial";
 type AnyStatus = ChunkStatus | FileStatus;
 
-const spin = (label: string) => () => (
-  <Text color="yellow">
-    <Spinner type="dots" /> {label}
-  </Text>
-);
+function statusText(status: AnyStatus, frame: string): string {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return `${frame} running`;
+    case "scanning":
+      return `${frame} scanning`;
+    case "clarify":
+      return `${frame} clarify`;
+    case "done":
+      return "✓ done";
+    case "failed":
+      return "failed";
+    case "partial":
+      return "partial";
+  }
+}
 
-const STATUS_RENDER: Record<AnyStatus, () => JSX.Element> = {
-  queued: () => <Text color="gray">queued</Text>,
-  running: spin("running"),
-  scanning: spin("scanning"),
-  done: () => <Text color="green">✓ done</Text>,
-  failed: () => <Text color="red">failed</Text>,
-  partial: () => <Text color="yellow">partial</Text>,
+const STATUS_COLOR: Record<AnyStatus, (s: string) => string> = {
+  queued: chalk.gray,
+  running: chalk.yellow,
+  scanning: chalk.yellow,
+  clarify: chalk.yellow,
+  done: chalk.green,
+  failed: chalk.red,
+  partial: chalk.yellow,
 };
 
 interface FileAggregate {
@@ -298,95 +344,66 @@ function aggregate(
   return { totalTx, totalQuestions, status };
 }
 
-function FileGroupView({ group }: { group: FileGroupState }) {
-  const chunks = Array.from(group.chunks.values()).sort(
+function renderFileRow(
+  group: FileGroupState,
+  isCursor: boolean,
+  isExpanded: boolean,
+  frame: string,
+  phase: CurrentPhase,
+): string {
+  const chunks = Array.from(group.chunks.values());
+  const agg = aggregate(chunks, group.totalChunks);
+  const effectiveStatus: AnyStatus =
+    phase === "clarify" ? "clarify" : agg.status;
+  const marker = isExpanded ? "▾" : isCursor ? "▸" : " ";
+
+  const status = STATUS_COLOR[effectiveStatus](
+    padRight(statusText(effectiveStatus, frame), COL.status),
+  );
+
+  const nameRaw = truncateMiddle(group.fileName, COL.files - 2);
+  const namePadded = padRight(nameRaw, COL.files);
+  const name = isCursor ? chalk.cyan.bold(namePadded) : chalk.dim(namePadded);
+
+  const tx = renderCount(agg.totalTx, COL.transactions);
+  const q = renderCount(agg.totalQuestions, COL.questions);
+
+  return `${marker} ${status}${name}${tx}${q}`;
+}
+
+function renderCount(n: number, width: number): string {
+  const raw = n > 0 ? String(n) : "-";
+  const padded = padRight(raw, width);
+  return n > 0 ? padded : chalk.gray(padded);
+}
+
+const ChunkList = memo(function ChunkList({
+  chunks,
+  frame,
+}: {
+  chunks: Map<number, ChunkRowState>;
+  frame: string;
+}) {
+  const sorted = Array.from(chunks.values()).sort(
     (a, b) => a.pageNumber - b.pageNumber,
   );
-  const agg = aggregate(chunks, group.totalChunks);
-  const fileName = `> ${truncateMiddle(group.fileName, COL.files - 2)}`;
-
   return (
     <Box flexDirection="column">
-      <Row
-        status={<StatusText status={agg.status} />}
-        files={<Text dimColor>{fileName}</Text>}
-        transactions={agg.totalTx}
-        questions={agg.totalQuestions}
-      />
-      {chunks.map((c) => (
-        <ChunkRow key={c.pageNumber} chunk={c} />
+      {sorted.map((c) => (
+        <Text key={c.pageNumber}>{renderChunkLine(c, frame)}</Text>
       ))}
     </Box>
   );
-}
+});
 
-function ChunkRow({ chunk }: { chunk: ChunkRowState }) {
-  const connector = "|-";
-  return (
-    <Row
-      status={<StatusText status={chunk.status} />}
-      files={<Text dimColor>{`  ${connector} part ${chunk.pageNumber}`}</Text>}
-      transactions={chunk.txCount}
-      questions={chunk.questionsCount}
-    />
+function renderChunkLine(c: ChunkRowState, frame: string): string {
+  const status = STATUS_COLOR[c.status](
+    padRight(statusText(c.status, frame), COL.status),
   );
-}
-
-function StatusText({ status }: { status: AnyStatus }) {
-  return STATUS_RENDER[status]();
-}
-
-function Row({
-  status,
-  files,
-  transactions,
-  questions,
-}: {
-  status: JSX.Element;
-  files: JSX.Element;
-  transactions: number;
-  questions: number;
-}) {
-  return (
-    <Box flexDirection="row">
-      <Box width={COL.status}>{status}</Box>
-      <Box width={COL.files}>{files}</Box>
-      <Box width={COL.transactions}>
-        <Numeric n={transactions} />
-      </Box>
-      <Box width={COL.questions}>
-        <Numeric n={questions} />
-      </Box>
-    </Box>
-  );
-}
-
-type NumericState = "present" | "empty";
-
-const NUMERIC_RULES: readonly Rule<NumericState, number>[] = [
-  { when: (n) => n > 0, state: "present" },
-  { when: () => true, state: "empty" },
-];
-
-const NUMERIC_RENDER: Record<NumericState, (n: number) => JSX.Element> = {
-  present: (n) => <Text>{n}</Text>,
-  empty: () => (
-    <Text color="gray" dimColor>
-      -
-    </Text>
-  ),
-};
-
-function Numeric({ n }: { n: number }) {
-  return NUMERIC_RENDER[classify(n, NUMERIC_RULES)](n);
-}
-
-function truncateMiddle(s: string, width: number): string {
-  if (s.length <= width) return s;
-  const keep = width - 1;
-  const left = Math.ceil(keep / 2);
-  const right = Math.floor(keep / 2);
-  return s.slice(0, left) + "..." + s.slice(s.length - right);
+  const part = chalk.dim(padRight(`  |- part ${c.pageNumber}`, COL.files));
+  const tx = renderCount(c.txCount, COL.transactions);
+  const q = renderCount(c.questionsCount, COL.questions);
+  return `  ${status}${part}${tx}${q}`;
 }
 
 function useFileGroups(

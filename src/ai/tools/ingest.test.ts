@@ -148,8 +148,7 @@ describe("accountIngestTools — record_transactions (batch)", () => {
     expect(rows.map(r => r.description)).toEqual(["Valid 1", "Valid 2"]);
   });
 
-  it("records a scan_commit_failure question when an insert fails under a scanId", async () => {
-    // Force a failure: post to a non-existent account.
+  it("commits best-effort when posting to an unknown account; raises an uncategorized question (no scan_commit_failure)", async () => {
     const res = await accountIngestTools.execute(db, "record_transactions", {
       transactions: [
         {
@@ -163,10 +162,59 @@ describe("accountIngestTools — record_transactions (batch)", () => {
       ],
     }, ctx({ scanId: "sc:test" }));
 
+    expect(res).toMatch(/Posted 1 of 1/);
+    const txs = db.prepare(`SELECT id FROM transactions`).all() as { id: string }[];
+    expect(txs).toHaveLength(1);
+    // Placeholder account was created so the FK holds.
+    expect(findAccountById(db, "expense:does-not-exist")).toBeTruthy();
+    const questions = listQuestions(db, { scanId: "sc:test" });
+    expect(questions.map(q => q.kind)).toContain("uncategorized");
+    expect(questions.map(q => q.kind)).not.toContain("scan_commit_failure");
+  });
+
+  it("NULLs an unknown merchant_id and raises an unknown_merchant question", async () => {
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [
+        {
+          date: "2026-05-19",
+          description: "Transfer to Waricha Kanyab",
+          raw_descriptor: "TRF/Waricha Kanyab",
+          merchant_id: "mer:does-not-exist",
+          postings: [
+            { account_id: "expense:food", debit: 100 },
+            { account_id: "asset:kbank", credit: 100 },
+          ],
+        },
+      ],
+    }, ctx({ scanId: "sc:test" }));
+
+    expect(res).toMatch(/Posted 1 of 1/);
+    const tx = db.prepare(`SELECT merchant_id, description FROM transactions`).get() as { merchant_id: string | null; description: string };
+    expect(tx.merchant_id).toBeNull();
+    expect(tx.description).toBe("Transfer to Waricha Kanyab");
+    const questions = listQuestions(db, { scanId: "sc:test" });
+    expect(questions.map(q => q.kind)).toContain("unknown_merchant");
+  });
+
+  it("drops a dirty_input row (both debit and credit on the same posting) and raises a dirty_input question", async () => {
+    const res = await accountIngestTools.execute(db, "record_transactions", {
+      transactions: [
+        {
+          date: "2026-05-19",
+          description: "Both sides set",
+          postings: [
+            { account_id: "expense:food", debit: 50, credit: 50 },
+            { account_id: "asset:kbank", credit: 50 },
+          ],
+        },
+      ],
+    }, ctx({ scanId: "sc:test" }));
+
     expect(res).toMatch(/Posted 0 of 1/);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
     const questions = listQuestions(db, { scanId: "sc:test" });
     expect(questions).toHaveLength(1);
-    expect(questions[0].kind).toBe("scan_commit_failure");
+    expect(questions[0].kind).toBe("dirty_input");
   });
 
   it("rejects an empty transactions array", async () => {

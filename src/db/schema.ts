@@ -47,6 +47,8 @@ export function migrate(db: Database.Database): void {
       status TEXT NOT NULL CHECK(status IN ('pending','scanned','failed')),
       raw_text TEXT,
       scanned_at TEXT,
+      provider TEXT,
+      model TEXT,
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -112,10 +114,12 @@ export function migrate(db: Database.Database): void {
       context_json TEXT,
       answer TEXT,
       resolved_at TEXT,
+      deferred_until TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS questions_scan_idx ON questions(scan_id);
+    CREATE INDEX IF NOT EXISTS questions_deferred_idx ON questions(deferred_until);
 
     CREATE TABLE IF NOT EXISTS conversation_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +134,19 @@ export function migrate(db: Database.Database): void {
       category TEXT NOT NULL DEFAULT 'general',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      key TEXT NOT NULL,
+      target TEXT NOT NULL,
+      evidence_count INTEGER NOT NULL DEFAULT 1,
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(kind, key)
+    );
+
+    CREATE INDEX IF NOT EXISTS rules_kind_idx ON rules(kind);
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,

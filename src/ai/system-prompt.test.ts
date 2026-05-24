@@ -11,6 +11,8 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { saveMemory } from "./memory.js";
+import { upsertRule } from "../db/queries/rules.js";
+import { recordQuestion, deferQuestion } from "../db/queries/questions.js";
 import {
   buildChatSystemPrompt,
   buildClarifySystemPrompt,
@@ -41,8 +43,8 @@ describe("system prompt builders", () => {
   let db: Database.Database;
   beforeEach(() => {
     db = freshDb();
-    saveMemory(db, "Lazada Thailand is shopping.", "scanning_hint");
-    saveMemory(db, "Spotify is Subscription.", "scanning_hint");
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:lazada thailand", target: "expense:shopping" });
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:spotify", target: "expense:subscriptions" });
     saveMemory(db, "Wife is Corgi.", "general");
     saveMemory(db, "Prefer THB only.", "preference");
   });
@@ -68,11 +70,30 @@ describe("system prompt builders", () => {
       expect(tableLines).toEqual([]);
     });
 
-    it("shows memory category prefixes (chat sees all categories)", () => {
+    it("shows memory category prefixes for user-facing memories (chat sees all)", () => {
       const out = buildChatSystemPrompt(db);
-      expect(out).toContain("[scanning_hint]");
       expect(out).toContain("[general]");
       expect(out).toContain("[preference]");
+    });
+
+    it("omits the open-questions hint when the backlog is empty", () => {
+      const out = buildChatSystemPrompt(db);
+      expect(out).not.toContain("## Open clarify questions");
+    });
+
+    it("surfaces the open-questions hint when count > 0", () => {
+      recordQuestion(db, { file_id: null, transaction_id: null, account_id: null, kind: "uncategorized", prompt: "What is this?" });
+      const out = buildChatSystemPrompt(db);
+      expect(out).toContain("## Open clarify questions");
+      expect(out).toContain("1 open question");
+      expect(out).toContain("plasalid clarify");
+    });
+
+    it("excludes deferred questions from the open-questions hint", () => {
+      const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: null, kind: "uncategorized", prompt: "Snoozed" });
+      deferQuestion(db, id, 7);
+      const out = buildChatSystemPrompt(db);
+      expect(out).not.toContain("## Open clarify questions");
     });
   });
 
@@ -84,6 +105,11 @@ describe("system prompt builders", () => {
       expect(out).toContain("## Current chart of accounts");
       expect(out).toContain("## Scope");
       expect(out).toContain("Rules you've already learned");
+    });
+
+    it("renders structured rules in the rules section", () => {
+      const out = buildClarifySystemPrompt(db, {});
+      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
     });
 
     it("contains no emoji", () => {
@@ -100,12 +126,11 @@ describe("system prompt builders", () => {
       expect(out).toContain("> spend 100 coffee");
     });
 
-    it("filters memories to scanning_hint + general + preference, hiding category labels", () => {
+    it("renders structured rules plus general/preference memories (memory category labels hidden)", () => {
       const out = buildRecordSystemPrompt(db, { utterance: "noop" });
-      expect(out).toContain("Lazada Thailand is shopping.");
+      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
       expect(out).toContain("Wife is Corgi.");
       expect(out).toContain("Prefer THB only.");
-      expect(out).not.toContain("[scanning_hint]");
       expect(out).not.toContain("[general]");
       expect(out).not.toContain("[preference]");
     });
@@ -125,9 +150,9 @@ describe("system prompt builders", () => {
       expect(out).toContain("## Taxonomy hints");
     });
 
-    it("filters memories to scanning_hint + general (no preference)", () => {
+    it("renders structured rules + general memories, hides preference", () => {
       const out = buildScanSystemPrompt(db, { fileName: "stmt.pdf" });
-      expect(out).toContain("Lazada Thailand is shopping.");
+      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
       expect(out).toContain("Wife is Corgi.");
       expect(out).not.toContain("Prefer THB only.");
     });

@@ -6,6 +6,7 @@ import type { ScanHooks } from "../../scanner/hooks.js";
 import { getActiveModel } from "../../config.js";
 import { getProvider } from "../../ai/providers/index.js";
 import { AbortedError } from "../../ai/errors.js";
+import { countQuestions } from "../../db/queries/questions.js";
 import type {
   AttachmentInfo,
   ScanDashboardController,
@@ -356,13 +357,18 @@ function renderSummary(state: Readonly<ScanState>): void {
   const r = state.clarifySummary;
   if (r && r.total > 0) {
     console.log(`Clarified ${r.clarified}/${r.total} questions.`);
-    if (r.remaining > 0) {
-      console.log(
-        chalk.yellow(
-          `${r.remaining} question(s) remain — run ${chalk.cyan("plasalid clarify")} to finish them.`,
-        ),
-      );
-    }
+  }
+
+  // Show the total active backlog (excluding deferred rows) across the whole
+  // ledger, not just this scan — so the user sees questions accumulated from
+  // prior runs alongside this scan's leftovers.
+  const totalOpen = countQuestions(getDb());
+  if (totalOpen > 0) {
+    console.log(
+      chalk.yellow(
+        `${totalOpen} question(s) need your input — run ${chalk.cyan("plasalid clarify")} when ready.`,
+      ),
+    );
   }
 
   if (state.errors.length > 0) {

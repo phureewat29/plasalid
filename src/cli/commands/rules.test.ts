@@ -3,6 +3,7 @@ import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../db/queries/account-balance.js";
 import { saveMemory, getMemories } from "../../ai/memory.js";
+import { upsertRule, listRules } from "../../db/queries/rules.js";
 import {
   upsertMerchant,
   findMerchantById,
@@ -29,20 +30,28 @@ describe("collectRules", () => {
     expect(collectRules(db)).toEqual([]);
   });
 
-  it("aggregates memory rules and merchant defaults with mem:/mch: ids", () => {
-    saveMemory(db, "Lazada Thailand is shopping.", "scanning_hint");
-    saveMemory(db, "Spotify is Subscription.", "scanning_hint");
+  it("aggregates structured rules, user memories, and merchant defaults with rule:/mem:/mch: ids", () => {
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:lazada thailand", target: "expense:shopping" });
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:spotify", target: "expense:subscriptions" });
+    saveMemory(db, "Wife is Corgi.", "general");
     upsertMerchant(db, { canonical_name: "Amazon", default_account_id: "expense:shopping" });
     upsertMerchant(db, { canonical_name: "Starbucks", default_account_id: "expense:food" });
     upsertMerchant(db, { canonical_name: "Spotify", default_account_id: "expense:subscriptions" });
 
     const rules = collectRules(db);
-    expect(rules).toHaveLength(5);
-    expect(rules.filter((r) => r.displayId.startsWith("mem:"))).toHaveLength(2);
+    expect(rules).toHaveLength(6);
+    expect(rules.filter((r) => r.displayId.startsWith("rule:"))).toHaveLength(2);
+    expect(rules.filter((r) => r.displayId.startsWith("mem:"))).toHaveLength(1);
     expect(rules.filter((r) => r.displayId.startsWith("mch:"))).toHaveLength(3);
     expect(rules.find((r) => r.displayId === "mch:1")?.text).toBe("Amazon → expense:shopping");
     expect(rules.find((r) => r.displayId === "mch:2")?.text).toBe("Spotify → expense:subscriptions");
     expect(rules.find((r) => r.displayId === "mch:3")?.text).toBe("Starbucks → expense:food");
+  });
+
+  it("renders structured rules as [kind] key → target", () => {
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:lazada thailand", target: "expense:shopping" });
+    const rule = collectRules(db).find((r) => r.displayId.startsWith("rule:"));
+    expect(rule?.text).toBe("[uncategorized_expense] descriptor:lazada thailand → expense:shopping");
   });
 
   it("numbers merchants in alphabetical order by canonical_name", () => {
@@ -63,17 +72,29 @@ describe("collectRules", () => {
     expect(collectRules(db)).toEqual([]);
   });
 
-  it("forget() on a memory entry deletes that memory only", () => {
-    saveMemory(db, "rule one", "scanning_hint");
-    saveMemory(db, "rule two", "scanning_hint");
-    const rules = collectRules(db);
-    const first = rules.find((r) => r.displayId === `mem:${getMemories(db)[0].id}`)!;
+  it("forget() on a structured rule entry deletes that rule only", () => {
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:lazada", target: "expense:shopping" });
+    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:spotify", target: "expense:subscriptions" });
+    const entry = collectRules(db).find((r) => r.text.includes("lazada"))!;
 
-    first.forget(db);
+    entry.forget(db);
+
+    const remaining = listRules(db);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].key).toBe("descriptor:spotify");
+  });
+
+  it("forget() on a memory entry deletes that memory only", () => {
+    saveMemory(db, "rule one", "general");
+    saveMemory(db, "rule two", "preference");
+    const memId = getMemories(db)[0].id;
+    const entry = collectRules(db).find((r) => r.displayId === `mem:${memId}`)!;
+
+    entry.forget(db);
 
     const remaining = getMemories(db);
     expect(remaining).toHaveLength(1);
-    expect(remaining[0].content).not.toBe(first.text);
+    expect(remaining[0].content).not.toBe(entry.text);
   });
 
   it("forget() on a merchant entry clears the default account only", () => {

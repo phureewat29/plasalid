@@ -10,6 +10,7 @@ import {
   recordRecurrence,
   type RecurrenceFrequency,
 } from "../../db/queries/recurrences.js";
+import { deleteScannedFile, listScannedFiles } from "../../db/queries/files.js";
 import { sanitizeForPrompt } from "../sanitize.js";
 import type {
   AgentExecutionContext,
@@ -119,6 +120,22 @@ const DEFS: ToolDefinition[] = [
       required: ["from_id", "to_id"],
     },
   },
+  {
+    name: "list_scanned_files",
+    description:
+      "List every scanned_files row with id, path, status, provider, model, and scanned_at. Use to resolve a file the user mentions by name (e.g. 'drop march-statement.pdf') into a file_id before calling delete_scanned_file. Returns at most 200 rows, newest first.",
+    input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "delete_scanned_file",
+    description:
+      "Delete a scanned_files row by id. Cascades to remove every transaction and question tied to that file (via ON DELETE CASCADE). Use ONLY when the user explicitly wants to drop a file's data so they can re-scan it with a different model — e.g. 'this scan came out wrong, let me redo it'. Never use to resolve a single question; that's `close_question`. Always confirm with the user before calling: cascading deletes are irreversible.",
+    input_schema: {
+      type: "object",
+      properties: { file_id: { type: "string" } },
+      required: ["file_id"],
+    },
+  },
 ];
 
 const LABELS: Record<string, string> = {
@@ -128,6 +145,8 @@ const LABELS: Record<string, string> = {
   record_recurrence: "Recording recurrence",
   link_transaction_to_recurrence: "Linking transaction to recurrence",
   merge_accounts: "Merging accounts",
+  list_scanned_files: "Listing scanned files",
+  delete_scanned_file: "Deleting scanned file",
 };
 
 async function execute(
@@ -193,6 +212,22 @@ async function execute(
     case "merge_accounts": {
       const moved = mergeAccounts(db, input.from_id, input.to_id);
       return `Merged ${input.from_id} → ${input.to_id}; moved ${moved} posting(s).`;
+    }
+    case "list_scanned_files": {
+      const files = listScannedFiles(db).slice(0, 200);
+      if (files.length === 0) return "No scanned files on record.";
+      return files
+        .map(f => {
+          const stamp = f.provider && f.model ? ` [${f.provider}/${f.model}]` : "";
+          const when = f.scanned_at ? ` · ${f.scanned_at}` : "";
+          return `${f.id} | ${sanitizeForPrompt(f.path)} | ${f.status}${stamp}${when}`;
+        })
+        .join("\n");
+    }
+    case "delete_scanned_file": {
+      const result = deleteScannedFile(db, input.file_id);
+      if (!result.removed) return `Scanned file ${input.file_id} not found.`;
+      return `Deleted scanned file ${result.removed.path} (${input.file_id}); cascade removed ${result.removedTransactions} transaction(s) and ${result.removedQuestions} question(s).`;
     }
     default:
       return undefined;

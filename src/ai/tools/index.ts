@@ -8,6 +8,7 @@ import { scanTools } from "./scan.js";
 import { clarifyTools } from "./clarify.js";
 import { recordTools } from "./record.js";
 import { merchantTools } from "./merchants.js";
+import { mutateTools } from "./mutate.js";
 
 export type { AgentExecutionContext, ToolProfile } from "./types.js";
 
@@ -18,9 +19,9 @@ export type { AgentExecutionContext, ToolProfile } from "./types.js";
  */
 const PROFILES: Record<ToolProfile, ToolModule[]> = {
   scan:    [commonTools, accountIngestTools, scanQuestionTools, scanTools, merchantTools],
-  chat:    [commonTools, readTools],
-  clarify: [commonTools, readTools, accountIngestTools, clarifyIngestTools, clarifyTools, merchantTools],
-  record:  [commonTools, readTools, accountIngestTools, recordTools, merchantTools],
+  chat:    [commonTools, readTools, accountIngestTools, clarifyTools, merchantTools, mutateTools],
+  clarify: [commonTools, readTools, accountIngestTools, clarifyIngestTools, clarifyTools, merchantTools, mutateTools],
+  record:  [commonTools, readTools, accountIngestTools, recordTools, clarifyTools, merchantTools, mutateTools],
 };
 
 export function getToolDefinitions(profile: ToolProfile): ToolDefinition[] {
@@ -42,6 +43,7 @@ const MODULES = [
   clarifyTools,
   recordTools,
   merchantTools,
+  mutateTools,
 ];
 
 export async function executeTool(
@@ -72,4 +74,5 @@ export const TOOL_LABELS: Record<string, string> = {
   ...clarifyTools.LABELS,
   ...recordTools.LABELS,
   ...merchantTools.LABELS,
+  ...mutateTools.LABELS,
 };

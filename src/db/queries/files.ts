@@ -6,6 +6,19 @@ export interface ScannedFileTotals {
   failed: number;
 }
 
+export interface ScannedFileRow {
+  id: string;
+  path: string;
+  file_hash: string;
+  mime: string;
+  status: "pending" | "scanned" | "failed";
+  scanned_at: string | null;
+  provider: string | null;
+  model: string | null;
+  error: string | null;
+  created_at: string;
+}
+
 /**
  * Bucket the `scanned_files` table by its `status` enum. Missing buckets are
  * filled with 0 so callers can render a stable shape without null checks.
@@ -22,4 +35,54 @@ export function countScannedFiles(db: Database.Database): ScannedFileTotals {
     }
   }
   return totals;
+}
+
+export function listScannedFiles(db: Database.Database): ScannedFileRow[] {
+  return db
+    .prepare(
+      `SELECT id, path, file_hash, mime, status, scanned_at, provider, model, error, created_at
+       FROM scanned_files
+       ORDER BY scanned_at DESC, created_at DESC`,
+    )
+    .all() as ScannedFileRow[];
+}
+
+export function findScannedFileById(db: Database.Database, id: string): ScannedFileRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, path, file_hash, mime, status, scanned_at, provider, model, error, created_at
+       FROM scanned_files WHERE id = ?`,
+    )
+    .get(id) as ScannedFileRow | undefined;
+  return row ?? null;
+}
+
+export interface DeleteScannedFileResult {
+  /** The deleted row, or null when no row matched the id. */
+  removed: ScannedFileRow | null;
+  /** Count of transaction rows that cascaded out. */
+  removedTransactions: number;
+  /** Count of question rows that cascaded out. */
+  removedQuestions: number;
+}
+
+/**
+ * Delete a `scanned_files` row by id. Cascades remove transactions
+ * (`transactions.source_file_id`) and questions (`questions.file_id`) via the
+ * schema's ON DELETE CASCADE. Cascaded counts are gathered before the DELETE
+ * so callers can report what disappeared.
+ */
+export function deleteScannedFile(db: Database.Database, id: string): DeleteScannedFileResult {
+  const removed = findScannedFileById(db, id);
+  if (!removed) {
+    return { removed: null, removedTransactions: 0, removedQuestions: 0 };
+  }
+  const removedTransactions = (db
+    .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
+    .get(id) as { n: number }).n;
+  const removedQuestions = (db
+    .prepare(`SELECT COUNT(*) AS n FROM questions WHERE file_id = ?`)
+    .get(id) as { n: number }).n;
+  db.prepare(`DELETE FROM scanned_files WHERE id = ?`).run(id);
+  return { removed, removedTransactions, removedQuestions };
 }

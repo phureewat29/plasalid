@@ -4,14 +4,13 @@ import {
   updateAccountMetadata,
 } from "../../db/queries/account-balance.js";
 import {
-  validateTransaction,
-  insertTransactionRows,
   recordTransaction,
   type TransactionInput,
 } from "../../db/queries/transactions.js";
-import { recordQuestion } from "../../db/queries/questions.js";
 import { runExclusive as runAccountExclusive } from "./account-mutex.js";
 import { ACCOUNT_TYPE_DESCRIPTIONS } from "../../accounts/taxonomy.js";
+import { recordQuestion } from "../../db/queries/questions.js";
+import { commitTransaction } from "../../scanner/committer.js";
 import type {
   AgentExecutionContext,
   ToolDefinition,
@@ -308,42 +307,30 @@ function buildTransactionInput(
   };
 }
 
+/**
+ * Thin adapter that wires the agent's execution context into the staged
+ * commit pipeline. The pipeline does best-effort resolution (NULL unknown
+ * merchant, fuzzy-match-or-create unknown account) and only drops a row on
+ * genuine validation failure. Failures raise typed questions rather than
+ * burning a "scan_commit_failure" memory rule.
+ */
 async function persistOneTransaction(
   db: Database.Database,
   ctx: AgentExecutionContext,
   txInput: TransactionInput,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  try {
-    const validated = validateTransaction(txInput);
-    const tx = db.transaction((): void => {
-      insertTransactionRows(db, validated);
-    });
-    tx();
-    if (ctx.progress && ctx.chunkId) {
-      ctx.progress.emit({ chunkId: ctx.chunkId, kind: "tx" });
-    }
-    return { ok: true, id: validated.id };
-  } catch (err: any) {
-    const message = err?.message ?? String(err);
-    if (ctx.scanId) {
-      try {
-        recordQuestion(db, {
-          file_id: ctx.fileId ?? null,
-          scan_id: ctx.scanId,
-          transaction_id: null,
-          account_id: null,
-          kind: "scan_commit_failure",
-          prompt: `Could not record "${txInput.description}" on ${txInput.date}: ${message}. Review the source statement and re-enter via the record flow.`,
-        });
-        if (ctx.progress && ctx.chunkId) {
-          ctx.progress.emit({ chunkId: ctx.chunkId, kind: "question" });
-        }
-      } catch {
-        // failure to record a failure shouldn't crash the scan
-      }
-    }
-    return { ok: false, error: message };
-  }
+  const outcome = commitTransaction(
+    db,
+    {
+      scanId: ctx.scanId ?? null,
+      fileId: ctx.fileId ?? null,
+      chunkId: ctx.chunkId ?? null,
+      progress: ctx.progress ?? null,
+    },
+    txInput,
+  );
+  if (outcome.ok) return { ok: true, id: outcome.transactionId };
+  return { ok: false, error: outcome.message };
 }
 
 async function accountExecute(
@@ -601,11 +588,30 @@ const RESOLVE_DEFS: ToolDefinition[] = [
       required: ["question_id", "answer"],
     },
   },
+  {
+    name: "defer_question",
+    description:
+      "Defer a question for `days` days. The row stays in the questions table but is hidden from `plasalid clarify` until the timestamp passes — the next run won't re-encounter it. Use when you genuinely lack info today and a future scan, a future conversation, or the user's own memory might surface the answer later. Prefer this over `close_question(answer=\"Skip — leave as is\")` whenever the question is still worth answering eventually.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question_id: { type: "string" },
+        days: {
+          type: "number",
+          description:
+            "Days to defer. Default 7. Use shorter (1-2) when the user said 'ask me tomorrow' or 'let me check'; longer (30+) for genuinely seasonal data like annual statements.",
+          default: 7,
+        },
+      },
+      required: ["question_id"],
+    },
+  },
 ];
 
 const RESOLVE_LABELS: Record<string, string> = {
   ask_user: "Asking for clarification",
   close_question: "Closing question",
+  defer_question: "Deferring question",
 };
 
 async function clarifyIngestExecute(
@@ -615,6 +621,7 @@ async function clarifyIngestExecute(
   ctx: AgentExecutionContext | undefined,
 ): Promise<string | undefined> {
   if (name === "close_question") return closeQuestionTool(db, input, ctx);
+  if (name === "defer_question") return deferQuestionTool(db, input);
   if (name !== "ask_user") return undefined;
   if (!ctx) return "ask_user is only available inside an agent session.";
 
@@ -641,6 +648,15 @@ async function clarifyIngestExecute(
     return `User answered: ${answer}${total > 1 ? ` (applied to ${total} questions)` : ""}`;
   }
   return `Awaiting user input — cannot proceed in non-interactive mode.`;
+}
+
+async function deferQuestionTool(db: Database.Database, input: any): Promise<string> {
+  const { deferQuestion } = await import("../../db/queries/questions.js");
+  const id = String(input.question_id ?? "");
+  if (!id) return "defer_question requires question_id.";
+  const days = Number.isFinite(input.days) ? Math.max(1, Math.floor(input.days)) : 7;
+  const updated = deferQuestion(db, id, days);
+  return updated ? `Deferred question ${id} for ${days} day${days === 1 ? "" : "s"}.` : `Question ${id} not found.`;
 }
 
 async function closeQuestionTool(

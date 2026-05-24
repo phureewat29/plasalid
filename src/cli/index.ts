@@ -154,6 +154,17 @@ program
   });
 
 program
+  .command("files")
+  .description(
+    "Browse scanned files; press d to drop one and cascade-remove its data",
+  )
+  .action(async () => {
+    ensureConfigured();
+    const { showFiles } = await import("./commands/files.js");
+    await showFiles();
+  });
+
+program
   .command("rules")
   .description("Browse the rules the system has learned (press d to delete)")
   .action(async () => {
@@ -199,6 +210,10 @@ program.configureHelp({
       {
         name: "scan",
         desc: "Scan new PDFs (optionally by regex; --force to re-scan)",
+      },
+      {
+        name: "files",
+        desc: "Browse scanned files; press d to drop one and cascade-remove its data",
       },
       {
         name: "rules",

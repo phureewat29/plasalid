@@ -26,6 +26,7 @@ export interface QuestionRow {
   prompt: string;
   options_json: string | null;
   context_json: string | null;
+  deferred_until: string | null;
   created_at: string;
 }
 
@@ -33,6 +34,10 @@ export interface ClosedQuestion {
   prompt: string;
   kind: string | null;
   answer: string;
+  /** Stable signature pulled from the question's context_json. When set, the
+   * rule synthesizer keys the learned rule on this (so future questions with
+   * different prose but the same key match). When null, no rule is learned. */
+  rule_key: string | null;
 }
 
 /**
@@ -78,10 +83,16 @@ export function closeQuestion(
 ): ClosedQuestion | null {
   const row = db
     .prepare(
-      `SELECT prompt, kind, transaction_id, account_id FROM questions WHERE id = ?`,
+      `SELECT prompt, kind, transaction_id, account_id, context_json FROM questions WHERE id = ?`,
     )
     .get(id) as
-    | { prompt: string; kind: string | null; transaction_id: string | null; account_id: string | null }
+    | {
+        prompt: string;
+        kind: string | null;
+        transaction_id: string | null;
+        account_id: string | null;
+        context_json: string | null;
+      }
     | undefined;
   if (!row) return null;
   db.prepare(`DELETE FROM questions WHERE id = ?`).run(id);
@@ -89,7 +100,22 @@ export function closeQuestion(
     transaction_id: row.transaction_id,
     account_id: row.account_id,
   });
-  return { prompt: row.prompt, kind: row.kind, answer };
+  return {
+    prompt: row.prompt,
+    kind: row.kind,
+    answer,
+    rule_key: extractRuleKey(row.context_json),
+  };
+}
+
+function extractRuleKey(contextJson: string | null): string | null {
+  if (!contextJson) return null;
+  try {
+    const parsed = JSON.parse(contextJson);
+    return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -128,7 +154,12 @@ export interface CountQuestionsScope {
   account_id?: string;
   kind?: string;
   scan_id?: string;
+  /** When true, count deferred rows too (default false — defer hides). */
+  includeDeferred?: boolean;
 }
+
+const ACTIVE_DEFERRED_CLAUSE =
+  "(deferred_until IS NULL OR deferred_until <= datetime('now'))";
 
 export function countQuestions(db: Database.Database, scope: CountQuestionsScope = {}): number {
   const conditions: string[] = [];
@@ -138,6 +169,7 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
   if (scope.account_id)     { conditions.push("account_id = ?");     params.push(scope.account_id); }
   if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
   if (scope.scan_id)        { conditions.push("scan_id = ?");        params.push(scope.scan_id); }
+  if (!scope.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM questions ${where}`)
@@ -148,26 +180,48 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
 export interface ListQuestionsOptions {
   limit?: number;
   scanId?: string;
+  /** When true, include deferred rows in the result (default false). */
+  includeDeferred?: boolean;
 }
+
+const ROW_COLUMNS =
+  "id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, deferred_until, created_at";
 
 export function listQuestions(
   db: Database.Database,
   opts: ListQuestionsOptions = {},
 ): QuestionRow[] {
   const capped = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
-  if (opts.scanId) {
-    return db.prepare(
-      `SELECT id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, created_at
-       FROM questions
-       WHERE scan_id = ?
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    ).all(opts.scanId, capped) as QuestionRow[];
-  }
+  const conditions: string[] = [];
+  const params: any[] = [];
+  if (opts.scanId) { conditions.push("scan_id = ?"); params.push(opts.scanId); }
+  if (!opts.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  params.push(capped);
   return db.prepare(
-    `SELECT id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, created_at
+    `SELECT ${ROW_COLUMNS}
      FROM questions
+     ${where}
      ORDER BY created_at ASC
      LIMIT ?`,
-  ).all(capped) as QuestionRow[];
+  ).all(...params) as QuestionRow[];
+}
+
+/**
+ * Mark a question as deferred for `days` days from now. The default
+ * `listQuestions` / `countQuestions` filter hides deferred rows until the
+ * timestamp passes, so the clarifier won't re-encounter the question on the
+ * next run. Pass `includeDeferred: true` to those functions for an
+ * unfiltered view (e.g. for the rules / files browsers).
+ */
+export function deferQuestion(
+  db: Database.Database,
+  id: string,
+  days: number,
+): boolean {
+  const safeDays = Math.max(1, Math.floor(days));
+  const result = db
+    .prepare(`UPDATE questions SET deferred_until = datetime('now', ?) WHERE id = ?`)
+    .run(`+${safeDays} days`, id);
+  return result.changes > 0;
 }

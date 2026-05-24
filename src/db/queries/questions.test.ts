@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
 import { createAccount } from "./account-balance.js";
-import { recordQuestion, listQuestions, closeQuestion, countQuestions } from "./questions.js";
+import { recordQuestion, listQuestions, closeQuestion, countQuestions, deferQuestion } from "./questions.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -32,7 +32,7 @@ describe("questions table", () => {
     const open = listQuestions(db);
     expect(open).toHaveLength(1);
     const closed = closeQuestion(db, open[0].id, "expense:food:groceries");
-    expect(closed).toEqual({ prompt: "Which category?", kind: "uncategorized", answer: "expense:food:groceries" });
+    expect(closed).toEqual({ prompt: "Which category?", kind: "uncategorized", answer: "expense:food:groceries", rule_key: null });
     expect(listQuestions(db)).toHaveLength(0);
     expect(countQuestions(db)).toBe(0);
   });
@@ -44,5 +44,54 @@ describe("questions table", () => {
     expect(listQuestions(db, { scanId: "sc:a" }).map(r => r.prompt)).toEqual(["a"]);
     expect(listQuestions(db, { scanId: "sc:b" }).map(r => r.prompt)).toEqual(["b"]);
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("deferQuestion", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+  });
+
+  it("hides a deferred row from listQuestions and countQuestions by default", () => {
+    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
+    expect(listQuestions(db)).toHaveLength(1);
+    expect(countQuestions(db)).toBe(1);
+
+    expect(deferQuestion(db, id, 7)).toBe(true);
+
+    expect(listQuestions(db)).toHaveLength(0);
+    expect(countQuestions(db)).toBe(0);
+  });
+
+  it("surfaces deferred rows when includeDeferred is true", () => {
+    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
+    deferQuestion(db, id, 7);
+
+    expect(listQuestions(db, { includeDeferred: true })).toHaveLength(1);
+    expect(countQuestions(db, { includeDeferred: true })).toBe(1);
+  });
+
+  it("re-surfaces a row whose deferred_until has passed", () => {
+    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "stale defer" });
+    deferQuestion(db, id, 7);
+    expect(listQuestions(db)).toHaveLength(0);
+
+    // Backdate the defer so it's already expired.
+    db.prepare(`UPDATE questions SET deferred_until = datetime('now', '-1 day') WHERE id = ?`).run(id);
+    expect(listQuestions(db)).toHaveLength(1);
+    expect(countQuestions(db)).toBe(1);
+  });
+
+  it("returns false when the id doesn't exist", () => {
+    expect(deferQuestion(db, "cn:nope", 7)).toBe(false);
+  });
+
+  it("floors fractional days and clamps to >= 1", () => {
+    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "x" });
+    expect(deferQuestion(db, id, 0)).toBe(true);
+    // Read the timestamp back; should be roughly 1 day in the future, never in the past.
+    const row = db.prepare(`SELECT deferred_until FROM questions WHERE id = ?`).get(id) as { deferred_until: string };
+    expect(Date.parse(row.deferred_until)).toBeGreaterThan(Date.now() - 60_000);
   });
 });

@@ -32,15 +32,15 @@ const DEFS: ToolDefinition[] = [
   {
     name: "save_memory",
     description:
-      "Persist a fact or bank-specific scanning hint to long-term memory.",
+      "Persist a fact, preference, or life-event note to long-term memory. NOT for scanner rules — those are derived structurally from closed questions and live in the rules table.",
     input_schema: {
       type: "object",
       properties: {
         content: { type: "string", description: "What to remember." },
         category: {
           type: "string",
-          description:
-            "Category: general, scanning_hint, preference, life_event.",
+          description: "Category: general, preference, life_event.",
+          enum: ["general", "preference", "life_event"],
           default: "general",
         },
       },

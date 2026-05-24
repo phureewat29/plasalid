@@ -12,6 +12,10 @@
     Turn your scattered financial documents into structured, insightful, AI-readable context.
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/plasalid"><img src="https://img.shields.io/npm/v/plasalid.svg" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/plasalid"><img src="https://img.shields.io/npm/dt/plasalid.svg" alt="npm total downloads" /></a>
+</p>
 
 <br />
 

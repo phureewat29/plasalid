@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
-import { recordTransaction, listPostings, countTransactions } from "./transactions.js";
+import {
+  recordTransaction,
+  listPostings,
+  countTransactions,
+  bulkUpdatePostings,
+} from "./transactions.js";
+import { upsertMerchant } from "./merchants.js";
 import { getAccountBalances, getNetWorth } from "./account-balance.js";
 
 function freshDb() {
@@ -214,6 +220,134 @@ describe("countTransactions", () => {
     const totals = countTransactions(db);
     expect(totals.transactions).toBe(2);
     expect(totals.postings).toBe(4);
+  });
+});
+
+describe("bulkUpdatePostings", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+    db.prepare(`INSERT INTO accounts (id, name, type, parent_id) VALUES (?, ?, ?, ?)`)
+      .run("income:uncategorized", "Uncategorized Income", "income", "income");
+  });
+
+  function seedSalary(description: string, amount: number, date = "2026-02-01"): string {
+    return recordTransaction(db, {
+      date,
+      description,
+      postings: [
+        { account_id: "asset:kbank", debit: amount },
+        { account_id: "income:uncategorized", credit: amount },
+      ],
+    });
+  }
+
+  it("recategorizes only postings matching the filter", () => {
+    seedSalary("บริษัท คริปโตมายด์ payroll", 50000);
+    seedSalary("บริษัท คริปโตมาย payroll", 50000);  // truncated variant
+    seedSalary("FAMILYMART", 120);                   // unrelated coffee run
+
+    const result = bulkUpdatePostings(
+      db,
+      { account_id: "income:uncategorized", description_contains: "คริปโตมาย" },
+      { account_id: "income:salary" },
+    );
+
+    expect(result.affected).toBe(2);
+    expect(result.sample_posting_ids.length).toBe(2);
+    expect(result.sample_posting_ids.every((id) => id.startsWith("p:"))).toBe(true);
+
+    const remainingUncategorized = listPostings(db, { account_id: "income:uncategorized" });
+    expect(remainingUncategorized).toHaveLength(1);
+    expect(remainingUncategorized[0].transaction_description).toBe("FAMILYMART");
+
+    const salaryPostings = listPostings(db, { account_id: "income:salary" });
+    expect(salaryPostings).toHaveLength(2);
+  });
+
+  it("returns affected:0 and empty sample when nothing matches", () => {
+    seedSalary("Some payroll", 10000);
+    const result = bulkUpdatePostings(
+      db,
+      { description_contains: "nothing here" },
+      { account_id: "income:salary" },
+    );
+    expect(result).toEqual({ affected: 0, sample_posting_ids: [] });
+  });
+
+  it("throws when no filter field is supplied", () => {
+    expect(() => bulkUpdatePostings(db, {}, { account_id: "income:salary" })).toThrow(/filter/);
+  });
+
+  it("throws when no set field is supplied", () => {
+    expect(() => bulkUpdatePostings(db, { account_id: "income:uncategorized" }, {})).toThrow(/set/);
+  });
+
+  it("throws on a no-op recategorization (set.account_id equals filter.account_id)", () => {
+    expect(() =>
+      bulkUpdatePostings(
+        db,
+        { account_id: "income:uncategorized" },
+        { account_id: "income:uncategorized" },
+      ),
+    ).toThrow(/no-op/);
+  });
+
+  it("caps sample_posting_ids at 10 even when affected is larger", () => {
+    for (let i = 0; i < 12; i++) seedSalary(`payroll ${i} from บริษัท คริปโตมายด์`, 100);
+    const result = bulkUpdatePostings(
+      db,
+      { account_id: "income:uncategorized", description_contains: "คริปโต" },
+      { account_id: "income:salary" },
+    );
+    expect(result.affected).toBe(12);
+    expect(result.sample_posting_ids).toHaveLength(10);
+  });
+
+  it("filters by date range via from/to (counts every matching posting on every in-range tx)", () => {
+    seedSalary("payroll คริปโต", 50000, "2025-12-01");
+    seedSalary("payroll คริปโต", 50000, "2026-03-15");
+    seedSalary("payroll คริปโต", 50000, "2026-06-01");
+
+    const result = bulkUpdatePostings(
+      db,
+      { account_id: "income:uncategorized", description_contains: "คริปโต", from: "2026-01-01", to: "2026-04-30" },
+      { account_id: "income:salary" },
+    );
+    // Only the 2026-03-15 row's income:uncategorized leg should flip; the kbank legs
+    // are excluded by the account_id filter, and the out-of-range rows by date.
+    expect(result.affected).toBe(1);
+  });
+
+  it("matches description_contains case-insensitively", () => {
+    seedSalary("SPOTIFY THAILAND", 199);
+    const result = bulkUpdatePostings(
+      db,
+      { account_id: "income:uncategorized", description_contains: "spotify" },
+      { account_id: "income:salary" },
+    );
+    expect(result.affected).toBe(1);
+  });
+
+  it("filters by merchant_id", () => {
+    const merchant = upsertMerchant(db, { canonical_name: "Spotify" });
+    recordTransaction(db, {
+      date: "2026-02-01",
+      description: "Spotify",
+      merchant_id: merchant.id,
+      postings: [
+        { account_id: "income:uncategorized", credit: 199 },
+        { account_id: "liability:ktc", debit: 199 },
+      ],
+    });
+    seedSalary("payroll คริปโต", 199);  // same amount, no merchant
+
+    const result = bulkUpdatePostings(
+      db,
+      { account_id: "income:uncategorized", merchant_id: merchant.id },
+      { account_id: "income:salary" },
+    );
+    expect(result.affected).toBe(1);
   });
 });
 

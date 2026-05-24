@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import chalk from "chalk";
-import type Database from "libsql";
-import { getActiveModel } from "../../../config.js";
 import { getProvider } from "../../../ai/providers/index.js";
 
 const HINTS = [
@@ -38,10 +36,10 @@ const HINTS = [
   "try: am I paying more than the minimum?",
 ];
 
-export function useFooterText(db: Database.Database): string {
+export function useFooterText(): string {
   const [tick, setTick] = useState(0);
   const [hintIdx] = useState(() => Math.floor(Math.random() * HINTS.length));
-  const providerModel = `${getProvider().name}/${getActiveModel()}`;
+  const providerName = getProvider().name;
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 60_000);
@@ -49,18 +47,13 @@ export function useFooterText(db: Database.Database): string {
   }, []);
 
   return useMemo(() => {
-    const { n: fileCount } = db
-      .prepare(`SELECT COUNT(*) AS n FROM scanned_files WHERE status = 'scanned'`)
-      .get() as { n: number };
-
     const idx = (hintIdx + tick) % HINTS.length;
     const parts = [
       chalk.cyan("<°(((><"),
-      chalk.dim(providerModel),
-      chalk.dim(`${fileCount} file${fileCount === 1 ? "" : "s"}`),
       chalk.dim(HINTS[idx]),
+      chalk.dim(providerName),
       chalk.dim("ctrl+c to exit"),
     ];
     return parts.join(chalk.dim("  |  "));
-  }, [db, tick, hintIdx, providerModel]);
+  }, [tick, hintIdx, providerName]);
 }

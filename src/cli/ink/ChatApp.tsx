@@ -31,7 +31,7 @@ const nextId = () => `t${++turnSeq}`;
 export function ChatApp({ db, onboardingPrompt }: Props) {
   const { exit } = useApp();
   const [turns, setTurns] = useState<Turn[]>([]);
-  const footerText = useFooterText(db);
+  const footerText = useFooterText();
   const ctrlC = useCtrlCExit();
 
   const pushTurn = useCallback((t: Turn) => {

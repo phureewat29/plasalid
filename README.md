@@ -120,7 +120,7 @@ plasalid clarify                    # Walk every open question and apply your de
                plasalid               
 ```
 
-Two outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. The same encrypted ledger is open to external AI agents through a local MCP / API server (coming next). No telemetry. No analytics.
+Two main outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. No telemetry. No analytics.
 
 ## Security & Privacy
 

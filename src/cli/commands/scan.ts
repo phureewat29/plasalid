@@ -76,7 +76,7 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
       console.log("");
       console.log(
         chalk.yellow(
-          "scan cancelled. anything committed before cancel stays in the database (run `scan --force` or `revert`).",
+          "scan cancelled. anything committed before cancel stays in the database (run `scan --force` to retry later).",
         ),
       );
       process.exitCode = 130;

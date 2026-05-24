@@ -115,16 +115,16 @@ function Footnote() {
   return (
     <Box flexDirection="column">
       <Text dimColor>
-        output accuracy depends on the model's VL capability.
+        output accuracy depends on the model's vision capability.
       </Text>
       <Text>
-        <Text dimColor>we also provide </Text>
+        <Text dimColor>by the way, user can run</Text>
         <Text color="cyan">clarify</Text>
         <Text dimColor>, </Text>
         <Text color="cyan">record</Text>
         <Text dimColor>, and </Text>
         <Text color="cyan">chat</Text>
-        <Text dimColor> to rectify the data later.</Text>
+        <Text dimColor> to correct the data later.</Text>
       </Text>
     </Box>
   );
@@ -191,9 +191,6 @@ function phaseStateOf(
 }
 
 function Header({ phase }: { phase: CurrentPhase }) {
-  // Cancellation collapses the parse/clarify segments — neither is still
-  // running once the user hits Ctrl+C, and showing them as "pending" would
-  // be misleading. The single "cancelling…" label communicates the wind-down.
   if (phase === "cancelling") {
     return (
       <Text>

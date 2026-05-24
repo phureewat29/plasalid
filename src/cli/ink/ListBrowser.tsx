@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useStdout, type Key } from "ink";
+import { keyOf } from "./keys.js";
 
 const HEADER_LINES = 2;       // title + rule
 const FOOTER_LINES = 2;       // rule + hint
@@ -25,6 +26,14 @@ export interface ListBrowserAdapter<T> {
   summary?: ReactNode;
   /** Optional override for the "no results" empty state. */
   emptyMessage?: string;
+  /** Adapter-owned key handler. Runs after search-mode and before built-in
+   *  navigation; return true to mark the key consumed so default handling
+   *  (q/arrows/g/G/return/etc.) is skipped. */
+  onKey?: (
+    input: string,
+    key: Key,
+    ctx: { cursorItem: T | null },
+  ) => boolean;
 }
 
 /**
@@ -98,36 +107,50 @@ export function ListBrowser<T>({ adapter }: { adapter: ListBrowserAdapter<T> }) 
   }, [cursor, effectiveViewportSize, filtered.length]);
 
   useInput((input, key) => {
+    const k = keyOf(input, key);
+    const last = Math.max(0, filtered.length - 1);
+
     if (searchMode) {
-      if (key.return || key.escape) { setSearchMode(false); return; }
-      if (key.backspace || key.delete) { setSearch(prev => prev.slice(0, -1)); return; }
+      const SEARCH_KEYS: Record<string, () => void> = {
+        return:    () => setSearchMode(false),
+        escape:    () => setSearchMode(false),
+        backspace: () => setSearch(prev => prev.slice(0, -1)),
+        delete:    () => setSearch(prev => prev.slice(0, -1)),
+      };
+      const handler = SEARCH_KEYS[k];
+      if (handler) { handler(); return; }
       if (input && !key.ctrl && !key.meta) setSearch(prev => prev + input);
       return;
     }
 
-    if (input === "q" || key.escape) { exit(); return; }
-    if (input === "/")                 { setSearchMode(true); return; }
+    if (adapter.onKey?.(input, key, { cursorItem: filtered[cursor] ?? null })) return;
 
-    const last = Math.max(0, filtered.length - 1);
     const move = (delta: number): void => {
       setExpandedId(null);
       setCursor(c => Math.max(0, Math.min(last, c + delta)));
     };
-
-    if (key.upArrow   || input === "k") { move(-1); return; }
-    if (key.downArrow || input === "j") { move(1);  return; }
-    if (key.pageUp)                     { move(-viewportSize); return; }
-    if (key.pageDown)                   { move(viewportSize);  return; }
-    if (input === "g")                  { setExpandedId(null); setCursor(0);    return; }
-    if (input === "G")                  { setExpandedId(null); setCursor(last); return; }
-    if (key.return) {
+    const toggleExpand = (): void => {
       const item = filtered[cursor];
-      if (item) {
-        const id = adapter.getId(item);
-        setExpandedId(prev => prev === id ? null : id);
-      }
-      return;
-    }
+      if (!item) return;
+      const id = adapter.getId(item);
+      setExpandedId(prev => prev === id ? null : id);
+    };
+
+    const NAV_KEYS: Record<string, () => void> = {
+      q:         exit,
+      escape:    exit,
+      "/":       () => setSearchMode(true),
+      k:         () => move(-1),
+      upArrow:   () => move(-1),
+      j:         () => move(1),
+      downArrow: () => move(1),
+      pageUp:    () => move(-viewportSize),
+      pageDown:  () => move(viewportSize),
+      g:         () => { setExpandedId(null); setCursor(0); },
+      G:         () => { setExpandedId(null); setCursor(last); },
+      return:    toggleExpand,
+    };
+    NAV_KEYS[k]?.();
   });
 
   const ruleWidth = Math.min(cols, 120);

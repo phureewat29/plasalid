@@ -64,51 +64,42 @@ export function banner(): string {
   );
 }
 
-function stripAnsi(str: string): string {
-  return str.replace(ANSI_RE, "");
-}
-
-function box(label: string, lines: string[]): string {
-  const cols = process.stdout.columns || 100;
-  const inner = cols - 4;
-  const top = `┌─── ${label} ${"─".repeat(Math.max(0, inner - label.length - 5))}┐`;
-  const bot = `└${"─".repeat(inner + 2)}┘`;
-  const pad = `│${" ".repeat(inner + 2)}│`;
-  const body = lines.map((l) => {
-    const vis = stripAnsi(l).length;
-    return `│  ${l}${" ".repeat(Math.max(0, inner - vis))}│`;
-  });
-  return [top, pad, ...body, pad, bot].join("\n");
-}
-
 const DISCLAIMER =
   "Plasalid is an assistant, not a financial advisor. It only summarizes financial statements — verify amounts against your statements before relying on them.";
 
+function section(label: string, lines: string[]): string {
+  return [chalk.bold.yellow(label), ...lines.map((l) => `  ${l}`)].join("\n");
+}
+
 export function helpScreen(commands: { name: string; desc: string }[]): string {
-  const sections: string[] = [
+  const options: { name: string; desc: string }[] = [
+    { name: "--version", desc: "Show the version and exit" },
+    { name: "--help", desc: "Show this help screen" },
+  ];
+  const nameWidth = Math.max(
+    ...commands.map((c) => c.name.length),
+    ...options.map((o) => o.name.length),
+  );
+  const row = (name: string, desc: string) =>
+    `${chalk.cyan(name.padEnd(nameWidth))}    ${chalk.dim(desc)}`;
+
+  const usageLines = [
+    `${chalk.cyan("plasalid")} ${chalk.dim("<command> [OPTIONS]")}`,
+    row("plasalid", "Start the chat session"),
+  ];
+
+  return [
+    "",
     banner(),
     "",
-    box("Usage", [
-      "plasalid <command> [OPTIONS]",
-      "plasalid                       Start the chat session",
-    ]),
+    section("Usage", usageLines),
     "",
-  ];
-  const nameWidth = Math.max(...commands.map((c) => c.name.length));
-  const cmdLines = commands.map(
-    (c) => `${chalk.white(c.name.padEnd(nameWidth))}    ${chalk.dim(c.desc)}`,
-  );
-  sections.push(box("Commands", cmdLines));
-  sections.push("");
-  sections.push(
-    box("Options", [
-      `${chalk.white("--version".padEnd(nameWidth))}    ${chalk.dim("Show the version and exit")}`,
-      `${chalk.white("--help".padEnd(nameWidth))}    ${chalk.dim("Show this help screen")}`,
-    ]),
-  );
-  sections.push("");
-  sections.push(chalk.dim(DISCLAIMER));
-  return sections.join("\n");
+    section("Commands", commands.map((c) => row(c.name, c.desc))),
+    "",
+    section("Options", options.map((o) => row(o.name, o.desc))),
+    "",
+    chalk.dim(DISCLAIMER),
+  ].join("\n");
 }
 
 export function formatResponse(text: string): string {

@@ -59,8 +59,10 @@ export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Pro
 
   hooks.onWorkerEnd?.(workerId, deps.chunk, outcome.ok);
   if (!outcome.ok) {
-    // A worker whose in-flight call was cancelled by Ctrl+C is not a real
-    // failure — don't pollute the questions table with chunk_failed rows.
+    /**
+     * A worker whose in-flight call was cancelled by Ctrl+C is not a real
+     * failure — don't pollute the questions table with chunk_failed rows.
+     */
     if (deps.signal.aborted) return;
     recordChunkFailure(deps, outcome.error);
   }

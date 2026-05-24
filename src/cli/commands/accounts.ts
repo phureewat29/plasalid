@@ -1,35 +1,8 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
 import { getAccountBalances } from "../../db/queries/account-balance.js";
-import { visibleLength } from "../format.js";
-import { formatSignedAmount } from "../../currency.js";
-import type {
-  AccountBalance,
-  AccountType,
-} from "../../db/queries/account-balance.js";
 
-const TYPE_TAG: Record<AccountType, string> = {
-  asset: "asset",
-  liability: "liab",
-  income: "income",
-  expense: "expense",
-  equity: "equity",
-};
-const TYPE_TAG_WIDTH = 8;
-
-const TYPE_RANK: Record<AccountType, number> = {
-  asset: 0,
-  liability: 1,
-  income: 2,
-  expense: 3,
-  equity: 4,
-};
-
-export interface ShowAccountsOptions {
-  noInteractive?: boolean;
-}
-
-export async function showAccounts(opts: ShowAccountsOptions = {}): Promise<void> {
+export async function showAccounts(): Promise<void> {
   const db = getDb();
   const accounts = getAccountBalances(db);
   if (accounts.length === 0) {
@@ -41,101 +14,21 @@ export async function showAccounts(opts: ShowAccountsOptions = {}): Promise<void
     return;
   }
 
-  const interactive =
-    !opts.noInteractive && Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY);
-
-  if (interactive) {
-    const [
-      { runBrowser },
-      { AccountsBrowser },
-      { createElement },
-      { listPostings },
-    ] = await Promise.all([
-      import("../ink/runBrowser.js"),
-      import("../ink/AccountsBrowser.js"),
-      import("react"),
-      import("../../db/queries/transactions.js"),
-    ]);
-    const recentTransactionsByAccount = new Map<string, ReturnType<typeof listPostings>>();
-    for (const a of accounts) {
-      const rows = listPostings(db, { account_id: a.id, limit: 10 });
-      if (rows.length > 0) recentTransactionsByAccount.set(a.id, rows);
-    }
-    await runBrowser(createElement(AccountsBrowser, { accounts, recentTransactionsByAccount }));
-    return;
-  }
-
-  printAccountsPlain(accounts);
-}
-
-function printAccountsPlain(raw: AccountBalance[]): void {
-  const byId = new Map(raw.map((a) => [a.id, a]));
-  const depthCache = new Map<string, number>();
-  const depthOf = (id: string): number => {
-    if (depthCache.has(id)) return depthCache.get(id)!;
-    const node = byId.get(id);
-    if (!node || !node.parent_id) {
-      depthCache.set(id, 0);
-      return 0;
-    }
-    const d = depthOf(node.parent_id) + 1;
-    depthCache.set(id, d);
-    return d;
-  };
-
-  const accounts = [...raw].sort((a, b) => {
-    const t = TYPE_RANK[a.type] - TYPE_RANK[b.type];
-    if (t !== 0) return t;
-    return a.id.localeCompare(b.id);
-  });
-
-  const balanceWidth = Math.max(
-    ...accounts.map((a) => formatSignedAmount(a.balance).length),
-  );
-  const nameWidth = Math.max(
-    ...accounts.map((a) => a.name.length + depthOf(a.id) * 2),
-  );
-
+  const [
+    { runBrowser },
+    { AccountsBrowser },
+    { createElement },
+    { listPostings },
+  ] = await Promise.all([
+    import("../ink/runBrowser.js"),
+    import("../ink/AccountsBrowser.js"),
+    import("react"),
+    import("../../db/queries/transactions.js"),
+  ]);
+  const recentTransactionsByAccount = new Map<string, ReturnType<typeof listPostings>>();
   for (const a of accounts) {
-    const tag = chalk.dim(TYPE_TAG[a.type].padEnd(TYPE_TAG_WIDTH));
-    const indent = "  ".repeat(depthOf(a.id));
-    const displayName = indent + a.name;
-    const name =
-      chalk.bold(displayName) + " ".repeat(nameWidth - displayName.length);
-    const rawBalance = formatSignedAmount(a.balance);
-    const coloredBalance = a.balance < 0 ? chalk.red(rawBalance) : rawBalance;
-    const paddedBalance =
-      " ".repeat(balanceWidth - visibleLength(coloredBalance)) + coloredBalance;
-    const meta = compactMeta(a);
-    const metaStr = meta.length ? `   ${chalk.dim(meta.join(" · "))}` : "";
-    console.log(`  ${tag}  ${name}   ${paddedBalance}${metaStr}`);
+    const rows = listPostings(db, { account_id: a.id, limit: 10 });
+    if (rows.length > 0) recentTransactionsByAccount.set(a.id, rows);
   }
-
-  let assets = 0,
-    liabilities = 0;
-  for (const a of accounts) {
-    if (a.type === "asset") assets += a.balance;
-    else if (a.type === "liability") liabilities += a.balance;
-  }
-  const netWorth = assets - liabilities;
-  console.log("");
-  console.log(
-    "  " +
-      chalk.dim(`Assets ${formatSignedAmount(assets)}`) +
-      chalk.dim("   ·   ") +
-      chalk.dim(`Liabilities ${formatSignedAmount(liabilities)}`) +
-      chalk.dim("   ·   ") +
-      chalk.bold(`Net worth ${formatSignedAmount(netWorth)}`),
-  );
-}
-
-function compactMeta(a: AccountBalance): string[] {
-  const meta: string[] = [];
-  if (a.bank_name) meta.push(a.bank_name);
-  if (a.due_day) meta.push(`due ${a.due_day}`);
-  if (a.statement_day) meta.push(`stmt ${a.statement_day}`);
-  if (a.points_balance) meta.push(`${a.points_balance.toLocaleString()} pts`);
-  if (a.currency && a.currency !== "THB") meta.push(a.currency);
-  if (meta.length === 0 && a.subtype) meta.push(a.subtype);
-  return meta;
+  await runBrowser(createElement(AccountsBrowser, { accounts, recentTransactionsByAccount }));
 }

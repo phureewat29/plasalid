@@ -17,6 +17,17 @@ function ensureConfigured(): void {
   }
 }
 
+async function runChatOrSetup(): Promise<void> {
+  if (!isConfigured()) {
+    console.log("Plasalid is not configured yet. Running setup...\n");
+    const { runSetup } = await import("./setup.js");
+    await runSetup();
+    return;
+  }
+  const { startChat } = await import("./chat.js");
+  await startChat();
+}
+
 program
   .name("plasalid")
   .description("The Harness Layer for Personal Finance")
@@ -25,16 +36,12 @@ program
   .showHelpAfterError(
     `Run ${chalk.cyan("plasalid --help")} for the list of commands.`,
   )
-  .action(async () => {
-    if (!isConfigured()) {
-      console.log("Plasalid is not configured yet. Running setup...\n");
-      const { runSetup } = await import("./setup.js");
-      await runSetup();
-      return;
-    }
-    const { startChat } = await import("./chat.js");
-    await startChat();
-  });
+  .action(runChatOrSetup);
+
+program
+  .command("chat")
+  .description("Open the chat TUI (the default action when running `plasalid`)")
+  .action(runChatOrSetup);
 
 program
   .command("setup")
@@ -55,12 +62,11 @@ program
 
 program
   .command("accounts")
-  .description("Browse the chart of accounts with balances (interactive TTY) or print them (piped)")
-  .option("--no-interactive", "Force plain-print output instead of the Ink browser")
-  .action(async (opts) => {
+  .description("Browse the chart of accounts with balances")
+  .action(async () => {
     ensureConfigured();
     const { showAccounts } = await import("./commands/accounts.js");
-    await showAccounts({ noInteractive: opts.interactive === false });
+    await showAccounts();
   });
 
 program
@@ -74,13 +80,12 @@ program
 
 program
   .command("transactions")
-  .description("Browse transactions (interactive TTY) or print them (piped)")
+  .description("Browse transactions")
   .option("-a, --account <id>", "Filter by account id")
   .option("--from <date>", "From date YYYY-MM-DD")
   .option("--to <date>", "To date YYYY-MM-DD")
   .option("-q, --query <text>", "Free-text search on description / memo")
-  .option("-n, --limit <number>", "Max results (default 1000 interactive, 100 piped)")
-  .option("--no-interactive", "Force plain-print output instead of the Ink browser")
+  .option("-n, --limit <number>", "Max results (default 1000)")
   .action(async (opts) => {
     ensureConfigured();
     const { showTransactions } = await import("./commands/transactions.js");
@@ -90,8 +95,6 @@ program
       to: opts.to,
       query: opts.query,
       limit: opts.limit != null ? Number(opts.limit) : undefined,
-      // commander inverts --no-foo to `opts.foo = false`
-      noInteractive: opts.interactive === false,
     });
   });
 
@@ -152,22 +155,11 @@ program
 
 program
   .command("rules")
-  .description("List rules the system has learned")
+  .description("Browse the rules the system has learned (press d to delete)")
   .action(async () => {
     ensureConfigured();
     const { showRules } = await import("./commands/rules.js");
-    showRules();
-  });
-
-program
-  .command("forget <regex>")
-  .description(
-    "Delete every learned rule whose id matches <regex> (anchored). Run `plasalid rules` to list ids.",
-  )
-  .action(async (regex: string) => {
-    ensureConfigured();
-    const { forgetRule } = await import("./commands/rules.js");
-    forgetRule(regex);
+    await showRules();
   });
 
 program
@@ -183,6 +175,10 @@ program.configureHelp({
   formatHelp: () =>
     helpScreen([
       {
+        name: "chat",
+        desc: "Open the chat TUI (default when running `plasalid`)",
+      },
+      {
         name: "setup",
         desc: "Configure Plasalid (API key, encryption, data dir)",
       },
@@ -190,11 +186,11 @@ program.configureHelp({
         name: "data",
         desc: "Open the data folder in your OS file explorer (alias: open)",
       },
-      { name: "accounts", desc: "Browse the chart of accounts (interactive TTY) or list them (piped)" },
+      { name: "accounts", desc: "Browse the chart of accounts with balances" },
       { name: "status", desc: "Show financial and system status (net worth, recurring, questions)" },
       {
         name: "transactions",
-        desc: "Browse transactions (interactive TTY) or list them (piped/--no-interactive)",
+        desc: "Browse transactions (with optional filters)",
       },
       {
         name: "record",
@@ -206,11 +202,7 @@ program.configureHelp({
       },
       {
         name: "rules",
-        desc: "List rules the system has learned",
-      },
-      {
-        name: "forget",
-        desc: "Delete learned rules whose ids match <regex> (anchored)",
+        desc: "Browse the rules the system has learned (press d to delete)",
       },
       {
         name: "clarify",

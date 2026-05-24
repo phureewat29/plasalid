@@ -101,10 +101,12 @@ async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
   let unsubscribeProgress: (() => void) | null = null;
   const chunkLookup = new Map<string, { fileId: string; pageNumber: number }>();
 
-  // Surface cancellation through Ink's controller, not raw stdout — writing
-  // to stdout while Ink is rendering corrupts its frame tracking and leaves
-  // a phantom copy of the header in scrollback. once:true so the listener
-  // self-removes without leaking past the scan run.
+  /**
+   * Surface cancellation through Ink's controller, not raw stdout — writing
+   * to stdout while Ink is rendering corrupts its frame tracking and leaves
+   * a phantom copy of the header in scrollback. once:true so the listener
+   * self-removes without leaking past the scan run.
+   */
   const onAbortEvt = () => {
     controller.publish({ type: "phase-set", phase: "cancelling" });
   };
@@ -120,15 +122,6 @@ async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
       console.log(
         chalk.dim(
           `Decrypted ${s.decrypted.length}, skipped ${s.skipped.length}, failed ${s.failed.length}.`,
-        ),
-      );
-    },
-
-    afterChunk: (s) => {
-      if (s.chunks.length === 0) return;
-      console.log(
-        chalk.dim(
-          `Chunked into ${s.chunks.length} page(s). Mounting dashboard…`,
         ),
       );
     },

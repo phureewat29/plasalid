@@ -9,7 +9,7 @@ import { countQuestions } from "../../db/queries/questions.js";
 import { countMemories } from "../../ai/memory.js";
 import { config, getActiveModel } from "../../config.js";
 import { formatAmount } from "../../currency.js";
-import { visibleLength } from "../format.js";
+import { banner, visibleLength } from "../format.js";
 
 const LABEL_WIDTH = 18;
 
@@ -21,6 +21,9 @@ interface Row {
 
 export function showStatus(): void {
   const db = getDb();
+  console.log("");
+  console.log(banner());
+  console.log("");
   printSection("Financial", financialRows(db));
   console.log("");
   printSection("System", systemRows(db));
@@ -107,8 +110,7 @@ function printSection(
   opts?: { align?: "left" | "right" },
 ): void {
   const align = opts?.align ?? "right";
-  console.log(chalk.bold(title));
-  console.log(chalk.dim("─".repeat(title.length)));
+  console.log(chalk.bold.yellow(title));
   const valueWidth = Math.max(0, ...rows.map((r) => visibleLength(r.value)));
   for (const row of rows) {
     const label = row.label.padEnd(LABEL_WIDTH);

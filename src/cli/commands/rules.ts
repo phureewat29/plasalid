@@ -7,22 +7,13 @@ import {
   clearMerchantDefaultAccount,
 } from "../../db/queries/merchants.js";
 
-interface RuleEntry {
+export interface RuleEntry {
   displayId: string;
   text: string;
   forget(db: Database.Database): void;
 }
 
-export interface ForgetMatch {
-  displayId: string;
-  text: string;
-}
-
-export type ForgetOutcome =
-  | { ok: true; matched: ForgetMatch[] }
-  | { ok: false; error: string };
-
-function collectRules(db: Database.Database): RuleEntry[] {
+export function collectRules(db: Database.Database): RuleEntry[] {
   const out: RuleEntry[] = [];
 
   for (const m of getMemories(db)) {
@@ -49,64 +40,22 @@ function collectRules(db: Database.Database): RuleEntry[] {
   return out;
 }
 
-export function renderRules(db: Database.Database): string {
+export async function showRules(): Promise<void> {
+  const db = getDb();
   const rules = collectRules(db);
   if (rules.length === 0) {
-    return (
+    console.log(
       "No rules yet.\n\n" +
-      chalk.dim(
-        "Rules accumulate as you clarify questions. Run `plasalid clarify` after a scan.",
-      )
+        chalk.dim(
+          "Rules accumulate as you clarify questions. Run `plasalid clarify` after a scan.",
+        ),
     );
-  }
-  const width = Math.max(...rules.map((r) => r.displayId.length));
-  const lines = [chalk.bold(`Rules (${rules.length}):`)];
-  for (const r of rules) {
-    lines.push(`  ${chalk.cyan(r.displayId.padEnd(width))}  ${r.text}`);
-  }
-  lines.push("");
-  lines.push(chalk.dim("To remove: plasalid forget <regex>"));
-  return lines.join("\n");
-}
-
-export function forgetRules(
-  db: Database.Database,
-  pattern: string,
-): ForgetOutcome {
-  let re: RegExp;
-  try {
-    re = new RegExp(`^${pattern}$`);
-  } catch (err: unknown) {
-    return { ok: false, error: `Invalid regex /${pattern}/: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  const snapshot = collectRules(db);
-  const hits = snapshot.filter((r) => re.test(r.displayId));
-  if (!hits.length) {
-    return {
-      ok: false,
-      error: `No rule matches /${pattern}/. Run \`plasalid rules\` to list ids.`,
-    };
-  }
-  const matched: ForgetMatch[] = hits.map((r) => {
-    r.forget(db);
-    return { displayId: r.displayId, text: r.text };
-  });
-  return { ok: true, matched };
-}
-
-export function showRules(): void {
-  console.log(renderRules(getDb()));
-}
-
-export function forgetRule(pattern: string): void {
-  const outcome = forgetRules(getDb(), pattern);
-  if (!outcome.ok) {
-    console.error(chalk.red(outcome.error));
-    process.exitCode = 1;
     return;
   }
-  const width = Math.max(...outcome.matched.map((m) => m.displayId.length));
-  for (const m of outcome.matched) {
-    console.log(`Forgot ${chalk.cyan(m.displayId.padEnd(width))}  ${m.text}`);
-  }
+  const [{ runBrowser }, { RulesBrowser }, { createElement }] = await Promise.all([
+    import("../ink/runBrowser.js"),
+    import("../ink/RulesBrowser.js"),
+    import("react"),
+  ]);
+  await runBrowser(createElement(RulesBrowser, { rules, db }));
 }

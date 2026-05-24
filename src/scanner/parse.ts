@@ -68,10 +68,12 @@ export async function parsePhase(
       });
   }
 
-  // Only flip files to "scanned" for groups that actually completed. On abort
-  // the pool leaves later groups unclaimed (their settled slot is undefined);
-  // those rows stay `pending` so a future re-scan can pick them up. Partial
-  // transactions already committed during the run stay (scanner is DB-direct).
+  /**
+   * Only flip files to "scanned" for groups that actually completed. On abort
+   * the pool leaves later groups unclaimed (their settled slot is undefined);
+   * those rows stay `pending` so a future re-scan can pick them up. Partial
+   * transactions already committed during the run stay (scanner is DB-direct).
+   */
   for (let i = 0; i < fileGroups.length; i++) {
     if (!settled[i]) continue;
     const sfId = fileGroups[i].scannedFileId;

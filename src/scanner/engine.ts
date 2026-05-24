@@ -10,6 +10,10 @@ import { parsePhase } from "./parse.js";
 import { chunkPdf } from "./pdf/chunker.js";
 import { runClarify } from "./clarifier.js";
 import { errorMessage } from "./result.js";
+import { AbortedError } from "../ai/errors.js";
+
+/** A signal that never aborts. Used when callers don't pass one. */
+const NEVER_ABORTS = new AbortController().signal;
 
 export interface Chunk {
   readonly chunkId: string; // `${fileId}#p${pageNumber}`
@@ -77,6 +81,7 @@ export interface ScanState {
   readonly startedAt: number;
   readonly options: RunScanOptions;
   readonly progress: ScanProgress;
+  readonly signal: AbortSignal;
 
   files: ScannedFile[];
   decrypted: DecryptedFile[];
@@ -112,6 +117,7 @@ const clarifyPhase: Phase = async (db, state, hooks) => {
     db,
     scanId: state.scanId,
     interactive: state.options.interactive ?? true,
+    signal: state.signal,
   });
   state.clarifySummary = summary;
   await hooks.afterClarify?.(state, summary);
@@ -133,6 +139,7 @@ export async function runScan(
   db: Database.Database,
   opts: RunScanOptions = {},
   hooks: ScanHooks = {},
+  signal: AbortSignal = NEVER_ABORTS,
 ): Promise<ScanResult> {
   const scanId = `sc:${randomUUID()}`;
   const progress = createProgress();
@@ -142,6 +149,7 @@ export async function runScan(
     startedAt: Date.now(),
     options: opts,
     progress,
+    signal,
     files: [],
     decrypted: [],
     skipped: [],
@@ -154,9 +162,15 @@ export async function runScan(
   await fire(hooks.onStart, state);
 
   const phases = opts.phases ?? DEFAULT_PHASES;
-  await runPhaseChain(db, state, hooks, phases);
-
-  await fire(hooks.onFinish, state);
+  try {
+    await runPhaseChain(db, state, hooks, phases);
+    if (state.signal.aborted) throw new AbortedError();
+  } catch (err) {
+    if (err instanceof AbortedError) await fire(hooks.onAbort, state);
+    throw err;
+  } finally {
+    await fire(hooks.onFinish, state);
+  }
 
   return { scanId, state };
 }
@@ -184,6 +198,7 @@ async function tryPhase(
     await phase(db, state, hooks);
     return false;
   } catch (err) {
+    if (err instanceof AbortedError) throw err;
     state.errors.push({ phase: name, error: err });
     await fire(hooks.onError, err, name, state);
     return true;

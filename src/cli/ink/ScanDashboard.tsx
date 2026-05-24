@@ -6,7 +6,7 @@ import Spinner from "ink-spinner";
  * Events the CLI publishes into the dashboard. The CLI subscribes to the
  * scanner's ScanProgress sink and routes per-chunk ticks here via chunkLookup.
  */
-export type CurrentPhase = "parse" | "clarify" | "done";
+export type CurrentPhase = "parse" | "clarify" | "cancelling" | "done";
 
 export type DashboardEvent =
   | {
@@ -106,6 +106,26 @@ export function ScanDashboard(props: Props) {
         <FileGroupView key={fileId} group={group} />
       ))}
       <Divider width={ruleWidth} />
+      {phase !== "done" && <Footnote />}
+    </Box>
+  );
+}
+
+function Footnote() {
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>
+        output accuracy depends on the model's VL capability.
+      </Text>
+      <Text>
+        <Text dimColor>we also provide </Text>
+        <Text color="cyan">clarify</Text>
+        <Text dimColor>, </Text>
+        <Text color="cyan">record</Text>
+        <Text dimColor>, and </Text>
+        <Text color="cyan">chat</Text>
+        <Text dimColor> to rectify the data later.</Text>
+      </Text>
     </Box>
   );
 }
@@ -114,7 +134,7 @@ function AttachmentLine({ info }: { info: AttachmentInfo }) {
   const detail = info.format === "pdf" ? "pdf (native)" : "png (rasterized)";
   return (
     <Text dimColor>
-      sending: {detail} · {info.providerName} · {info.modelName}
+      sending: {detail} ({info.providerName}/{info.modelName})
     </Text>
   );
 }
@@ -171,6 +191,24 @@ function phaseStateOf(
 }
 
 function Header({ phase }: { phase: CurrentPhase }) {
+  // Cancellation collapses the parse/clarify segments — neither is still
+  // running once the user hits Ctrl+C, and showing them as "pending" would
+  // be misleading. The single "cancelling…" label communicates the wind-down.
+  if (phase === "cancelling") {
+    return (
+      <Text>
+        <Text bold>Scanner</Text>
+        <Text dimColor>{"  ·  "}</Text>
+        <Text color="green">✓ decrypt</Text>
+        <Text dimColor> -&gt; </Text>
+        <Text color="green">✓ chunk</Text>
+        <Text dimColor> -&gt; </Text>
+        <Text color="red">
+          <Spinner type="dots" /> cancelling…
+        </Text>
+      </Text>
+    );
+  }
   return (
     <Text>
       <Text bold>Scanner</Text>

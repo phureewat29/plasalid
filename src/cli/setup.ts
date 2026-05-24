@@ -22,7 +22,7 @@ type Vendor = PlasalidConfig["providerType"];
 const RECOMMENDED_MODEL: Record<Exclude<Vendor, "openai-compat">, string> = {
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-5.4-mini",
-  gemini: "gemini-3.5-flash",
+  gemini: "gemini-2.5-pro",
 };
 
 function ensureDir(p: string): void {
@@ -179,9 +179,17 @@ async function promptModelInput(vendor: Vendor): Promise<string> {
     vendor === "openai-compat" ? "" : RECOMMENDED_MODEL[vendor];
   const defaultValue = carriedOver || recommended;
 
+  // openai-compat has no single recommended model — the scanner rasterizes
+  // PDFs to PNG on this path, so any non-vision model will fail on scan. Steer
+  // the user toward a vision-language model in the prompt.
+  const message =
+    vendor === "openai-compat"
+      ? "Which AI model? (use a vision-language model)"
+      : `Which AI model? (recommended: ${RECOMMENDED_MODEL[vendor]})`;
+
   return inputPrompt({
     name: "model",
-    message: "Which AI model?",
+    message,
     default: defaultValue || undefined,
     validate: (v) => v.trim().length > 0 || "Required",
   });

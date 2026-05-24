@@ -13,7 +13,7 @@ import { createGeminiProvider } from "./gemini.js";
 import { ApiAuthError, ApiError, RateLimitError } from "../errors.js";
 
 const baseParams = {
-  model: "gemini-3.5-flash",
+  model: "gemini-2.5-pro",
   system: "You are a test assistant",
   messages: [{ role: "user" as const, content: "hello" }],
   tools: [],
@@ -66,7 +66,7 @@ describe("GeminiProvider", () => {
     const p = createGeminiProvider({ apiKey: "k" });
     await p.sendMessage(baseParams);
     const call = mockGenerateContent.mock.calls[0][0];
-    expect(call.model).toBe("gemini-3.5-flash");
+    expect(call.model).toBe("gemini-2.5-pro");
     expect(call.config.systemInstruction).toBe("You are a test assistant");
     expect(call.config.maxOutputTokens).toBe(4096);
   });

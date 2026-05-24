@@ -37,6 +37,8 @@ export interface RunClarifyOpts {
   interactive?: boolean;
   promptUser?: (prompt: string, options?: string[], facts?: any) => Promise<string>;
   onProgress?: (event: { phase: "tool" | "responding"; toolName?: string; toolCount: number; elapsedMs: number }) => void;
+  /** When set and aborted, runClarify stops between passes/questions. */
+  signal?: AbortSignal;
 }
 
 const MAX_AGENT_PASSES = 3;
@@ -201,6 +203,7 @@ async function runAgentLoop(
           },
         },
         onProgress: opts.onProgress,
+        signal: opts.signal,
       });
       return countRemaining(db, opts.scanId);
     },

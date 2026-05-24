@@ -15,6 +15,7 @@ export interface ScanWorkerDeps {
   readonly scannedFileId: string | undefined;
   readonly progress: ScanProgress;
   readonly chunk: Chunk;
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -23,6 +24,11 @@ export interface ScanWorkerDeps {
  * context. Agent's record_transactions / note_question calls write directly to
  * the DB; per-row ticks fan out via `progress.emit`. Failures land in the DB
  * as a `chunk_failed` question so the clarifier can pick them up.
+ *
+ * Cancellation entry point: the worker pool stops claiming new chunks when
+ * `signal` aborts; in-flight provider calls abort natively via the SDK and
+ * surface as a failed tryExecute outcome — we suppress the chunk_failed row
+ * in that case (see below) since cancellation isn't a real failure.
  */
 export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Promise<void> {
   const workerId = `cw:${randomUUID()}`;
@@ -48,10 +54,16 @@ export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Pro
       chunkId: deps.chunk.chunkId,
       progress: deps.progress,
     },
+    signal: deps.signal,
   }));
 
   hooks.onWorkerEnd?.(workerId, deps.chunk, outcome.ok);
-  if (!outcome.ok) recordChunkFailure(deps, outcome.error);
+  if (!outcome.ok) {
+    // A worker whose in-flight call was cancelled by Ctrl+C is not a real
+    // failure — don't pollute the questions table with chunk_failed rows.
+    if (deps.signal.aborted) return;
+    recordChunkFailure(deps, outcome.error);
+  }
 }
 
 function recordChunkFailure(deps: ScanWorkerDeps, error: string): void {

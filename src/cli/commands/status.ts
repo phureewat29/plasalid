@@ -7,6 +7,7 @@ import { getRecurringSummary } from "../../db/queries/recurrences.js";
 import { countScannedFiles } from "../../db/queries/files.js";
 import { countQuestions } from "../../db/queries/questions.js";
 import { countMemories } from "../../ai/memory.js";
+import { config, getActiveModel } from "../../config.js";
 import { formatAmount } from "../../currency.js";
 import { visibleLength } from "../format.js";
 
@@ -23,6 +24,8 @@ export function showStatus(): void {
   printSection("Financial", financialRows(db));
   console.log("");
   printSection("System", systemRows(db));
+  console.log("");
+  printSection("Model", modelRows(), { align: "left" });
 }
 
 function financialRows(db: Database.Database): Row[] {
@@ -91,7 +94,19 @@ function systemRows(db: Database.Database): Row[] {
   return rows;
 }
 
-function printSection(title: string, rows: Row[]): void {
+function modelRows(): Row[] {
+  return [
+    { label: "Provider", value: config.providerType },
+    { label: "Model", value: getActiveModel() },
+  ];
+}
+
+function printSection(
+  title: string,
+  rows: Row[],
+  opts?: { align?: "left" | "right" },
+): void {
+  const align = opts?.align ?? "right";
   console.log(chalk.bold(title));
   console.log(chalk.dim("─".repeat(title.length)));
   const valueWidth = Math.max(0, ...rows.map((r) => visibleLength(r.value)));
@@ -101,7 +116,11 @@ function printSection(title: string, rows: Row[]): void {
       Math.max(0, valueWidth - visibleLength(row.value)),
     );
     const suffix = row.suffix ? `  ${row.suffix}` : "";
-    console.log(`  ${label}${valuePad}${row.value}${suffix}`);
+    const body =
+      align === "left"
+        ? `${row.value}${valuePad}${suffix}`
+        : `${valuePad}${row.value}${suffix}`;
+    console.log(`  ${label}${body}`);
   }
 }
 

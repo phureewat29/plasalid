@@ -4,8 +4,15 @@
  * never aborts the rest — its slot settles as `{ ok: false, error }` and the
  * caller decides what to do.
  *
+ * Pass `signal` to make the pool cancellation-aware: when it aborts, no new
+ * task is claimed (tasks already running aren't interrupted — their own
+ * signal-aware work is expected to react). Unclaimed slots stay `undefined`
+ * in the returned array; the caller can spot them by checking length vs the
+ * filled entries.
+ *
  * No new dependency. Simple worker-pool: kicks off up to `n` tasks, then each
- * worker pulls the next index from a shared cursor until the queue is drained.
+ * worker pulls the next index from a shared cursor until the queue is drained
+ * or the signal aborts.
  */
 export type Settled<T> =
   | { ok: true; value: T }
@@ -14,6 +21,7 @@ export type Settled<T> =
 export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   n: number,
+  signal?: AbortSignal,
 ): Promise<Settled<T>[]> {
   const results: Settled<T>[] = new Array(tasks.length);
   const workerCount = Math.max(1, Math.min(n, tasks.length));
@@ -21,6 +29,7 @@ export async function runWithConcurrency<T>(
 
   async function worker(): Promise<void> {
     while (cursor < tasks.length) {
+      if (signal?.aborted) return;
       const index = cursor++;
       try {
         results[index] = { ok: true, value: await tasks[index]() };

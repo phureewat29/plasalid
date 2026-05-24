@@ -157,7 +157,7 @@ OPENAI_MODEL=                 # default: gpt-5.4-mini
 
 # Google Gemini
 GEMINI_API_KEY=               # required when provider is gemini
-GEMINI_MODEL=                 # default: gemini-3.5-flash
+GEMINI_MODEL=                 # default: gemini-2.5-pro
 
 # OpenAI-compatible (LM Studio, Ollama, vLLM, etc.)
 OPENAI_COMPAT_BASE_URL=       # e.g. http://localhost:1234/v1

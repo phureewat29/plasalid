@@ -21,5 +21,11 @@ export interface ScanHooks {
   beforeClarify?(s: Readonly<ScanState>): MaybePromise<void>;
   afterClarify?(s: Readonly<ScanState>, summary: ClarifySummary): MaybePromise<void>;
   onError?(err: unknown, phase: PhaseName, s: Readonly<ScanState>): MaybePromise<void>;
+  /**
+   * Fired when an AbortSignal trip propagates out of any phase. The CLI uses
+   * this to unmount Ink and restore the cursor before runScan's promise
+   * settles. onFinish still fires after onAbort.
+   */
+  onAbort?(s: Readonly<ScanState>): MaybePromise<void>;
   onFinish?(s: Readonly<ScanState>): MaybePromise<void>;
 }

@@ -5,6 +5,7 @@ import type { Chunk, ScanState } from "../../scanner/engine.js";
 import type { ScanHooks } from "../../scanner/hooks.js";
 import { getActiveModel } from "../../config.js";
 import { getProvider } from "../../ai/providers/index.js";
+import { AbortedError } from "../../ai/errors.js";
 import type {
   AttachmentInfo,
   ScanDashboardController,
@@ -14,6 +15,11 @@ export interface ScanCommandOptions {
   regex?: string;
   force?: boolean;
   parallel?: number;
+}
+
+/** Show the cursor — always safe; mirrors the TTY mount-time hide. */
+function restoreTerminal(): void {
+  if (process.stdout.isTTY) process.stdout.write("\x1b[?25h");
 }
 
 export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
@@ -33,25 +39,58 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
 
   const parallel = opts.parallel ?? 5;
   const isTTY = !!process.stdout.isTTY;
-  const hooks = isTTY ? await buildTtyHooks() : buildPlainHooks();
 
-  const result = await runScan(
-    getDb(),
-    {
-      regex: opts.regex,
-      force: opts.force,
-      interactive: true,
-      maxFileWorkers: parallel,
-    },
-    hooks,
-  );
+  const controller = new AbortController();
+  let sigintCount = 0;
+  const onSigint = () => {
+    sigintCount++;
+    if (sigintCount === 1) {
+      controller.abort();
+      return;
+    }
+    restoreTerminal();
+    process.exit(130);
+  };
+  process.on("SIGINT", onSigint);
 
-  renderSummary(result.state);
+  const hooks = isTTY
+    ? await buildTtyHooks(controller.signal)
+    : buildPlainHooks(controller.signal);
+
+  try {
+    const result = await runScan(
+      getDb(),
+      {
+        regex: opts.regex,
+        force: opts.force,
+        interactive: true,
+        maxFileWorkers: parallel,
+      },
+      hooks,
+      controller.signal,
+    );
+    renderSummary(result.state);
+  } catch (err) {
+    if (err instanceof AbortedError) {
+      restoreTerminal();
+      console.log("");
+      console.log(
+        chalk.yellow(
+          "scan cancelled. anything committed before cancel stays in the database (run `scan --force` or `revert`).",
+        ),
+      );
+      process.exitCode = 130;
+      return;
+    }
+    throw err;
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
 }
 
 /* TTY mode — Ink dashboard with one in-place row per file. */
 
-async function buildTtyHooks(): Promise<ScanHooks> {
+async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { ScanDashboard, createScanDashboardController } =
@@ -61,6 +100,15 @@ async function buildTtyHooks(): Promise<ScanHooks> {
   let inkInstance: { unmount: () => void } | null = null;
   let unsubscribeProgress: (() => void) | null = null;
   const chunkLookup = new Map<string, { fileId: string; pageNumber: number }>();
+
+  // Surface cancellation through Ink's controller, not raw stdout — writing
+  // to stdout while Ink is rendering corrupts its frame tracking and leaves
+  // a phantom copy of the header in scrollback. once:true so the listener
+  // self-removes without leaking past the scan run.
+  const onAbortEvt = () => {
+    controller.publish({ type: "phase-set", phase: "cancelling" });
+  };
+  signal.addEventListener("abort", onAbortEvt, { once: true });
 
   return {
     afterDecrypt: (s) => {
@@ -166,6 +214,19 @@ async function buildTtyHooks(): Promise<ScanHooks> {
       inkInstance = null;
       process.stdout.write("\x1b[?25h");
     },
+
+    /**
+     * Cancellation lands here when the user hits Ctrl+C mid-scan. Drop the
+     * Ink dashboard immediately so subsequent stderr lines aren't trapped
+     * under its render, and restore the cursor we hid at mount time.
+     */
+    onAbort: () => {
+      unsubscribeProgress?.();
+      unsubscribeProgress = null;
+      inkInstance?.unmount();
+      inkInstance = null;
+      process.stdout.write("\x1b[?25h");
+    },
   };
 }
 
@@ -209,10 +270,19 @@ function classifyFinalize(t: FileTally): FinalizeKind {
   return "partial";
 }
 
-function buildPlainHooks(): ScanHooks {
+function buildPlainHooks(signal: AbortSignal): ScanHooks {
   const tallies = new Map<string, FileTally>();
   const fileIdByChunkId = new Map<string, string>();
   let unsubscribeProgress: (() => void) | null = null;
+
+  // No Ink in this mode, so writing one dim line directly is safe.
+  signal.addEventListener(
+    "abort",
+    () => {
+      console.log(chalk.dim("Cancelling… waiting for in-flight work."));
+    },
+    { once: true },
+  );
 
   const finalize = (fileId: string) => {
     const t = tallies.get(fileId);

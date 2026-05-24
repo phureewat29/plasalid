@@ -75,7 +75,7 @@ function buildConfig(): PlasalidConfig {
       process.env.OPENAI_COMPAT_MODEL || file.openaiCompatModel || "",
     geminiKey: process.env.GEMINI_API_KEY || file.geminiKey || "",
     geminiModel:
-      process.env.GEMINI_MODEL || file.geminiModel || "gemini-3.5-flash",
+      process.env.GEMINI_MODEL || file.geminiModel || "gemini-2.5-pro",
     displayLocale: file.displayLocale || "th-TH",
     displayCurrency: file.displayCurrency || "THB",
     dbPath:

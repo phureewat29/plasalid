@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import chalk from "chalk";
-import { getProvider } from "../../../ai/providers/index.js";
+import { getActiveModel } from "../../../config.js";
 
 const HINTS = [
   "try: what's my net worth?",
@@ -39,7 +39,7 @@ const HINTS = [
 export function useFooterText(): string {
   const [tick, setTick] = useState(0);
   const [hintIdx] = useState(() => Math.floor(Math.random() * HINTS.length));
-  const providerName = getProvider().name;
+  const model = getActiveModel();
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 60_000);
@@ -51,9 +51,9 @@ export function useFooterText(): string {
     const parts = [
       chalk.cyan("<°(((><"),
       chalk.dim(HINTS[idx]),
-      chalk.dim(providerName),
+      chalk.dim(model),
       chalk.dim("ctrl+c to exit"),
     ];
     return parts.join(chalk.dim("  |  "));
-  }, [tick, hintIdx, providerName]);
+  }, [tick, hintIdx, model]);
 }

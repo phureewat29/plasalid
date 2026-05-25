@@ -141,7 +141,7 @@ async function runAgent({
 }
 
 const SCAN_MAX_TOOL_STEPS = 100;
-const RESOLVE_MAX_TOOL_STEPS = 60;
+const RESOLVE_MAX_TOOL_STEPS = 40;
 // Statement pages routinely produce a single batched record_transactions call
 // holding 100+ rows; 4096 tokens cuts those off mid-array. 8192 is the
 // smallest cap that fits a dense page without forcing the agent to chunk.

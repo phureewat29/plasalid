@@ -72,9 +72,9 @@ plasalid setup
 Then:
 
 1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
-2. Run `plasalid scan` — it parses your PDFs end-to-end without stopping.
+2. Run `plasalid scan` — parses your PDFs end-to-end into ledgers.
 3. Run `plasalid clarify` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a question.
-4. Run `plasalid` to chat with what was scanned.
+4. Run `plasalid` to chat with build in AI agent connecting to harness.
 
 Other day-to-day commands:
 

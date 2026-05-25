@@ -46,7 +46,7 @@ export interface RunClarifyOpts {
   signal?: AbortSignal;
 }
 
-const MAX_AGENT_PASSES = 3;
+const MAX_AGENT_PASSES = 2;
 
 /**
  * Apply deterministic resolution via a `(kind, key)` indexed lookup in the

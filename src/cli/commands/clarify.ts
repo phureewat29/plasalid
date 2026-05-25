@@ -1,15 +1,27 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
+import { countQuestions } from "../../db/queries/questions.js";
 import { runClarify, type ClarifySummary } from "../../scanner/clarifier.js";
 import { makePromptUser, makeAgentOnProgress, statusSpinner } from "../ux.js";
 
 /**
- * Zero-arg clarifier. Hands every question to the clarifier (deterministic
- * passes first, then the LLM agent) and prints a colored summary on completion.
+ * Zero-arg clarifier. Prints an up-front banner with the open-question count
+ * so the user knows what's about to happen, then hands every question to the
+ * clarifier (deterministic passes first, then the LLM agent). The agent works
+ * silently in the background and only surfaces via inquirer prompts when it
+ * genuinely needs a decision.
  */
 export async function runClarifyCommand(): Promise<void> {
   const db = getDb();
-  const spinner = statusSpinner("Clarifying...");
+  const openCount = countQuestions(db);
+  if (openCount > 0) {
+    console.log("");
+    console.log(chalk.bold(`Found ${chalk.cyan(openCount)} open question${openCount === 1 ? "" : "s"}.`));
+    console.log(
+      chalk.dim("Resolving in the background — I'll only prompt you when I need a decision from you."),
+    );
+  }
+  const spinner = statusSpinner("Resolving...");
   const promptUser = makePromptUser(spinner);
   const onProgress = makeAgentOnProgress(spinner);
   try {

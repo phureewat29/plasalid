@@ -60,9 +60,9 @@ export async function unlock(
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Password store — filename-pattern keyed, encrypted-at-rest
-// ────────────────────────────────────────────────────────────────────────────
+/**
+ * Password store — filename-pattern keyed, encrypted-at-rest
+ */
 
 export interface StoredPassword {
   id: string;
@@ -164,9 +164,9 @@ export function recordUse(db: Database.Database, id: string): void {
   ).run(id);
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Unlock orchestrator — probe → try stored → prompt-until-unlocked
-// ────────────────────────────────────────────────────────────────────────────
+/**
+ * Unlock orchestrator — probe → try stored → prompt-until-unlocked
+ */
 
 export type UnlockOutcome =
   | { kind: "plaintext" }
@@ -302,9 +302,9 @@ export function persistUnlockOutcome(
   )(db, filePath, outcome);
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// PDF read + hash + scan-attachment builders
-// ────────────────────────────────────────────────────────────────────────────
+/**
+ * PDF read + hash + scan-attachment builders
+ */
 
 const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -373,9 +373,9 @@ export async function buildScanAttachment(
   };
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Page rasterize — PDF → PNG for VL providers that don't accept documents
-// ────────────────────────────────────────────────────────────────────────────
+/**
+ * Page rasterize — PDF → PNG for VL providers that don't accept documents
+ */
 
 // Readable to a VL model without blowing up the token bill on a dense statement.
 const DEFAULT_DPI = 150;
@@ -411,9 +411,9 @@ export async function rasterizePage(
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Page chunker — split one decrypted PDF into N single-page Chunks
-// ────────────────────────────────────────────────────────────────────────────
+/**
+ * Page chunker — split one decrypted PDF into N single-page Chunks
+ */
 
 // mupdf lacks page-range extract; clone and delete other pages back-to-front so indices stay stable.
 async function extractPage(

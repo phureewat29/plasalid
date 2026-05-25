@@ -49,7 +49,7 @@ describe("system prompt builders", () => {
   describe("buildChatSystemPrompt", () => {
     it("composes the expected sections in order", () => {
       const out = buildChatSystemPrompt(db);
-      expect(out).toContain(`You are Plasalid ("ปลาสลิด")`);
+      expect(out).toContain("You are Plasalid,");
       expect(out).toContain("Today is ");
       expect(out).toContain("## About Alpaca");
       expect(out).toContain("## Accounts on file");
@@ -97,7 +97,7 @@ describe("system prompt builders", () => {
   describe("buildClarifySystemPrompt", () => {
     it("composes the expected sections in order", () => {
       const out = buildClarifySystemPrompt(db, {});
-      expect(out).toContain(`You are Plasalid ("ปลาสลิด")`);
+      expect(out).toContain("You are Plasalid,");
       expect(out).toContain("Today is ");
       expect(out).toContain("## Current chart of accounts");
       expect(out).toContain("## Scope");
@@ -112,7 +112,7 @@ describe("system prompt builders", () => {
   describe("buildRecordSystemPrompt", () => {
     it("composes the expected sections in order and echoes the utterance", () => {
       const out = buildRecordSystemPrompt(db, { utterance: "spend 100 coffee" });
-      expect(out).toContain(`You are Plasalid ("ปลาสลิด")`);
+      expect(out).toContain("You are Plasalid,");
       expect(out).toContain("## What the user said");
       expect(out).toContain("> spend 100 coffee");
     });
@@ -134,7 +134,7 @@ describe("system prompt builders", () => {
   describe("buildScanSystemPrompt", () => {
     it("composes the expected sections in order", () => {
       const out = buildScanSystemPrompt(db, { fileName: "stmt.pdf" });
-      expect(out).toContain(`You are Plasalid ("ปลาสลิด")`);
+      expect(out).toContain("You are Plasalid,");
       expect(out).toContain("## File context");
       expect(out).toContain("stmt.pdf");
       expect(out).toContain("## Taxonomy hints");

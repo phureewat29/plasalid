@@ -1,11 +1,55 @@
 import { randomUUID } from "crypto";
+import { readdirSync, statSync } from "fs";
+import { resolve, basename, relative, sep } from "path";
 import type Database from "libsql";
-import { readPdf, type LoadedFile } from "./pdf/pdf.js";
-import { unlockIfNeeded, persistUnlockOutcome } from "./pdf/unlock.js";
-import { scanDataDir, type ScannedFile } from "./walker.js";
+import { getDataDir } from "../config.js";
+import { readPdf, unlockIfNeeded, persistUnlockOutcome, type LoadedFile } from "./pdf.js";
 import { tryExecute } from "./result.js";
 import type { DecryptedFile, ScanState } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
+
+export interface ScannedFile {
+  path: string;
+  name: string;
+  // Forward-slashed relative path from the data dir.
+  relPath: string;
+}
+
+const SUPPORTED_EXTS = new Set([".pdf"]);
+
+function walk(dir: string, root: string, out: ScannedFile[]): void {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.startsWith(".")) continue;
+    const full = resolve(dir, entry);
+    let s;
+    try {
+      s = statSync(full);
+    } catch {
+      continue;
+    }
+    if (s.isDirectory()) {
+      walk(full, root, out);
+    } else if (s.isFile()) {
+      const ext = entry.slice(entry.lastIndexOf(".")).toLowerCase();
+      if (!SUPPORTED_EXTS.has(ext)) continue;
+      const rel = relative(root, full).split(sep).join("/");
+      out.push({ path: full, name: basename(full), relPath: rel });
+    }
+  }
+}
+
+export function scanDataDir(): ScannedFile[] {
+  const out: ScannedFile[] = [];
+  const root = getDataDir();
+  walk(root, root, out);
+  return out;
+}
 
 type DecryptOutcome =
   | { kind: "decrypted"; file: DecryptedFile }
@@ -65,11 +109,7 @@ const APPLY: OutcomeHandler = {
   failed:    (state, file, o) => { state.failed.push({ file, error: o.error }); },
 };
 
-/**
- * Bootstrap one scanned_files row per decrypted file. Chunk workers later
- * stamp transactions with source_file_id, so the row must exist before any
- * tool writes hit the DB. Status flips to 'scanned' after parse completes.
- */
+// Must run before parse so worker tools can stamp transactions.source_file_id.
 function bootstrapScannedFiles(db: Database.Database, state: ScanState): void {
   for (const file of state.decrypted) {
     if (file.replacesPriorScannedFileId) {
@@ -83,12 +123,7 @@ function bootstrapScannedFiles(db: Database.Database, state: ScanState): void {
   }
 }
 
-/**
- * Phase 1 — walk the data dir, optionally filter by regex, decrypt each file
- * sequentially (password prompts can't share a TTY). Output partitions into
- * decrypted / skipped / failed via a kind-keyed dispatch map. Bootstrapped
- * scanned_files rows are tagged onto each DecryptedFile.
- */
+// Sequential by design — password prompts can't share a TTY.
 export async function decryptPhase(
   db: Database.Database,
   state: ScanState,

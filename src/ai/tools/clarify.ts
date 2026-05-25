@@ -5,11 +5,6 @@ import {
   updatePosting,
 } from "../../db/queries/transactions.js";
 import { mergeAccounts } from "../../db/queries/account-balance.js";
-import {
-  linkTransactionToRecurrence,
-  recordRecurrence,
-  type RecurrenceFrequency,
-} from "../../db/queries/recurrences.js";
 import { deleteScannedFile, listScannedFiles } from "../../db/queries/files.js";
 import { sanitizeForPrompt } from "../sanitize.js";
 import type {
@@ -59,58 +54,6 @@ const DEFS: ToolDefinition[] = [
     },
   },
   {
-    name: "record_recurrence",
-    description:
-      "Create a recurrences row and link every supplied transaction to it. Computes first_seen_date, last_seen_date, and next_expected_date from the member transactions. Use this after the user confirms a recurrence_candidate question.",
-    input_schema: {
-      type: "object",
-      properties: {
-        account_id: {
-          type: "string",
-          description: "The account this recurs on.",
-        },
-        description: {
-          type: "string",
-          description:
-            "Human label, e.g. 'Spotify subscription', 'Salary', 'Rent'.",
-        },
-        frequency: {
-          type: "string",
-          enum: ["weekly", "biweekly", "monthly", "annually"],
-        },
-        amount_typical: {
-          type: "number",
-          description:
-            "Representative amount (typically the matching amount of the member transactions).",
-        },
-        currency: { type: "string", default: "THB" },
-        transaction_ids: {
-          type: "array",
-          items: { type: "string" },
-          description: "Transaction ids to link to this recurrence.",
-        },
-        notes: {
-          type: "string",
-          description: "Optional context the chat agent can read later.",
-        },
-      },
-      required: ["account_id", "description", "frequency", "transaction_ids"],
-    },
-  },
-  {
-    name: "link_transaction_to_recurrence",
-    description:
-      "Attach a single newly-seen transaction to an existing recurrence. Recomputes last_seen_date and next_expected_date on the recurrence.",
-    input_schema: {
-      type: "object",
-      properties: {
-        transaction_id: { type: "string" },
-        recurrence_id: { type: "string" },
-      },
-      required: ["transaction_id", "recurrence_id"],
-    },
-  },
-  {
     name: "merge_accounts",
     description:
       "Move every posting on `from_id` over to `to_id`, then delete the source account. Use to apply a similar_accounts question's 'Merge A into B' resolution. Refuses if the source still has child accounts.",
@@ -142,8 +85,6 @@ const LABELS: Record<string, string> = {
   update_transaction: "Updating transaction",
   update_posting: "Updating posting",
   delete_transaction: "Deleting transaction",
-  record_recurrence: "Recording recurrence",
-  link_transaction_to_recurrence: "Linking transaction to recurrence",
   merge_accounts: "Merging accounts",
   list_scanned_files: "Listing scanned files",
   delete_scanned_file: "Deleting scanned file",
@@ -180,34 +121,6 @@ async function execute(
       return changed === 0
         ? `Transaction ${input.transaction_id} not found.`
         : `Deleted transaction ${input.transaction_id} and its postings.`;
-    }
-    case "record_recurrence": {
-      try {
-        const id = recordRecurrence(db, {
-          account_id: input.account_id,
-          description: input.description,
-          frequency: input.frequency as RecurrenceFrequency,
-          amount_typical: input.amount_typical ?? null,
-          currency: input.currency,
-          transaction_ids: input.transaction_ids || [],
-          notes: input.notes ?? null,
-        });
-        return `Recorded recurrence ${id} ("${sanitizeForPrompt(input.description)}", ${input.frequency}); linked ${(input.transaction_ids || []).length} transaction(s).`;
-      } catch (err: any) {
-        return `Could not record recurrence: ${err.message}`;
-      }
-    }
-    case "link_transaction_to_recurrence": {
-      try {
-        linkTransactionToRecurrence(
-          db,
-          input.transaction_id,
-          input.recurrence_id,
-        );
-        return `Linked transaction ${input.transaction_id} → recurrence ${input.recurrence_id}.`;
-      } catch (err: any) {
-        return `Could not link: ${err.message}`;
-      }
     }
     case "merge_accounts": {
       const moved = mergeAccounts(db, input.from_id, input.to_id);

@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
 import { countQuestions } from "../../db/queries/questions.js";
-import { runClarify, type ClarifySummary } from "../../scanner/clarifier.js";
+import { runClarify, type ClarifySummary } from "../../scanner/clarify.js";
 import { makePromptUser, makeAgentOnProgress, statusSpinner } from "../ux.js";
 
 /**

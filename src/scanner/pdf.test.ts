@@ -1,11 +1,38 @@
 import { describe, it, expect } from "vitest";
-import { rasterizePage } from "./rasterize.js";
+import Database from "libsql";
+import { migrate } from "../db/schema.js";
+import { generateKey } from "../db/encryption.js";
+import {
+  suggestPattern,
+  findCandidates,
+  savePassword,
+  rasterizePage,
+} from "./pdf.js";
 
-/**
- * Hand-rolled 1-page PDF (612×792) so the test doesn't need a fixture file.
- * Byte offsets are precomputed for the xref table — if you edit the bodies,
- * recompute them.
- */
+describe("suggestPattern", () => {
+  it("takes the leading alpha prefix before the first separator", () => {
+    expect(suggestPattern("AcctSt_May26.pdf")).toBe("^acctst.*");
+  });
+
+  it("falls back to digit-collapse when the prefix is too short or non-alpha", () => {
+    expect(suggestPattern("1234567890.pdf")).toBe("^\\d+\\.pdf$");
+  });
+});
+
+describe("password store", () => {
+  it("round-trips a password through the encrypted column", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    migrate(db);
+    const dbKey = generateKey();
+    const id = savePassword(db, "^kbank-\\d+\\.pdf$", "hunter2", dbKey);
+    const matches = findCandidates(db, "/data/kbank-2026.pdf", dbKey);
+    expect(matches).toHaveLength(1);
+    expect(matches[0].id).toBe(id);
+    expect(matches[0].password).toBe("hunter2");
+  });
+});
+
 function minimalPdf(): Buffer {
   const header = "%PDF-1.4\n";
   const o1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
@@ -33,7 +60,6 @@ describe("rasterizePage", () => {
   it("renders a one-page PDF to a PNG buffer", async () => {
     const result = await rasterizePage(minimalPdf(), { dpi: 72 });
     expect(result.mime).toBe("image/png");
-    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
     expect(result.bytes[0]).toBe(0x89);
     expect(result.bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
     expect(result.bytes.length).toBeGreaterThan(100);

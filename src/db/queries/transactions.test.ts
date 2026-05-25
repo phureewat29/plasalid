@@ -351,25 +351,3 @@ describe("bulkUpdatePostings", () => {
   });
 });
 
-describe("listPostings exposes recurrence_id", () => {
-  it("surfaces transaction_recurrence_id on each row", () => {
-    const db = freshDb();
-    const txId = recordTransaction(db, {
-      date: "2026-02-01",
-      description: "Netflix",
-      postings: [
-        { account_id: "expense:food", debit: 419 },
-        { account_id: "liability:ktc", credit: 419 },
-      ],
-    });
-    db.prepare(
-      `INSERT INTO recurrences (id, account_id, description, frequency, amount_typical, currency)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run("rc:test", "liability:ktc", "Netflix", "monthly", 419, "THB");
-    db.prepare(`UPDATE transactions SET recurrence_id = ? WHERE id = ?`).run("rc:test", txId);
-
-    const rows = listPostings(db);
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every(r => r.transaction_recurrence_id === "rc:test")).toBe(true);
-  });
-});

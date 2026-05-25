@@ -11,7 +11,6 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { saveMemory } from "./memory.js";
-import { upsertRule } from "../db/queries/rules.js";
 import { recordQuestion, deferQuestion } from "../db/queries/questions.js";
 import {
   buildChatSystemPrompt,
@@ -43,8 +42,6 @@ describe("system prompt builders", () => {
   let db: Database.Database;
   beforeEach(() => {
     db = freshDb();
-    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:lazada thailand", target: "expense:shopping" });
-    upsertRule(db, { kind: "uncategorized_expense", key: "descriptor:spotify", target: "expense:subscriptions" });
     saveMemory(db, "Wife is Corgi.", "general");
     saveMemory(db, "Prefer THB only.", "preference");
   });
@@ -104,12 +101,6 @@ describe("system prompt builders", () => {
       expect(out).toContain("Today is ");
       expect(out).toContain("## Current chart of accounts");
       expect(out).toContain("## Scope");
-      expect(out).toContain("Rules you've already learned");
-    });
-
-    it("renders structured rules in the rules section", () => {
-      const out = buildClarifySystemPrompt(db, {});
-      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
     });
 
     it("contains no emoji", () => {
@@ -126,9 +117,8 @@ describe("system prompt builders", () => {
       expect(out).toContain("> spend 100 coffee");
     });
 
-    it("renders structured rules plus general/preference memories (memory category labels hidden)", () => {
+    it("renders general/preference memories without category labels", () => {
       const out = buildRecordSystemPrompt(db, { utterance: "noop" });
-      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
       expect(out).toContain("Wife is Corgi.");
       expect(out).toContain("Prefer THB only.");
       expect(out).not.toContain("[general]");
@@ -150,9 +140,8 @@ describe("system prompt builders", () => {
       expect(out).toContain("## Taxonomy hints");
     });
 
-    it("renders structured rules + general memories, hides preference", () => {
+    it("renders general memories and hides preference", () => {
       const out = buildScanSystemPrompt(db, { fileName: "stmt.pdf" });
-      expect(out).toContain("[uncategorized_expense] descriptor:lazada thailand -> expense:shopping");
       expect(out).toContain("Wife is Corgi.");
       expect(out).not.toContain("Prefer THB only.");
     });

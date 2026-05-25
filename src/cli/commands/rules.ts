@@ -2,7 +2,6 @@ import type Database from "libsql";
 import chalk from "chalk";
 import { getDb } from "../../db/connection.js";
 import { getMemories, deleteMemory } from "../../ai/memory.js";
-import { listRules, deleteRule } from "../../db/queries/rules.js";
 import {
   listMerchants,
   clearMerchantDefaultAccount,
@@ -14,16 +13,13 @@ export interface RuleEntry {
   forget(db: Database.Database): void;
 }
 
+/**
+ * The two cross-scan hints the system carries: long-form user memories, and
+ * the per-merchant default account. Both are user-asserted (the scanner is
+ * forbidden from writing them) — nothing auto-learned remains.
+ */
 export function collectRules(db: Database.Database): RuleEntry[] {
-  return [...collectStructuredRules(db), ...collectMemories(db), ...collectMerchantDefaults(db)];
-}
-
-function collectStructuredRules(db: Database.Database): RuleEntry[] {
-  return listRules(db).map((r) => ({
-    displayId: `rule:${r.id}`,
-    text: `[${r.kind}] ${r.key} → ${r.target}`,
-    forget: (db) => { deleteRule(db, r.id); },
-  }));
+  return [...collectMemories(db), ...collectMerchantDefaults(db)];
 }
 
 function collectMemories(db: Database.Database): RuleEntry[] {
@@ -50,7 +46,7 @@ export async function showRules(): Promise<void> {
     console.log(
       "No rules yet.\n\n" +
         chalk.dim(
-          "Rules accumulate as you clarify questions. Run `plasalid clarify` after a scan.",
+          "Rules accumulate as you answer questions in `plasalid clarify`.",
         ),
     );
     return;

@@ -15,25 +15,25 @@ import {
   type AccountType,
 } from "../db/queries/account-balance.js";
 import { recordQuestion } from "../db/queries/questions.js";
-import {
-  accountIdKey,
-  accountPairKey,
-  descriptorKey,
-} from "./rules.js";
 
-/**
- * Staged best-effort transaction commit.
- *
- * Each stage returns a tagged union. Side effects (raising questions,
- * progress emission, placeholder account creation) flow through the
- * `CommitHooks` interface so the pipeline stays pure-ish and testable.
- *
- * The only legitimate drop path is a `dirty_input` validation failure
- * (no date, malformed amount, etc.). Every other resolution problem —
- * unknown merchant, unknown account — is rescued in-place: NULL the
- * merchant, fuzzy-match-or-create the account, raise a typed question
- * for the clarifier to review later.
- */
+const NON_WORD = /[^\p{L}\p{N}]+/gu;
+
+function normalizeDescriptor(raw: string): string {
+  return raw.toLowerCase().replace(NON_WORD, " ").replace(/\s+/g, " ").trim();
+}
+
+function descriptorKey(descriptor: string): string {
+  return `descriptor:${normalizeDescriptor(descriptor)}`;
+}
+
+function accountPairKey(a: string, b: string): string {
+  const [lo, hi] = [a, b].sort();
+  return `account-pair:${lo}|${hi}`;
+}
+
+function accountIdKey(id: string): string {
+  return `account:${id}`;
+}
 
 export interface CommitContext {
   readonly scanId: string | null;
@@ -55,9 +55,17 @@ export type DropReason = "dirty_input";
 export interface CommitHooks {
   onCommitted(transactionId: string): void;
   onDirtyInput(input: TransactionInput, reason: string): void;
-  onUnknownMerchant(input: TransactionInput, transactionId: string, attemptedId: string): void;
+  onUnknownMerchant(
+    input: TransactionInput,
+    transactionId: string,
+    attemptedId: string,
+  ): void;
   onPlaceholderAccount(accountId: string, transactionId: string): void;
-  onSimilarAccount(originalId: string, matchedId: string, transactionId: string): void;
+  onSimilarAccount(
+    originalId: string,
+    matchedId: string,
+    transactionId: string,
+  ): void;
 }
 
 interface ValidationOk {
@@ -77,27 +85,28 @@ interface ResolvedMerchant {
 
 type AccountHint =
   | { readonly type: "placeholder_created"; readonly accountId: string }
-  | { readonly type: "similar_matched"; readonly originalId: string; readonly matchedId: string };
+  | {
+      readonly type: "similar_matched";
+      readonly originalId: string;
+      readonly matchedId: string;
+    };
 
 interface ResolvedAccounts {
   readonly postings: PostingInput[];
   readonly hints: AccountHint[];
 }
 
-/**
- * Default hook wiring: raises typed questions into the DB, ticks the
- * progress emitter. Tests substitute their own hooks to inspect events
- * without touching the question table.
- *
- * Question writes are gated on `ctx.scanId` — outside a scan there is no
- * audit trail to attach to, so best-effort resolution still happens but
- * the typed question is suppressed.
- */
-export function defaultCommitHooks(db: Database.Database, ctx: CommitContext): CommitHooks {
+export function defaultCommitHooks(
+  db: Database.Database,
+  ctx: CommitContext,
+): CommitHooks {
   const tick = (kind: "tx" | "question"): void => {
-    if (ctx.progress && ctx.chunkId) ctx.progress.emit({ chunkId: ctx.chunkId, kind });
+    if (ctx.progress && ctx.chunkId)
+      ctx.progress.emit({ chunkId: ctx.chunkId, kind });
   };
-  const raise = (input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "scan_id">): void => {
+  const raise = (
+    input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "scan_id">,
+  ): void => {
     if (!ctx.scanId) return;
     recordQuestion(db, { ...input, file_id: ctx.fileId, scan_id: ctx.scanId });
     tick("question");
@@ -106,15 +115,16 @@ export function defaultCommitHooks(db: Database.Database, ctx: CommitContext): C
   return {
     onCommitted: () => tick("tx"),
 
-    onDirtyInput: (input, reason) => raise({
-      transaction_id: null,
-      account_id: null,
-      kind: "dirty_input",
-      prompt:
-        `The scanner returned a row that couldn't be validated: ${reason}. ` +
-        `Raw description: "${input.description}" on ${input.date}.`,
-      context: { description: input.description, date: input.date, reason },
-    }),
+    onDirtyInput: (input, reason) =>
+      raise({
+        transaction_id: null,
+        account_id: null,
+        kind: "dirty_input",
+        prompt:
+          `The scanner returned a row that couldn't be validated: ${reason}. ` +
+          `Raw description: "${input.description}" on ${input.date}.`,
+        context: { description: input.description, date: input.date, reason },
+      }),
 
     onUnknownMerchant: (input, transactionId, attemptedId) => {
       const descriptor = input.raw_descriptor || input.description;
@@ -125,33 +135,42 @@ export function defaultCommitHooks(db: Database.Database, ctx: CommitContext): C
         prompt:
           `The scanner referenced merchant id "${attemptedId}" but no such merchant exists. ` +
           `Link "${descriptor}" to an existing merchant or leave it unlinked.`,
-        context: { rule_key: descriptorKey(descriptor), descriptor, attempted_id: attemptedId },
+        context: {
+          rule_key: descriptorKey(descriptor),
+          descriptor,
+          attempted_id: attemptedId,
+        },
       });
     },
 
-    onPlaceholderAccount: (accountId, transactionId) => raise({
-      transaction_id: transactionId,
-      account_id: accountId,
-      kind: "uncategorized",
-      prompt:
-        `A placeholder account was created for posting "${accountId}". ` +
-        `Confirm the category, merge into an existing account, or rename.`,
-      context: { rule_key: accountIdKey(accountId), placeholder_id: accountId },
-    }),
+    onPlaceholderAccount: (accountId, transactionId) =>
+      raise({
+        transaction_id: transactionId,
+        account_id: accountId,
+        kind: "uncategorized",
+        prompt:
+          `A placeholder account was created for posting "${accountId}". ` +
+          `Confirm the category, merge into an existing account, or rename.`,
+        context: {
+          rule_key: accountIdKey(accountId),
+          placeholder_id: accountId,
+        },
+      }),
 
-    onSimilarAccount: (originalId, matchedId, transactionId) => raise({
-      transaction_id: transactionId,
-      account_id: matchedId,
-      kind: "similar_accounts",
-      prompt:
-        `The scanner referenced "${originalId}" — the closest existing account is "${matchedId}". ` +
-        `Confirm they are the same, or split them apart.`,
-      context: {
-        rule_key: accountPairKey(originalId, matchedId),
-        original_id: originalId,
-        matched_id: matchedId,
-      },
-    }),
+    onSimilarAccount: (originalId, matchedId, transactionId) =>
+      raise({
+        transaction_id: transactionId,
+        account_id: matchedId,
+        kind: "similar_accounts",
+        prompt:
+          `The scanner referenced "${originalId}" — the closest existing account is "${matchedId}". ` +
+          `Confirm they are the same, or split them apart.`,
+        context: {
+          rule_key: accountPairKey(originalId, matchedId),
+          original_id: originalId,
+          matched_id: matchedId,
+        },
+      }),
   };
 }
 
@@ -164,7 +183,12 @@ export function commitTransaction(
   const validation = stageValidate(input);
   if (!validation.ok) {
     hooks.onDirtyInput(input, validation.reason);
-    return { ok: false, reason: "dirty_input", message: validation.reason, raisedQuestions: 1 };
+    return {
+      ok: false,
+      reason: "dirty_input",
+      message: validation.reason,
+      raisedQuestions: 1,
+    };
   }
 
   const merchant = stageResolveMerchant(db, validation.validated);
@@ -179,7 +203,13 @@ export function commitTransaction(
   tx();
   hooks.onCommitted(committed.id);
 
-  const raised = applyHints({ hooks, transactionId: committed.id, merchant, accounts, input });
+  const raised = applyHints({
+    hooks,
+    transactionId: committed.id,
+    merchant,
+    accounts,
+    input,
+  });
   return { ok: true, transactionId: committed.id, raisedQuestions: raised };
 }
 
@@ -196,8 +226,11 @@ function stageResolveMerchant(
   input: TransactionInput & { id: string },
 ): ResolvedMerchant {
   if (!input.merchant_id) return { merchantId: null, attemptedUnknownId: null };
-  const exists = db.prepare(`SELECT 1 FROM merchants WHERE id = ?`).get(input.merchant_id);
-  if (exists) return { merchantId: input.merchant_id, attemptedUnknownId: null };
+  const exists = db
+    .prepare(`SELECT 1 FROM merchants WHERE id = ?`)
+    .get(input.merchant_id);
+  if (exists)
+    return { merchantId: input.merchant_id, attemptedUnknownId: null };
   return { merchantId: null, attemptedUnknownId: input.merchant_id };
 }
 
@@ -226,7 +259,11 @@ function resolveOnePosting(
   if (matched) {
     return {
       posting: { ...posting, account_id: matched },
-      hint: { type: "similar_matched", originalId: posting.account_id, matchedId: matched },
+      hint: {
+        type: "similar_matched",
+        originalId: posting.account_id,
+        matchedId: matched,
+      },
     };
   }
   const placeholderId = ensurePlaceholderAccount(db, posting.account_id);
@@ -238,7 +275,10 @@ function resolveOnePosting(
 
 const FUZZY_THRESHOLD = 0.7;
 
-function bestFuzzyMatch(db: Database.Database, accountId: string): string | null {
+function bestFuzzyMatch(
+  db: Database.Database,
+  accountId: string,
+): string | null {
   const leaf = leafSegment(accountId).replace(/[-_]+/g, " ");
   if (!leaf) return null;
   const matches = findAccountsByFuzzyName(db, leaf, FUZZY_THRESHOLD);
@@ -250,12 +290,11 @@ function leafSegment(id: string): string {
   return segments[segments.length - 1] ?? id;
 }
 
-/**
- * Create the agent-supplied account id (and any missing intermediate parents)
- * as placeholders so the transaction can land. If the id's top-level segment
- * isn't a known account type, fall back to `expense:uncategorized`.
- */
-function ensurePlaceholderAccount(db: Database.Database, accountId: string): string {
+// Falls back to expense:uncategorized when the top-level segment isn't a known account type.
+function ensurePlaceholderAccount(
+  db: Database.Database,
+  accountId: string,
+): string {
   const segments = accountId.split(":").filter(Boolean);
   if (segments.length === 0) return ensureUncategorizedFallback(db);
 
@@ -298,7 +337,11 @@ function applyHints(args: {
 }): number {
   let raised = 0;
   if (args.merchant.attemptedUnknownId) {
-    args.hooks.onUnknownMerchant(args.input, args.transactionId, args.merchant.attemptedUnknownId);
+    args.hooks.onUnknownMerchant(
+      args.input,
+      args.transactionId,
+      args.merchant.attemptedUnknownId,
+    );
     raised++;
   }
   for (const hint of args.accounts.hints) {
@@ -308,7 +351,11 @@ function applyHints(args: {
   return raised;
 }
 
-function dispatchHint(hint: AccountHint, hooks: CommitHooks, transactionId: string): void {
+function dispatchHint(
+  hint: AccountHint,
+  hooks: CommitHooks,
+  transactionId: string,
+): void {
   switch (hint.type) {
     case "placeholder_created":
       hooks.onPlaceholderAccount(hint.accountId, transactionId);

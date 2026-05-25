@@ -27,7 +27,6 @@ describe("migrate", () => {
       "merchant_aliases",
       "merchants",
       "postings",
-      "recurrences",
       "scanned_files",
       "settings",
       "transactions",
@@ -39,6 +38,8 @@ describe("migrate", () => {
 
     expect(tables).not.toContain("journal_entries");
     expect(tables).not.toContain("journal_lines");
+    expect(tables).not.toContain("rules");
+    expect(tables).not.toContain("recurrences");
   });
 
   it("is idempotent", () => {

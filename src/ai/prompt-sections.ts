@@ -1,6 +1,5 @@
 import type Database from "libsql";
 import { getMemories, type Memory } from "./memory.js";
-import { listRules, type Rule } from "../db/queries/rules.js";
 import { countQuestions } from "../db/queries/questions.js";
 import {
   getAccountBalances,
@@ -169,19 +168,6 @@ function formatMemoryLine(m: Memory, showCategory: boolean): string {
   return showCategory
     ? `- [${m.category}] ${stripControls(m.content)}`
     : `- ${stripControls(m.content)}`;
-}
-
-/** Rules (structured scanner hints) */
-
-export function renderRules(db: Database.Database, header: string): string | null {
-  const rules = listRules(db, { limit: 500 });
-  if (rules.length === 0) return null;
-  const lines = rules.map(formatRuleLine);
-  return `## ${header}\n${lines.join("\n")}`;
-}
-
-function formatRuleLine(r: Rule): string {
-  return `- [${r.kind}] ${stripControls(r.key)} -> ${stripControls(r.target)}`;
 }
 
 /** Open clarify-questions backlog (chat surface) */

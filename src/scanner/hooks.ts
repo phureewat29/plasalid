@@ -1,13 +1,9 @@
 import type { Chunk, ScanState, PhaseName } from "./engine.js";
-import type { ClarifySummary } from "./clarifier.js";
+import type { ClarifySummary } from "./clarify.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
-/**
- * Lifecycle hooks the engine fires at phase edges. CLI registers spinner/Ink
- * hooks; tests register assertions. Every hook is optional and best-effort —
- * a hook that throws gets logged and the phase continues.
- */
+// Every hook is optional; a hook that throws is logged and the phase continues.
 export interface ScanHooks {
   onStart?(s: Readonly<ScanState>): MaybePromise<void>;
   beforeDecrypt?(s: Readonly<ScanState>): MaybePromise<void>;
@@ -19,13 +15,15 @@ export interface ScanHooks {
   onWorkerEnd?(workerId: string, chunk: Chunk, ok: boolean): void;
   afterParse?(s: Readonly<ScanState>): MaybePromise<void>;
   beforeClarify?(s: Readonly<ScanState>): MaybePromise<void>;
-  afterClarify?(s: Readonly<ScanState>, summary: ClarifySummary): MaybePromise<void>;
-  onError?(err: unknown, phase: PhaseName, s: Readonly<ScanState>): MaybePromise<void>;
-  /**
-   * Fired when an AbortSignal trip propagates out of any phase. The CLI uses
-   * this to unmount Ink and restore the cursor before runScan's promise
-   * settles. onFinish still fires after onAbort.
-   */
+  afterClarify?(
+    s: Readonly<ScanState>,
+    summary: ClarifySummary,
+  ): MaybePromise<void>;
+  onError?(
+    err: unknown,
+    phase: PhaseName,
+    s: Readonly<ScanState>,
+  ): MaybePromise<void>;
   onAbort?(s: Readonly<ScanState>): MaybePromise<void>;
   onFinish?(s: Readonly<ScanState>): MaybePromise<void>;
 }

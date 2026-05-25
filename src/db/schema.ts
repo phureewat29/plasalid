@@ -53,22 +53,6 @@ export function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS recurrences (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-      description TEXT NOT NULL,
-      frequency TEXT NOT NULL CHECK(frequency IN ('weekly','biweekly','monthly','annually')),
-      amount_typical REAL,
-      currency TEXT NOT NULL DEFAULT 'THB',
-      first_seen_date TEXT,
-      last_seen_date TEXT,
-      next_expected_date TEXT,
-      notes TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS recurrences_account_idx ON recurrences(account_id);
-
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
       date TEXT NOT NULL,
@@ -77,12 +61,10 @@ export function migrate(db: Database.Database): void {
       raw_descriptor TEXT,
       source_file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
       source_page INTEGER,
-      recurrence_id TEXT REFERENCES recurrences(id) ON DELETE SET NULL,
       has_question INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS transactions_recurrence_idx ON transactions(recurrence_id);
     CREATE INDEX IF NOT EXISTS transactions_source_file_idx ON transactions(source_file_id);
     CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
     CREATE INDEX IF NOT EXISTS transactions_merchant_idx ON transactions(merchant_id);
@@ -135,19 +117,6 @@ export function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL,
-      key TEXT NOT NULL,
-      target TEXT NOT NULL,
-      evidence_count INTEGER NOT NULL DEFAULT 1,
-      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(kind, key)
-    );
-
-    CREATE INDEX IF NOT EXISTS rules_kind_idx ON rules(kind);
-
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -163,4 +132,25 @@ export function migrate(db: Database.Database): void {
     );
   `);
 
+  dropLegacySubsystems(db);
+}
+
+/**
+ * One-shot cleanup for DBs that pre-date the rules + recurrences rip-out.
+ * Safe on fresh DBs (every step is conditional).
+ */
+function dropLegacySubsystems(db: Database.Database): void {
+  db.exec(`DROP TABLE IF EXISTS rules`);
+  db.exec(`DROP TABLE IF EXISTS recurrences`);
+
+  const cols = db
+    .prepare(`PRAGMA table_info(transactions)`)
+    .all() as { name: string }[];
+  if (cols.some(c => c.name === "recurrence_id")) {
+    db.exec(`ALTER TABLE transactions DROP COLUMN recurrence_id`);
+  }
+
+  db.exec(
+    `DELETE FROM questions WHERE kind IN ('recurrence_candidate')`,
+  );
 }

@@ -3,7 +3,7 @@ import type Database from "libsql";
 import { runScanAgent } from "../ai/agent.js";
 import { getProvider } from "../ai/providers/index.js";
 import { recordQuestion } from "../db/queries/questions.js";
-import { buildScanAttachment } from "./pdf/pdf.js";
+import { buildScanAttachment } from "./pdf.js";
 import { tryExecute } from "./result.js";
 import type { Chunk } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
@@ -18,18 +18,6 @@ export interface ScanWorkerDeps {
   readonly signal: AbortSignal;
 }
 
-/**
- * Process one chunk: run the LLM scan agent over a single-page PDF blob with
- * scanId + progress sink + scanned_files row injected through the agent
- * context. Agent's record_transactions / note_question calls write directly to
- * the DB; per-row ticks fan out via `progress.emit`. Failures land in the DB
- * as a `chunk_failed` question so the clarifier can pick them up.
- *
- * Cancellation entry point: the worker pool stops claiming new chunks when
- * `signal` aborts; in-flight provider calls abort natively via the SDK and
- * surface as a failed tryExecute outcome — we suppress the chunk_failed row
- * in that case (see below) since cancellation isn't a real failure.
- */
 export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Promise<void> {
   const workerId = `cw:${randomUUID()}`;
   hooks.onWorkerStart?.(workerId, deps.chunk);
@@ -59,10 +47,7 @@ export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Pro
 
   hooks.onWorkerEnd?.(workerId, deps.chunk, outcome.ok);
   if (!outcome.ok) {
-    /**
-     * A worker whose in-flight call was cancelled by Ctrl+C is not a real
-     * failure — don't pollute the questions table with chunk_failed rows.
-     */
+    // Ctrl+C cancellation is not a real failure — don't record a chunk_failed row.
     if (deps.signal.aborted) return;
     recordChunkFailure(deps, outcome.error);
   }

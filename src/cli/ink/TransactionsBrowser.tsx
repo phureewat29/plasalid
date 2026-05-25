@@ -15,7 +15,6 @@ export interface TransactionsBrowserProps {
   filterSummary: string;
 }
 
-const RECURRING_MARKER = "[R]";
 const DATE_WIDTH = 10;
 const MIN_DESC_WIDTH = 12;
 
@@ -40,12 +39,10 @@ export function TransactionsBrowser({ postings, filterSummary }: TransactionsBro
 function renderTransactionRow(g: TransactionGroup, isCursor: boolean, isExpanded: boolean, cols: number): string {
   const totals = transactionTotals(g);
   const amountRaw = formatAmount(totals.amount, totals.currency);
-  const recurringRaw = g.recurrence_id ? RECURRING_MARKER : "";
 
-  // Layout: "M DDDDDDDDDD  <desc><merchant>  <amount><recurring>"
-  // Fixed widths sum to: marker(1) + space + date(10) + 2 + 2 + amount + (recurring ? 2 + len : 0)
-  const fixedWidth =
-    1 + 1 + DATE_WIDTH + 2 + 2 + amountRaw.length + (recurringRaw ? 2 + RECURRING_MARKER.length : 0);
+  // Layout: "M DDDDDDDDDD  <desc><merchant>  <amount>"
+  // Fixed widths sum to: marker(1) + space + date(10) + 2 + 2 + amount
+  const fixedWidth = 1 + 1 + DATE_WIDTH + 2 + 2 + amountRaw.length;
   const available = Math.max(MIN_DESC_WIDTH, cols - fixedWidth - 2);
 
   const merchantRaw = g.merchant ? `  · ${g.merchant}` : "";
@@ -67,9 +64,8 @@ function renderTransactionRow(g: TransactionGroup, isCursor: boolean, isExpanded
   const desc = isCursor ? chalk.cyan.bold(description) : description;
   const merchant = merchantText ? chalk.green(merchantText) : "";
   const amount = isCursor ? chalk.cyan(amountRaw) : amountRaw;
-  const recurring = recurringRaw ? chalk.dim(`  ${recurringRaw}`) : "";
 
-  return `${marker} ${date}  ${desc}${merchant}  ${amount}${recurring}`;
+  return `${marker} ${date}  ${desc}${merchant}  ${amount}`;
 }
 
 const PostingsView = memo(function PostingsView({ group }: { group: TransactionGroup }) {

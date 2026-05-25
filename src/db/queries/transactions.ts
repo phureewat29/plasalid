@@ -39,7 +39,6 @@ export interface PostingRow {
   transaction_date?: string;
   transaction_description?: string;
   merchant_name?: string | null;
-  transaction_recurrence_id?: string | null;
 }
 
 /**
@@ -591,7 +590,6 @@ export function listPostings(db: Database.Database, opts: ListPostingsOptions = 
     `SELECT p.id, p.transaction_id, p.account_id, p.debit, p.credit, p.currency, p.memo,
             a.name AS account_name, a.type AS account_type,
             t.date AS transaction_date, t.description AS transaction_description,
-            t.recurrence_id AS transaction_recurrence_id,
             m.canonical_name AS merchant_name
      FROM postings p
      JOIN transactions t ON t.id = p.transaction_id
@@ -608,15 +606,14 @@ export interface TransactionGroup {
   date: string;
   description: string;
   merchant: string | null;
-  recurrence_id: string | null;
   postings: PostingRow[];
 }
 
 /**
  * Fold `listPostings` output into per-transaction groups, surfacing the header
- * fields (date, description, merchant, recurrence) shared by every posting
- * under that transaction. Assumes rows are already in transaction-id order —
- * `listPostings` produces that ordering naturally via its `ORDER BY t.date DESC, t.id DESC`.
+ * fields (date, description, merchant) shared by every posting under that
+ * transaction. Assumes rows are already in transaction-id order — `listPostings`
+ * produces that ordering naturally via its `ORDER BY t.date DESC, t.id DESC`.
  */
 export function groupByTransaction(postings: PostingRow[]): TransactionGroup[] {
   const groups: TransactionGroup[] = [];
@@ -628,7 +625,6 @@ export function groupByTransaction(postings: PostingRow[]): TransactionGroup[] {
         date: p.transaction_date ?? "",
         description: p.transaction_description ?? "",
         merchant: p.merchant_name ?? null,
-        recurrence_id: p.transaction_recurrence_id ?? null,
         postings: [],
       };
       groups.push(current);

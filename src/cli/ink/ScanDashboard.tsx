@@ -175,6 +175,7 @@ function Footnote() {
         <Text color="cyan">chat</Text>
         <Text dimColor> to correct the data later.</Text>
       </Text>
+      <Text></Text>
     </Box>
   );
 }

@@ -1,8 +1,3 @@
-/**
- * Single-typed event sink scan-worker tools emit into as they write to the DB.
- * Replaces the bus + buffer for in-flight progress: one consumer at a time
- * (dashboard or plain-hooks counters) reads ticks per chunk.
- */
 export interface ScanProgressEvent {
   readonly chunkId: string;
   readonly kind: "tx" | "question";

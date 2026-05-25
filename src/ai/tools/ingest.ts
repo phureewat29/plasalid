@@ -10,7 +10,7 @@ import {
 import { runExclusive as runAccountExclusive } from "./account-mutex.js";
 import { ACCOUNT_TYPE_DESCRIPTIONS } from "../../accounts/taxonomy.js";
 import { recordQuestion } from "../../db/queries/questions.js";
-import { commitTransaction } from "../../scanner/committer.js";
+import { commitTransaction } from "../../scanner/commit.js";
 import type {
   AgentExecutionContext,
   ToolDefinition,

@@ -1,22 +1,4 @@
-/**
- * Run an array of async task factories with a fixed concurrency bound. Resolves
- * to a `Settled<T>[]` in the same order as the input tasks. One task throwing
- * never aborts the rest — its slot settles as `{ ok: false, error }` and the
- * caller decides what to do.
- *
- * Pass `signal` to make the pool cancellation-aware: when it aborts, no new
- * task is claimed (tasks already running aren't interrupted — their own
- * signal-aware work is expected to react). Unclaimed slots stay `undefined`
- * in the returned array; the caller can spot them by checking length vs the
- * filled entries.
- *
- * No new dependency. Simple worker-pool: kicks off up to `n` tasks, then each
- * worker pulls the next index from a shared cursor until the queue is drained
- * or the signal aborts.
- */
-export type Settled<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: unknown };
+export type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,

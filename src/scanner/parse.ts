@@ -14,12 +14,6 @@ const HARD_CAP = 8;
 const clamp = (n: number | undefined, fallback: number): number =>
   Math.min(HARD_CAP, Math.max(1, n ?? fallback));
 
-/**
- * Phase 3 — two-tier fan-out: up to `maxFile` files in parallel, each file
- * processing up to `maxChunk` chunks in parallel. Chunk-worker tools write
- * transactions and questions directly to the DB (scoped to `scanId`) and tick
- * the shared progress sink.
- */
 export async function parsePhase(
   db: Database.Database,
   state: ScanState,
@@ -70,15 +64,7 @@ export async function parsePhase(
       });
   }
 
-  /**
-   * Flip each file's `scanned_files` row to its terminal status. Three cases:
-   *   - settled.ok        → 'scanned'  + stamp provider/model (provenance for re-scans).
-   *   - settled, !ok      → 'failed'   so the user sees it in `plasalid status`.
-   *   - unsettled, aborted → leave 'pending' so a future scan can resume.
-   *   - unsettled, !aborted → 'failed' (defensive — shouldn't happen, but better
-   *     a visible failed row than a silent pending one).
-   * Partial transactions already committed during the run stay (scanner is DB-direct).
-   */
+  // Scanner is DB-direct: partial transactions stay committed on abort/failure.
   const aborted = state.signal?.aborted ?? false;
   const provider = getProvider().name;
   const model = getActiveModel();

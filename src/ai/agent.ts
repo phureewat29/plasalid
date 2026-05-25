@@ -9,7 +9,11 @@ import {
   type ClarifyPromptOptions,
   type RecordPromptOptions,
 } from "./system-prompt.js";
-import { getToolDefinitions, executeTool, type AgentExecutionContext } from "./tools/index.js";
+import {
+  getToolDefinitions,
+  executeTool,
+  type AgentExecutionContext,
+} from "./tools/index.js";
 import { getConversationHistory, saveMessage } from "./memory.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import { redact, unredact } from "./redactor.js";
@@ -88,7 +92,9 @@ async function runAgent({
     system: systemPrompt,
     tools,
     messages,
-    thinking: useThinking ? { type: "enabled", budget_tokens: config.thinkingBudget } : undefined,
+    thinking: useThinking
+      ? { type: "enabled", budget_tokens: config.thinkingBudget }
+      : undefined,
     signal,
   });
 
@@ -100,7 +106,12 @@ async function runAgent({
     for (const block of response.content) {
       if (block.type === "tool_use") {
         toolCount++;
-        onProgress?.({ phase: "tool", toolName: block.name, toolCount, elapsedMs: Date.now() - startTime });
+        onProgress?.({
+          phase: "tool",
+          toolName: block.name,
+          toolCount,
+          elapsedMs: Date.now() - startTime,
+        });
         const result = await executeTool(db, block.name, block.input, agentCtx);
         toolResults.push({
           type: "tool_result",
@@ -112,7 +123,11 @@ async function runAgent({
     }
 
     messages.push({ role: "user", content: toolResults });
-    onProgress?.({ phase: "responding", toolCount, elapsedMs: Date.now() - startTime });
+    onProgress?.({
+      phase: "responding",
+      toolCount,
+      elapsedMs: Date.now() - startTime,
+    });
 
     throwIfAborted();
     response = await provider.sendMessage({
@@ -121,7 +136,9 @@ async function runAgent({
       system: systemPrompt,
       tools,
       messages,
-      thinking: useThinking ? { type: "enabled", budget_tokens: config.thinkingBudget } : undefined,
+      thinking: useThinking
+        ? { type: "enabled", budget_tokens: config.thinkingBudget }
+        : undefined,
       signal,
     });
   }
@@ -134,14 +151,15 @@ async function runAgent({
   }
 
   const textBlocks = response.content.filter(
-    (b): b is Extract<NormalizedContentBlock, { type: "text" }> => b.type === "text",
+    (b): b is Extract<NormalizedContentBlock, { type: "text" }> =>
+      b.type === "text",
   );
-  const text = unredact(textBlocks.map(b => b.text).join("\n"));
+  const text = unredact(textBlocks.map((b) => b.text).join("\n"));
   return { text, messages, truncated };
 }
 
 const SCAN_MAX_TOOL_STEPS = 100;
-const RESOLVE_MAX_TOOL_STEPS = 40;
+const RESOLVE_MAX_TOOL_STEPS = 60;
 // Statement pages routinely produce a single batched record_transactions call
 // holding 100+ rows; 4096 tokens cuts those off mid-array. 8192 is the
 // smallest cap that fits a dense page without forcing the agent to chunk.
@@ -170,11 +188,14 @@ export async function handleChatMessage(
   }
 
   const systemPrompt = redact(buildChatSystemPrompt(db));
-  const messages: NormalizedMessage[] = history.map(h => ({
+  const messages: NormalizedMessage[] = history.map((h) => ({
     role: h.role as "user" | "assistant",
     content: redact(h.content),
   }));
-  if (messages.length === 0 || messages[messages.length - 1].content !== redact(userMessage)) {
+  if (
+    messages.length === 0 ||
+    messages[messages.length - 1].content !== redact(userMessage)
+  ) {
     messages.push({ role: "user", content: redact(userMessage) });
   }
 
@@ -199,7 +220,10 @@ export async function handleChatMessage(
       return "Rate limited. Wait a moment and try again.";
     }
     if (error instanceof ApiError) {
-      console.error("AI error:", `API error (${error.status ?? "?"}): ${error.message}`);
+      console.error(
+        "AI error:",
+        `API error (${error.status ?? "?"}): ${error.message}`,
+      );
       return "Sorry, I had trouble processing that. Could you try again?";
     }
     console.error("AI error:", (error as Error).message || "internal error");
@@ -246,7 +270,10 @@ export async function runScanAgent(opts: {
           : `Scan stopped at the tool-step cap (${SCAN_MAX_TOOL_STEPS}) before the agent finished parsing this chunk. Some transactions may be missing. Split the PDF further or raise the cap.`,
     });
     if (opts.agentCtx.progress && opts.agentCtx.chunkId) {
-      opts.agentCtx.progress.emit({ chunkId: opts.agentCtx.chunkId, kind: "question" });
+      opts.agentCtx.progress.emit({
+        chunkId: opts.agentCtx.chunkId,
+        kind: "question",
+      });
     }
   }
   return text;

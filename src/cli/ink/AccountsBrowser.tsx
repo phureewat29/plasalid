@@ -118,6 +118,8 @@ function renderAccountRow(
     ? chalk.cyan(balanceRaw)
     : a.balance < 0
     ? chalk.red(balanceRaw)
+    : a.balance > 0
+    ? chalk.green(balanceRaw)
     : balanceRaw;
   const meta = metaRaw ? `  ${chalk.dim(metaRaw)}` : "";
 

@@ -14,6 +14,9 @@ export interface Quote {
 }
 
 export const QUOTES: Quote[] = [
+  // Easter egg
+  { text: "Por Laew, Por Laew, Ruay Mai Wai Laew.", author: "K.Anutin" },
+  
   // Warren Buffett — Berkshire Hathaway letters & public interviews
   { text: "Rule No. 1: Never lose money. Rule No. 2: Never forget rule No. 1.", author: "Warren Buffett" },
   { text: "Price is what you pay. Value is what you get.", author: "Warren Buffett" },

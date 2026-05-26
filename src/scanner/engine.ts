@@ -9,7 +9,7 @@ import { decryptPhase } from "./decrypt.js";
 import { parsePhase } from "./parse.js";
 import { chunkPdf } from "./pdf.js";
 import { runClarify } from "./clarify.js";
-import { errorMessage } from "./result.js";
+import { errorMessage } from "../lib/result.js";
 import { AbortedError } from "../ai/errors.js";
 
 const NEVER_ABORTS = new AbortController().signal;

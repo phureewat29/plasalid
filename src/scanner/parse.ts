@@ -1,7 +1,6 @@
 import type Database from "libsql";
 import { runWithConcurrency } from "./concurrency.js";
 import { runScanWorker } from "./worker.js";
-import { errorMessage } from "./result.js";
 import { getActiveModel } from "../config.js";
 import { getProvider } from "../ai/providers/index.js";
 import type { ScanState } from "./engine.js";
@@ -60,7 +59,7 @@ export async function parsePhase(
       state.errors.push({
         phase: "parse",
         target: fileGroups[i].fileId,
-        error: errorMessage(r.error),
+        error: r.error,
       });
   }
 
@@ -81,7 +80,7 @@ export async function parsePhase(
     if (r?.ok) {
       stampScanned.run(provider, model, sfId);
     } else if (r && !r.ok) {
-      stampFailed.run(errorMessage(r.error), sfId);
+      stampFailed.run(r.error, sfId);
     } else if (!aborted) {
       stampFailed.run("worker did not produce a settled result", sfId);
     }

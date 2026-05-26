@@ -7,6 +7,7 @@ import { getActiveModel } from "../../config.js";
 import { getProvider } from "../../ai/providers/index.js";
 import { AbortedError } from "../../ai/errors.js";
 import { countQuestions } from "../../db/queries/questions.js";
+import { errorMessage } from "../../lib/result.js";
 import type {
   AttachmentInfo,
   ScanDashboardController,
@@ -28,11 +29,7 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
     try {
       new RegExp(opts.regex, "i");
     } catch (err: unknown) {
-      console.error(
-        chalk.red(
-          `Invalid regex: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
+      console.error(chalk.red(`Invalid regex: ${errorMessage(err)}`));
       process.exitCode = 1;
       return;
     }

@@ -8,6 +8,7 @@ import { statusSpinner } from "../cli/ux.js";
 import { encryptSecret, decryptSecret } from "../db/encryption.js";
 import type { DocumentBlock, ImageBlock, Provider } from "../ai/provider.js";
 import type { Chunk, DecryptedFile } from "./engine.js";
+import { errorMessage } from "../lib/result.js";
 
 type Mupdf = typeof import("mupdf");
 let mupdfPromise: Promise<Mupdf> | null = null;
@@ -280,9 +281,7 @@ const PERSIST: OutcomeHandler = {
       savePassword(db, pattern, o.password, config.dbEncryptionKey);
       spinner.succeed(`Saved password for pattern ${pattern} in secure vault.`);
     } catch (err: unknown) {
-      spinner.fail(
-        `Could not save password: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      spinner.fail(`Could not save password: ${errorMessage(err)}`);
       throw err;
     }
   },

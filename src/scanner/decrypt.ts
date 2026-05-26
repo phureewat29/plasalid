@@ -4,7 +4,7 @@ import { resolve, basename, relative, sep } from "path";
 import type Database from "libsql";
 import { getDataDir } from "../config.js";
 import { readPdf, unlockIfNeeded, persistUnlockOutcome, type LoadedFile } from "./pdf.js";
-import { tryExecute } from "./result.js";
+import { tryExecute } from "../lib/result.js";
 import type { DecryptedFile, ScanState } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
 
@@ -18,29 +18,30 @@ export interface ScannedFile {
 const SUPPORTED_EXTS = new Set([".pdf"]);
 
 function walk(dir: string, root: string, out: ScannedFile[]): void {
-  let entries;
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
+  const entries = tryExecute(() => readdirSync(dir));
+  if (!entries.ok) return;
+
+  for (const entry of entries.value) {
     if (entry.startsWith(".")) continue;
     const full = resolve(dir, entry);
-    let s;
-    try {
-      s = statSync(full);
-    } catch {
+
+    const stat = tryExecute(() => statSync(full));
+    if (!stat.ok) continue;
+
+    if (stat.value.isDirectory()) {
+      walk(full, root, out);
       continue;
     }
-    if (s.isDirectory()) {
-      walk(full, root, out);
-    } else if (s.isFile()) {
-      const ext = entry.slice(entry.lastIndexOf(".")).toLowerCase();
-      if (!SUPPORTED_EXTS.has(ext)) continue;
-      const rel = relative(root, full).split(sep).join("/");
-      out.push({ path: full, name: basename(full), relPath: rel });
-    }
+    if (!stat.value.isFile()) continue;
+
+    const ext = entry.slice(entry.lastIndexOf(".")).toLowerCase();
+    if (!SUPPORTED_EXTS.has(ext)) continue;
+
+    out.push({
+      path: full,
+      name: basename(full),
+      relPath: relative(root, full).split(sep).join("/"),
+    });
   }
 }
 

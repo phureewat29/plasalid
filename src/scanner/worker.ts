@@ -4,7 +4,7 @@ import { runScanAgent } from "../ai/agent.js";
 import { getProvider } from "../ai/providers/index.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import { buildScanAttachment } from "./pdf.js";
-import { tryExecute } from "./result.js";
+import { tryExecute } from "../lib/result.js";
 import type { Chunk } from "./engine.js";
 import type { ScanHooks } from "./hooks.js";
 import type { ScanProgress } from "./progress.js";

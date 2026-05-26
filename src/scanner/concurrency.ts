@@ -1,11 +1,11 @@
-export type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+import { tryExecute, type Result } from "../lib/result.js";
 
 export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   n: number,
   signal?: AbortSignal,
-): Promise<Settled<T>[]> {
-  const results: Settled<T>[] = new Array(tasks.length);
+): Promise<Result<T>[]> {
+  const results: Result<T>[] = new Array(tasks.length);
   const workerCount = Math.max(1, Math.min(n, tasks.length));
   let cursor = 0;
 
@@ -13,11 +13,7 @@ export async function runWithConcurrency<T>(
     while (cursor < tasks.length) {
       if (signal?.aborted) return;
       const index = cursor++;
-      try {
-        results[index] = { ok: true, value: await tasks[index]() };
-      } catch (err) {
-        results[index] = { ok: false, error: err };
-      }
+      results[index] = await tryExecute(() => tasks[index]());
     }
   }
 

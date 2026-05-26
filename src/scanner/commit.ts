@@ -15,6 +15,7 @@ import {
   type AccountType,
 } from "../db/queries/account-balance.js";
 import { recordQuestion } from "../db/queries/questions.js";
+import { tryExecute } from "../lib/result.js";
 
 const NON_WORD = /[^\p{L}\p{N}]+/gu;
 
@@ -214,11 +215,10 @@ export function commitTransaction(
 }
 
 function stageValidate(input: TransactionInput): ValidationResult {
-  try {
-    return { ok: true, validated: validateTransaction(input) };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message ?? String(err) };
-  }
+  const result = tryExecute(() => validateTransaction(input));
+  return result.ok
+    ? { ok: true, validated: result.value }
+    : { ok: false, reason: result.error };
 }
 
 function stageResolveMerchant(

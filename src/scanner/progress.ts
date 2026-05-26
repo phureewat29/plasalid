@@ -1,3 +1,5 @@
+import { errorMessage } from "../lib/result.js";
+
 export interface ScanProgressEvent {
   readonly chunkId: string;
   readonly kind: "tx" | "question";
@@ -16,7 +18,7 @@ export function createProgress(): ScanProgress {
         try {
           fn(event);
         } catch (err) {
-          console.error(`[progress listener] ${err instanceof Error ? err.message : String(err)}`);
+          console.error(`[progress listener] ${errorMessage(err)}`);
         }
       }
     },

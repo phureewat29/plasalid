@@ -57,19 +57,11 @@ export async function runClarify(
   }
 
   if (interactive) {
-    await tryRefreshHints(db);
+    await refreshHints(db).catch(() => {});
   }
 
   const remaining = countRemaining(db, opts.scanId);
   return { total, clarified: total - remaining, remaining, tally };
-}
-
-async function tryRefreshHints(db: Database.Database): Promise<void> {
-  try {
-    await refreshHints(db);
-  } catch (err) {
-    console.error(`[hints] ${err instanceof Error ? err.message : String(err)}`);
-  }
 }
 
 function autoMergeStrictDuplicates(db: Database.Database): number {

@@ -19,7 +19,7 @@
 
 <br />
 
-In US and Europe, the most of financial apps are likely powered by aggregators engine like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
+In US and Europe, most financial apps are powered by aggregators like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
@@ -29,7 +29,7 @@ You drop your raw financial documents (bank statements, credit card bills, paysl
 
 To show you the power of this harness out of the box, Plasalid includes a built-in AI agent. Because your ledger is fully structured, you can actually talk to your money. Ask a question like "Which subscriptions are still active?" or "What did I spend on food last month?". You get exact numbers pulled directly from your records, not estimates or AI hallucinations.
 
-We also built strict boundaries around your privacy. The database is encrypted locally. Plasalid automatically strips out all PII before sending data to an external API. This mean if you swap in a local AI model, your setup runs can stay 100% private and offline.
+We also built strict boundaries around your privacy. The database is encrypted locally. Plasalid automatically strips out all PII before sending data to an external API. This means that if you swap in a local AI model, your setup can stay 100% private and offline.
 
 <p align="center">
   <img src=".github/plasalid-demo.png" alt="demo" width="100%" />
@@ -71,16 +71,19 @@ plasalid setup
 
 Then:
 
-1. Run `plasalid open` to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
+1. Run `plasalid data` (alias: `plasalid open`) to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
 2. Run `plasalid scan` — parses your PDFs end-to-end into ledgers.
-3. Run `plasalid clarify` to connect related transactions, learn your recurring rhythms, and clear up anything the scanner flagged as a question.
-4. Run `plasalid` to chat with build in AI agent connecting to harness.
+3. Run `plasalid clarify` to clear up anything the scanner flagged as a question. Your answers become memory rules that future scans reuse automatically.
+4. Run `plasalid` to chat with the built-in AI agent over your ledger.
 
 Other day-to-day commands:
 
 - `plasalid scan <regex>` — only scan files whose path matches the regex.
 - `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, link recurrences, etc). 
+- `plasalid scan --parallel <n>` — scan up to N files concurrently (default 3, max 8).
+- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, etc).
+- `plasalid files` — browse scanned files; press `d` to drop one and its records.
+- `plasalid rules` — browse learned memory rules; press `d` to delete a rule.
 
 ## Commands
 
@@ -90,12 +93,14 @@ Run `plasalid --help` to see all available commands.
 plasalid                            # Interactive chat with your data
 plasalid setup                      # Configure API key, encryption, and data directory
 plasalid data                       # Open the Plasalid data folder in your file explorer
-plasalid accounts                   # Show the chart of accounts with balances
+plasalid accounts                   # Show the accounts with balances
 plasalid transactions               # List transactions and their postings (filter by --account, --from, --to, --query, --limit)
 plasalid status                     # Net worth and this-month income/expense totals
 plasalid record [utterance]         # Add a manual transaction, account, balance, or merchant from a plain-language line
 plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
 plasalid clarify                    # Walk every open question and apply your decision
+plasalid files                      # Browse scanned files;
+plasalid rules                      # Browse learned memory rules;
 ```
 
 ## How It Works
@@ -143,9 +148,11 @@ Plasalid stores everything in `~/.plasalid/`:
   data/                # Drop any PDFs here (subfolders allowed; AI classifies)
 ```
 
-`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with categories, transactions and postings), scan history, open questions awaiting clarify, recurring transactions (Spotify, salary, rent — recognized during clarify transaction), persisted long-term memories, and AES-GCM-encrypted passwords. Everything is wrapped in libsql's AES-256 page encryption.
+`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with categories, transactions and postings), scan history, open questions awaiting clarify, persisted long-term memory rules learned across scans, and AES-GCM-encrypted passwords. Everything is wrapped in libsql's AES-256 page encryption.
 
 ### Environment Variables
+
+Only the provider you select needs its block configured — leave the rest unset.
 
 ```bash
 # Provider selection

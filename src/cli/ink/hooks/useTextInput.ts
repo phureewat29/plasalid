@@ -206,6 +206,8 @@ export interface UseTextInputOpts {
   onChange?: (buf: TextBuffer) => void;
   /** Return true to signal the key was handled and default behavior should be skipped. */
   onKey?: (key: { code: number; raw: string }) => boolean | void;
+  /** When set and Tab is pressed on an empty buffer, insert this text. */
+  placeholder?: string;
 }
 
 /**
@@ -367,7 +369,18 @@ export function useTextInput(opts: UseTextInputOpts) {
           continue;
         }
 
-        // Printable (and tab)
+        // Tab on an empty buffer + a placeholder → autocomplete with the placeholder.
+        if (code === 9) {
+          const empty =
+            bufferRef.current.lines.length === 1 && bufferRef.current.lines[0] === "";
+          const ph = optsRef.current.placeholder;
+          if (empty && ph) {
+            apply(b => insertText(b, ph));
+            continue;
+          }
+        }
+
+        // Printable (and tab fallthrough)
         if (code >= 32 || code === 9) {
           apply(b => insertText(b, raw));
           continue;

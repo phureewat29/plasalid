@@ -22,7 +22,7 @@ export async function startChat(): Promise<void> {
   }
 
   console.log(
-    chalk.dim("Ready when you are. Ask Plasalid anything about your money."),
+    centerLine("Ready when you are. Ask Plasalid anything about your money."),
   );
   console.log("");
 
@@ -30,36 +30,32 @@ export async function startChat(): Promise<void> {
   await runChatApp({ db });
 }
 
-const MAX_COL_WIDTH = 80;
-const MAX_WRAP_WIDTH = 56;
-const MIN_WRAP_WIDTH = 24;
-const MAX_LEFT_PAD = 4;
+const MIN_WRAP = 32;
+const MAX_WRAP = 100;
+const WRAP_RATIO = 0.7;
 
 function renderQuote(q: Quote): void {
-  const cols = Math.min(process.stdout.columns || MAX_COL_WIDTH, MAX_COL_WIDTH);
-  const wrapWidth = Math.min(MAX_WRAP_WIDTH, Math.max(MIN_WRAP_WIDTH, cols - 8));
-
-  const lines = wrapText(q.text, wrapWidth);
-  const decorated = lines.map((line, i) => decorateQuote(line, i, lines.length));
-  const blockWidth = Math.max(...decorated.map((l) => l.length));
-  const centeredPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
-  const leftPad = Math.min(MAX_LEFT_PAD, centeredPad);
-
-  for (const line of decorated) {
-    console.log(chalk.dim(" ".repeat(leftPad) + line));
-  }
-  console.log("");
-
+  const cols = process.stdout.columns || 80;
+  const wrapWidth = Math.min(MAX_WRAP, Math.max(MIN_WRAP, Math.floor(cols * WRAP_RATIO)));
+  const lines = wrapText(q.text, wrapWidth).map(wrapInQuotes);
+  const blockWidth = Math.max(...lines.map((l) => l.length));
+  const leftPad = " ".repeat(Math.max(0, Math.floor((cols - blockWidth) / 2)));
   const author = `— ${q.author}`;
-  const authorPad = Math.max(leftPad, leftPad + blockWidth - author.length);
-  console.log(chalk.dim(" ".repeat(authorPad) + author));
-  console.log("");
+  const authorPad = " ".repeat(Math.max(0, leftPad.length + blockWidth - author.length));
+
+  const out = [...lines.map((l) => leftPad + l), "", authorPad + author, ""];
+  for (const line of out) console.log(chalk.dim(line));
 }
 
-function decorateQuote(line: string, index: number, total: number): string {
-  const open = index === 0 ? "“" : " ";
-  const close = index === total - 1 ? "”" : "";
+function wrapInQuotes(line: string, i: number, all: string[]): string {
+  const open = i === 0 ? "“" : " ";
+  const close = i === all.length - 1 ? "”" : "";
   return `${open}${line}${close}`;
+}
+
+function centerLine(text: string): string {
+  const cols = process.stdout.columns || 80;
+  return " ".repeat(Math.max(0, Math.floor((cols - text.length) / 2))) + text;
 }
 
 function wrapText(text: string, width: number): string[] {

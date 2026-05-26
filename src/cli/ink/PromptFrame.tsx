@@ -8,10 +8,11 @@ interface Props {
   footerText: string;
   showCaret: boolean;
   banner?: string;
+  placeholder?: string;
 }
 
 /** Framed prompt: top rule, input area, bottom rule, footer, optional banner below. */
-export function PromptFrame({ buffer, footerText, showCaret, banner }: Props) {
+export function PromptFrame({ buffer, footerText, showCaret, banner, placeholder }: Props) {
   const { stdout } = useStdout();
   const cols = stdout?.columns || 80;
   const rule = chalk.dim("─".repeat(cols));
@@ -19,7 +20,12 @@ export function PromptFrame({ buffer, footerText, showCaret, banner }: Props) {
   return (
     <Box flexDirection="column">
       <Text>{rule}</Text>
-      <TextInput buffer={buffer} prompt={chalk.dim("❯ ")} showCaret={showCaret} />
+      <TextInput
+        buffer={buffer}
+        prompt={chalk.dim("❯ ")}
+        showCaret={showCaret}
+        placeholder={placeholder}
+      />
       <Text>{rule}</Text>
       <Text>{`  ${footerText}`}</Text>
       {banner ? <Text>{banner}</Text> : null}

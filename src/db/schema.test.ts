@@ -23,6 +23,7 @@ describe("migrate", () => {
       "questions",
       "conversation_history",
       "file_passwords",
+      "hints",
       "memories",
       "merchant_aliases",
       "merchants",

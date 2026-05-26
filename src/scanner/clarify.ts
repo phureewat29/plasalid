@@ -11,6 +11,7 @@ import {
   type DuplicateGroupTransaction,
 } from "../db/queries/transactions.js";
 import { runClarifyAgent } from "../ai/agent.js";
+import { refreshHints } from "../ai/hints.js";
 
 export interface ClarifySummary {
   readonly total: number;
@@ -49,17 +50,26 @@ export async function runClarify(
   const autoMerged = autoMergeStrictDuplicates(db);
   if (autoMerged > 0) tally["dedup_auto_merge"] = autoMerged;
 
+  const interactive = opts.interactive ?? true;
   const total = listQuestions(db, { scanId: opts.scanId, limit: 1000 }).length;
-  if (total === 0) {
-    return { total: 0, clarified: 0, remaining: 0, tally };
+  if (total > 0 && interactive) {
+    await runAgentLoop(opts, tally);
   }
 
-  if (opts.interactive ?? true) {
-    await runAgentLoop(opts, tally);
+  if (interactive) {
+    await tryRefreshHints(db);
   }
 
   const remaining = countRemaining(db, opts.scanId);
   return { total, clarified: total - remaining, remaining, tally };
+}
+
+async function tryRefreshHints(db: Database.Database): Promise<void> {
+  try {
+    await refreshHints(db);
+  } catch (err) {
+    console.error(`[hints] ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 function autoMergeStrictDuplicates(db: Database.Database): number {

@@ -12,6 +12,7 @@ import { useTextInput } from "./hooks/useTextInput.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useCtrlCExit } from "./hooks/useCtrlCExit.js";
 import { useFooterText } from "./hooks/useFooterText.js";
+import { useHint } from "./hooks/useHint.js";
 
 type Turn =
   | { id: string; kind: "user"; text: string }
@@ -32,6 +33,8 @@ export function ChatApp({ db, onboardingPrompt }: Props) {
   const { exit } = useApp();
   const [turns, setTurns] = useState<Turn[]>([]);
   const footerText = useFooterText();
+  const rotatingHint = useHint();
+  const placeholder = turns.length === 0 ? rotatingHint : "";
   const ctrlC = useCtrlCExit();
 
   const pushTurn = useCallback((t: Turn) => {
@@ -82,6 +85,7 @@ export function ChatApp({ db, onboardingPrompt }: Props) {
     onChange: () => {
       if (ctrlC.pending) ctrlC.clear();
     },
+    placeholder,
   });
 
   // Auto-onboarding: fire exactly once on mount
@@ -109,6 +113,7 @@ export function ChatApp({ db, onboardingPrompt }: Props) {
           footerText={footerText}
           showCaret={!isBusy}
           banner={exitHint}
+          placeholder={placeholder}
         />
       ) : null}
     </Box>

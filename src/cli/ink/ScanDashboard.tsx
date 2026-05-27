@@ -10,7 +10,7 @@ import { keyOf } from "./keys.js";
  * Events the CLI publishes into the dashboard. The CLI subscribes to the
  * scanner's ScanProgress sink and routes per-chunk ticks here via chunkLookup.
  */
-export type CurrentPhase = "parse" | "clarify" | "cancelling" | "done";
+export type CurrentStage = "parse" | "clarify" | "cancelling" | "done";
 
 export type DashboardEvent =
   | {
@@ -23,7 +23,7 @@ export type DashboardEvent =
   | { type: "chunk-tx"; fileId: string; pageNumber: number }
   | { type: "chunk-question"; fileId: string; pageNumber: number }
   | { type: "chunk-end"; fileId: string; pageNumber: number; ok: boolean }
-  | { type: "phase-set"; phase: CurrentPhase };
+  | { type: "stage-set"; stage: CurrentStage };
 
 export interface ScanDashboardController {
   publish(event: DashboardEvent): void;
@@ -92,6 +92,7 @@ interface Props {
   controller: ScanDashboardController;
   files: ReadonlyArray<FileSeed>;
   attachment: AttachmentInfo;
+  onCancel: () => void;
 }
 
 interface FileItem {
@@ -101,7 +102,7 @@ interface FileItem {
 
 export function ScanDashboard(props: Props) {
   const rows = useFileGroups(props.controller, props.files);
-  const phase = usePhase(props.controller);
+  const stage = useStage(props.controller);
   const spinnerFrame = useSpinnerFrame();
 
   const items = useMemo<FileItem[]>(
@@ -113,7 +114,7 @@ export function ScanDashboard(props: Props) {
     () => ({
       headerNode: (
         <Box flexDirection="column">
-          <Header phase={phase} />
+          <Header stage={stage} />
           <AttachmentLine info={props.attachment} />
           <ColumnHeader />
         </Box>
@@ -126,21 +127,25 @@ export function ScanDashboard(props: Props) {
           ctx.isCursor,
           ctx.isExpanded,
           spinnerFrame,
-          phase,
+          stage,
         ),
       renderExpanded: (i) => (
         <ChunkList chunks={i.group.chunks} frame={spinnerFrame} />
       ),
       getExpandedHeight: (i) => i.group.chunks.size,
       matches: (i, needle) => i.group.fileName.toLowerCase().includes(needle),
-      summary: phase !== "done" ? <Footnote /> : null,
+      summary: stage !== "done" ? <Footnote /> : null,
       onKey: (input, key) => {
         const k = keyOf(input, key);
-        return k === "q" || k === "escape";
+        if (k !== "q" && k !== "escape") return false;
+        // Consume the key (return true) so ListBrowser's default `exit` never
+        // runs — that would only unmount the UI while the scan kept going.
+        props.onCancel();
+        return true;
       },
       emptyMessage: "No files in the scan queue.",
     }),
-    [phase, items, props.attachment, spinnerFrame],
+    [stage, items, props.attachment, props.onCancel, spinnerFrame],
   );
 
   return <ListBrowser adapter={adapter} />;
@@ -189,21 +194,21 @@ function AttachmentLine({ info }: { info: AttachmentInfo }) {
   );
 }
 
-function usePhase(controller: ScanDashboardController): CurrentPhase {
-  const [phase, setPhase] = useState<CurrentPhase>("parse");
+function useStage(controller: ScanDashboardController): CurrentStage {
+  const [stage, setStage] = useState<CurrentStage>("parse");
   useEffect(
     () =>
       controller.subscribe((event) => {
-        if (event.type === "phase-set") setPhase(event.phase);
+        if (event.type === "stage-set") setStage(event.stage);
       }),
     [controller],
   );
-  return phase;
+  return stage;
 }
 
-type PhaseState = "pending" | "running" | "done";
+type StageState = "pending" | "running" | "done";
 
-const PHASE_RENDER: Record<PhaseState, (label: string) => JSX.Element> = {
+const STAGE_RENDER: Record<StageState, (label: string) => JSX.Element> = {
   pending: (label) => <Text dimColor>{label}</Text>,
   running: (label) => (
     <Text color="yellow">
@@ -213,21 +218,21 @@ const PHASE_RENDER: Record<PhaseState, (label: string) => JSX.Element> = {
   done: (label) => <Text color="green">✓ {label}</Text>,
 };
 
-const PHASE_ORDER: readonly CurrentPhase[] = ["parse", "clarify", "done"];
+const STAGE_ORDER: readonly CurrentStage[] = ["parse", "clarify", "done"];
 
-function phaseStateOf(
+function stageStateOf(
   label: "parse" | "clarify",
-  current: CurrentPhase,
-): PhaseState {
-  const li = PHASE_ORDER.indexOf(label);
-  const ci = PHASE_ORDER.indexOf(current);
+  current: CurrentStage,
+): StageState {
+  const li = STAGE_ORDER.indexOf(label);
+  const ci = STAGE_ORDER.indexOf(current);
   if (ci > li) return "done";
   if (ci === li) return "running";
   return "pending";
 }
 
-function Header({ phase }: { phase: CurrentPhase }) {
-  if (phase === "cancelling") {
+function Header({ stage }: { stage: CurrentStage }) {
+  if (stage === "cancelling") {
     return (
       <Text>
         <Text bold>Scanner</Text>
@@ -250,9 +255,9 @@ function Header({ phase }: { phase: CurrentPhase }) {
       <Text dimColor> -&gt; </Text>
       <Text color="green">✓ chunk</Text>
       <Text dimColor> -&gt; </Text>
-      {PHASE_RENDER[phaseStateOf("parse", phase)]("parse")}
+      {STAGE_RENDER[stageStateOf("parse", stage)]("parse")}
       <Text dimColor> -&gt; </Text>
-      {PHASE_RENDER[phaseStateOf("clarify", phase)]("clarify")}
+      {STAGE_RENDER[stageStateOf("clarify", stage)]("clarify")}
     </Text>
   );
 }
@@ -350,12 +355,12 @@ function renderFileRow(
   isCursor: boolean,
   isExpanded: boolean,
   frame: string,
-  phase: CurrentPhase,
+  stage: CurrentStage,
 ): string {
   const chunks = Array.from(group.chunks.values());
   const agg = aggregate(chunks, group.totalChunks);
   const effectiveStatus: AnyStatus =
-    phase === "clarify" ? "clarify" : agg.status;
+    stage === "clarify" ? "clarify" : agg.status;
   const marker = isExpanded ? "▾" : isCursor ? "▸" : " ";
 
   const status = STATUS_COLOR[effectiveStatus](
@@ -448,7 +453,7 @@ function seedRows(files: ReadonlyArray<FileSeed>): Map<string, FileGroupState> {
   return seed;
 }
 
-type RowEventKey = Exclude<DashboardEvent["type"], "phase-set">;
+type RowEventKey = Exclude<DashboardEvent["type"], "stage-set">;
 type EventOf<K extends RowEventKey> = Extract<DashboardEvent, { type: K }>;
 type EventReducer<K extends RowEventKey> = (
   event: EventOf<K>,
@@ -482,11 +487,11 @@ function applyDashboardEvent(
   rows: Map<string, FileGroupState>,
   event: DashboardEvent,
 ): boolean {
-  if (event.type === "phase-set") return false;
+  if (event.type === "stage-set") return false;
   const chunk = rows.get(event.fileId)?.chunks.get(event.pageNumber);
   if (!chunk) return false;
   const reducer = REDUCERS[event.type] as EventReducer<
-    Exclude<DashboardEvent["type"], "phase-set">
+    Exclude<DashboardEvent["type"], "stage-set">
   >;
   return reducer(event, chunk);
 }

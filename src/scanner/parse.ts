@@ -13,7 +13,7 @@ const HARD_CAP = 8;
 const clamp = (n: number | undefined, fallback: number): number =>
   Math.min(HARD_CAP, Math.max(1, n ?? fallback));
 
-export async function parsePhase(
+export async function parse(
   db: Database.Database,
   state: ScanState,
   hooks: ScanHooks,
@@ -57,7 +57,7 @@ export async function parsePhase(
     const r = settled[i];
     if (r && !r.ok)
       state.errors.push({
-        phase: "parse",
+        stage: "parse",
         target: fileGroups[i].fileId,
         error: r.error,
       });

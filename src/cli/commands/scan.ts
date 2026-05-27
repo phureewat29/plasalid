@@ -39,20 +39,20 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
   const isTTY = !!process.stdout.isTTY;
 
   const controller = new AbortController();
-  let sigintCount = 0;
-  const onSigint = () => {
-    sigintCount++;
-    if (sigintCount === 1) {
+  let cancelCount = 0;
+  const requestCancel = () => {
+    cancelCount++;
+    if (cancelCount === 1) {
       controller.abort();
       return;
     }
     restoreTerminal();
     process.exit(130);
   };
-  process.on("SIGINT", onSigint);
+  process.on("SIGINT", requestCancel);
 
   const hooks = isTTY
-    ? await buildTtyHooks(controller.signal)
+    ? await buildTtyHooks(controller.signal, requestCancel)
     : buildPlainHooks(controller.signal);
 
   try {
@@ -82,13 +82,16 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
     }
     throw err;
   } finally {
-    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGINT", requestCancel);
   }
 }
 
 /* TTY mode — Ink dashboard with one in-place row per file. */
 
-async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
+async function buildTtyHooks(
+  signal: AbortSignal,
+  onCancel: () => void,
+): Promise<ScanHooks> {
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { ScanDashboard, createScanDashboardController } =
@@ -106,7 +109,7 @@ async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
    * self-removes without leaking past the scan run.
    */
   const onAbortEvt = () => {
-    controller.publish({ type: "phase-set", phase: "cancelling" });
+    controller.publish({ type: "stage-set", stage: "cancelling" });
   };
   signal.addEventListener("abort", onAbortEvt, { once: true });
 
@@ -153,6 +156,7 @@ async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
           controller,
           files,
           attachment,
+          onCancel,
         }),
         {
           exitOnCtrlC: false,
@@ -196,11 +200,11 @@ async function buildTtyHooks(signal: AbortSignal): Promise<ScanHooks> {
     },
 
     beforeClarify: () => {
-      controller.publish({ type: "phase-set", phase: "clarify" });
+      controller.publish({ type: "stage-set", stage: "clarify" });
     },
 
     afterClarify: () => {
-      controller.publish({ type: "phase-set", phase: "done" });
+      controller.publish({ type: "stage-set", stage: "done" });
       inkInstance?.unmount();
       inkInstance = null;
       process.stdout.write("\x1b[?25h");
@@ -369,11 +373,11 @@ function renderSummary(state: Readonly<ScanState>): void {
   }
 
   if (state.errors.length > 0) {
-    console.log(chalk.yellow(`${state.errors.length} phase error(s):`));
+    console.log(chalk.yellow(`${state.errors.length} stage error(s):`));
     for (const e of state.errors) {
       console.log(
         chalk.dim(
-          `  - [${e.phase}] ${e.target ?? ""} ${(e.error as Error)?.message ?? ""}`,
+          `  - [${e.stage}] ${e.target ?? ""} ${(e.error as Error)?.message ?? ""}`,
         ),
       );
     }
@@ -389,7 +393,7 @@ function renderSummary(state: Readonly<ScanState>): void {
 
 /**
  * Snapshot transaction count attributable to this scan. Reads from
- * scanned_files via the file ids assigned in decryptPhase.
+ * scanned_files via the file ids assigned in the decrypt stage.
  */
 function countTransactions(state: Readonly<ScanState>): number {
   const ids = state.decrypted

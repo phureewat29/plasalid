@@ -1,9 +1,9 @@
-import type { Chunk, ScanState, PhaseName } from "./engine.js";
+import type { Chunk, ScanState, StageName } from "./engine.js";
 import type { ClarifySummary } from "./clarify.js";
 
 export type MaybePromise<T> = T | Promise<T>;
 
-// Every hook is optional; a hook that throws is logged and the phase continues.
+// Every hook is optional; a hook that throws is logged and the stage continues.
 export interface ScanHooks {
   onStart?(s: Readonly<ScanState>): MaybePromise<void>;
   beforeDecrypt?(s: Readonly<ScanState>): MaybePromise<void>;
@@ -21,7 +21,7 @@ export interface ScanHooks {
   ): MaybePromise<void>;
   onError?(
     err: unknown,
-    phase: PhaseName,
+    stage: StageName,
     s: Readonly<ScanState>,
   ): MaybePromise<void>;
   onAbort?(s: Readonly<ScanState>): MaybePromise<void>;

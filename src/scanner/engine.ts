@@ -5,8 +5,8 @@ import type { ScanHooks } from "./hooks.js";
 import type { ScanProgress } from "./progress.js";
 import type { ClarifySummary } from "./clarify.js";
 import { createProgress } from "./progress.js";
-import { decryptPhase } from "./decrypt.js";
-import { parsePhase } from "./parse.js";
+import { decrypt } from "./decrypt.js";
+import { parse } from "./parse.js";
 import { chunkPdf } from "./pdf.js";
 import { runClarify } from "./clarify.js";
 import { errorMessage } from "../lib/result.js";
@@ -46,13 +46,13 @@ export interface FailedFile {
   readonly error: string;
 }
 
-export interface PhaseError {
-  readonly phase: PhaseName;
+export interface StageError {
+  readonly stage: StageName;
   readonly target?: string;
   readonly error: unknown;
 }
 
-export type PhaseName = "decrypt" | "chunk" | "parse" | "clarify";
+export type StageName = "decrypt" | "chunk" | "parse" | "clarify";
 
 export interface RunScanOptions {
   regex?: string;
@@ -60,7 +60,7 @@ export interface RunScanOptions {
   interactive?: boolean;
   maxFileWorkers?: number;
   maxScanWorkersPerFile?: number;
-  phases?: ReadonlyArray<{ name: PhaseName; phase: Phase }>;
+  stages?: ReadonlyArray<{ name: StageName; stage: Stage }>;
 }
 
 export interface ScanState {
@@ -77,10 +77,10 @@ export interface ScanState {
   chunks: Chunk[];
 
   clarifySummary: ClarifySummary | null;
-  errors: PhaseError[];
+  errors: StageError[];
 }
 
-export type Phase = (
+export type Stage = (
   db: Database.Database,
   state: ScanState,
   hooks: ScanHooks,
@@ -91,14 +91,14 @@ export interface ScanResult {
   readonly state: ScanState;
 }
 
-const chunkPhase: Phase = async (_db, state, hooks) => {
+const chunk: Stage = async (_db, state, hooks) => {
   await hooks.beforeChunk?.(state);
   for (const file of state.decrypted)
     state.chunks.push(...(await chunkPdf(file)));
   await hooks.afterChunk?.(state);
 };
 
-const clarifyPhase: Phase = async (db, state, hooks) => {
+const clarify: Stage = async (db, state, hooks) => {
   await hooks.beforeClarify?.(state);
   const summary = await runClarify({
     db,
@@ -110,11 +110,11 @@ const clarifyPhase: Phase = async (db, state, hooks) => {
   await hooks.afterClarify?.(state, summary);
 };
 
-export const DEFAULT_PHASES: readonly { name: PhaseName; phase: Phase }[] = [
-  { name: "decrypt", phase: decryptPhase },
-  { name: "chunk", phase: chunkPhase },
-  { name: "parse", phase: parsePhase },
-  { name: "clarify", phase: clarifyPhase },
+export const DEFAULT_STAGES: readonly { name: StageName; stage: Stage }[] = [
+  { name: "decrypt", stage: decrypt },
+  { name: "chunk", stage: chunk },
+  { name: "parse", stage: parse },
+  { name: "clarify", stage: clarify },
 ];
 
 export async function runScan(
@@ -143,9 +143,9 @@ export async function runScan(
 
   await fire(hooks.onStart, state);
 
-  const phases = opts.phases ?? DEFAULT_PHASES;
+  const stages = opts.stages ?? DEFAULT_STAGES;
   try {
-    await runPhaseChain(db, state, hooks, phases);
+    await runStageChain(db, state, hooks, stages);
     if (state.signal.aborted) throw new AbortedError();
   } catch (err) {
     if (err instanceof AbortedError) await fire(hooks.onAbort, state);
@@ -157,31 +157,32 @@ export async function runScan(
   return { scanId, state };
 }
 
-async function runPhaseChain(
+async function runStageChain(
   db: Database.Database,
   state: ScanState,
   hooks: ScanHooks,
-  phases: ReadonlyArray<{ name: PhaseName; phase: Phase }>,
+  stages: ReadonlyArray<{ name: StageName; stage: Stage }>,
 ): Promise<void> {
-  for (const { name, phase } of phases) {
-    const aborted = await tryPhase(db, state, hooks, name, phase);
+  for (const { name, stage } of stages) {
+    if (state.signal.aborted) throw new AbortedError();
+    const aborted = await tryStage(db, state, hooks, name, stage);
     if (aborted) return;
   }
 }
 
-async function tryPhase(
+async function tryStage(
   db: Database.Database,
   state: ScanState,
   hooks: ScanHooks,
-  name: PhaseName,
-  phase: Phase,
+  name: StageName,
+  stage: Stage,
 ): Promise<boolean> {
   try {
-    await phase(db, state, hooks);
+    await stage(db, state, hooks);
     return false;
   } catch (err) {
     if (err instanceof AbortedError) throw err;
-    state.errors.push({ phase: name, error: err });
+    state.errors.push({ stage: name, error: err });
     await fire(hooks.onError, err, name, state);
     return true;
   }

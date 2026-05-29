@@ -43,7 +43,8 @@ const DEFS: ToolDefinition[] = [
       properties: {
         query: {
           type: "string",
-          description: "Free-text name to match against the chart of accounts.",
+          description:
+            "Free-text name to match against the chart of accounts. May include an account number; a trailing check digit is ignored (e.g. '7652-0' matches an account stored as ••7652).",
         },
         threshold: {
           type: "number",

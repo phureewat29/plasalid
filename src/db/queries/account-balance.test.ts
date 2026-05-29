@@ -6,6 +6,8 @@ import {
   updateAccountMetadata,
   findAccountById,
   findAccountsByFuzzyName,
+  accountNumberKey,
+  normalizeMaskedAccountNumber,
   getAccountSubtree,
   getRollupBalance,
   ensureStructuralAccount,
@@ -48,6 +50,19 @@ describe("createAccount", () => {
     expect(row!.parent_id).toBe("asset");
     expect(row!.bank_name).toBe("KBANK");
     expect(row!.currency).toBe("THB");
+  });
+
+  it("drops a trailing check digit from the stored masked number", () => {
+    createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
+    createAccount(db, {
+      id: "asset:scb-savings-7652",
+      name: "SCB Savings ••7652",
+      type: "asset",
+      parent_id: "asset",
+      account_number_masked: "••7652-0",
+      currency: "THB",
+    });
+    expect(findAccountById(db, "asset:scb-savings-7652")!.account_number_masked).toBe("••7652");
   });
 
   it("auto-bootstraps the top-level root when the parent is one of the five types", () => {
@@ -241,5 +256,39 @@ describe("findAccountsByFuzzyName", () => {
   it("returns nothing for empty query", () => {
     expect(findAccountsByFuzzyName(db, "")).toEqual([]);
     expect(findAccountsByFuzzyName(db, "   ")).toEqual([]);
+  });
+
+  it("matches a number with a trailing check digit against the masked number", () => {
+    createAccount(db, {
+      id: "asset:kbank-7652",
+      name: "KBank Savings ••7652",
+      type: "asset",
+      parent_id: "asset",
+      account_number_masked: "••7652",
+    });
+    const matches = findAccountsByFuzzyName(db, "kbank savings 76520");
+    expect(matches[0].account.id).toBe("asset:kbank-7652");
+    expect(matches[0].similarity).toBeGreaterThanOrEqual(0.9);
+  });
+});
+
+describe("accountNumberKey", () => {
+  it("strips separators and a trailing check digit to the last 4 digits", () => {
+    expect(accountNumberKey("••7652")).toBe("7652");
+    expect(accountNumberKey("••7652-0")).toBe("7652");
+    expect(accountNumberKey("xxx-7652-0")).toBe("7652");
+    expect(accountNumberKey("1234")).toBe("1234");
+    expect(accountNumberKey(null)).toBe("");
+    expect(accountNumberKey("••")).toBe("");
+  });
+});
+
+describe("normalizeMaskedAccountNumber", () => {
+  it("collapses check-digit variants to one masked value", () => {
+    expect(normalizeMaskedAccountNumber("••7652-0")).toBe("••7652");
+    expect(normalizeMaskedAccountNumber("••76520")).toBe("••7652");
+    expect(normalizeMaskedAccountNumber("••7652")).toBe("••7652");
+    expect(normalizeMaskedAccountNumber(null)).toBeNull();
+    expect(normalizeMaskedAccountNumber("••")).toBe("••");
   });
 });

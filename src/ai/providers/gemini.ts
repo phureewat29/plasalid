@@ -23,7 +23,7 @@ import type {
  * API accepts them as `inlineData` with mimeType `application/pdf`.
  *
  * supportsThinking is `false` because Gemini 2.5+ runs thinking server-side
- * automatically — we don't need a client-side budget like Claude's extended
+ * automatically: we don't need a client-side budget like Claude's extended
  * thinking, and the agent's thinkingBudget config still controls whether we
  * raise maxTokens for the thinking path even on providers that ignore it.
  */
@@ -121,7 +121,7 @@ function blocksToParts(blocks: NormalizedContentBlock[]): Part[] {
         },
       };
       // Gemini 2.5+ requires thought_signature to be echoed back on every
-      // assistant turn that carries function calls — otherwise the next API
+      // assistant turn that carries function calls; otherwise the next API
       // call fails with INVALID_ARGUMENT.
       if (block.thoughtSignature) {
         part.thoughtSignature = block.thoughtSignature;
@@ -151,7 +151,7 @@ function convertTools(tools: ToolDefinition[]): Tool[] | undefined {
 /**
  * Gemini IDs tool calls with synthetic strings like `${name}-${index}` when
  * the model doesn't return one. We embed the tool name in the ID so that the
- * follow-up functionResponse part can recover it — Gemini requires a `name`
+ * follow-up functionResponse part can recover it: Gemini requires a `name`
  * field on every functionResponse, and the tool result message we receive
  * from the agent only carries the tool_use_id.
  */
@@ -186,7 +186,7 @@ function normalizeResponse(
   }
 
   const hasToolCalls = content.some((b) => b.type === "tool_use");
-  // Read finishReason even when content.parts is missing — that happens when
+  // Read finishReason even when content.parts is missing; that happens when
   // a thinking model burns the entire output budget on thoughts (parts=[] +
   // finishReason=MAX_TOKENS). Falling through to "end_turn" would hide that.
   const stopReason = mapFinishReason(candidate?.finishReason, hasToolCalls);

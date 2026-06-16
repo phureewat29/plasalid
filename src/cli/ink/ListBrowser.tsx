@@ -9,7 +9,7 @@ const RESERVED_LINES = HEADER_LINES + FOOTER_LINES + SUMMARY_LINES + 1; // +1 br
 
 export interface ListBrowserAdapter<T> {
   /** Title row "{title} · N results · {filterSummary} · cursor/N". Omit to
-   *  hide the title row and its separator rule entirely — useful when the
+   *  hide the title row and its separator rule entirely: useful when the
    *  adapter supplies its own `headerNode` and the auto-title would be
    *  redundant (e.g. ScanDashboard). */
   title?: string;
@@ -26,7 +26,7 @@ export interface ListBrowserAdapter<T> {
   renderExpanded?: (item: T) => ReactNode;
   /** Lines the expanded body will occupy. The shell budgets viewport space
    *  with this so the expanded row + body never push the header off-screen.
-   *  Default 0 — implement when `renderExpanded` is set. */
+   *  Default 0: implement when `renderExpanded` is set. */
   getExpandedHeight?: (item: T) => number;
   /** In-app search predicate. */
   matches: (item: T, needle: string) => boolean;
@@ -46,7 +46,7 @@ export interface ListBrowserAdapter<T> {
 
 /**
  * Alternate-screen list browser shell. The type-specific behavior lives in the
- * `adapter` — this component owns terminal dimensions, the edge-scroll window,
+ * `adapter`; this component owns terminal dimensions, the edge-scroll window,
  * cursor / search / expand state, key dispatch, and the header/footer chrome.
  *
  * Render strategy: a memoized `Row` short-circuits when its props (a single

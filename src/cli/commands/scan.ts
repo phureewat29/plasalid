@@ -19,7 +19,7 @@ export interface ScanCommandOptions {
   parallel?: number;
 }
 
-/** Show the cursor — always safe; mirrors the TTY mount-time hide. */
+/** Show the cursor. Always safe; mirrors the TTY mount-time hide. */
 function restoreTerminal(): void {
   if (process.stdout.isTTY) process.stdout.write("\x1b[?25h");
 }
@@ -86,7 +86,7 @@ export async function runScanCommand(opts: ScanCommandOptions): Promise<void> {
   }
 }
 
-/* TTY mode — Ink dashboard with one in-place row per file. */
+/* TTY mode: Ink dashboard with one in-place row per file. */
 
 async function buildTtyHooks(
   signal: AbortSignal,
@@ -103,7 +103,7 @@ async function buildTtyHooks(
   const chunkLookup = new Map<string, { fileId: string; pageNumber: number }>();
 
   /**
-   * Surface cancellation through Ink's controller, not raw stdout — writing
+   * Surface cancellation through Ink's controller, not raw stdout; writing
    * to stdout while Ink is rendering corrupts its frame tracking and leaves
    * a phantom copy of the header in scrollback. once:true so the listener
    * self-removes without leaking past the scan run.
@@ -225,7 +225,7 @@ async function buildTtyHooks(
   };
 }
 
-/* Non-TTY mode — one collapsed summary line per file when its chunks complete. */
+/* Non-TTY mode: one collapsed summary line per file when its chunks complete. */
 
 interface FileTally {
   fileName: string;
@@ -361,7 +361,7 @@ function renderSummary(state: Readonly<ScanState>): void {
   }
 
   // Show the total active backlog (excluding deferred rows) across the whole
-  // ledger, not just this scan — so the user sees questions accumulated from
+  // ledger, not just this scan, so the user sees questions accumulated from
   // prior runs alongside this scan's leftovers.
   const totalOpen = countQuestions(getDb());
   if (totalOpen > 0) {

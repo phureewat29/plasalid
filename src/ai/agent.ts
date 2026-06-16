@@ -281,7 +281,7 @@ export async function runScanAgent(opts: {
 
 /**
  * Record-time agent loop. Takes one natural-language utterance and walks the
- * record tool profile. Single-shot — does not persist conversation history.
+ * record tool profile. Single-shot; does not persist conversation history.
  */
 export async function runRecordAgent(opts: {
   db: Database.Database;

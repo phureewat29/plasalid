@@ -12,8 +12,8 @@ import { stripControls } from "./sanitize.js";
  * Builders compose them; each helper either returns a string or null (omit).
  *
  * Style:
- *  - No accumulation (`let prompt = …; prompt += …`).
- *  - No per-call branching the caller can't see — section options stay tiny.
+ *  - No accumulation (`let prompt = ...; prompt += ...`).
+ *  - No per-call branching the caller can't see: section options stay tiny.
  *  - String building stays in the helper; the builder only chooses *which*
  *    helpers to call and *in what order*.
  */
@@ -60,7 +60,7 @@ export function renderChartOfAccounts(
 }
 
 /**
- * Chat's chart section has a different empty-state shape — it replaces the
+ * Chat's chart section has a different empty-state shape; it replaces the
  * whole "## Current chart of accounts" header with a user-facing call to
  * action that mentions the user by name. Worth its own helper instead of
  * branching the generic one.
@@ -175,7 +175,7 @@ function formatMemoryLine(m: Memory, showCategory: boolean): string {
 /**
  * Emit a discreet hint about open clarify questions when the backlog is
  * non-empty. The chat agent decides when to mention it based on the user's
- * message — don't volunteer the count out of context. Returns null when the
+ * message. Don't volunteer the count out of context. Returns null when the
  * backlog is empty so `joinSections` drops the slot entirely.
  */
 export function renderOpenQuestionsHint(db: Database.Database): string | null {

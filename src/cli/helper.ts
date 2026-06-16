@@ -25,7 +25,7 @@ export function displayWidth(s: string): number {
 }
 
 /**
- * Right-pad to a fixed visible width. Assumes `s` has no ANSI codes — callers
+ * Right-pad to a fixed visible width. Assumes `s` has no ANSI codes; callers
  * working with colored strings should compose color around the padded value,
  * not inside it. Pads by display width so Thai (and other scripts with
  * combining marks) stay aligned with surrounding columns.

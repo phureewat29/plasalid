@@ -13,7 +13,7 @@ import { errorMessage } from "../lib/result.js";
 type Mupdf = typeof import("mupdf");
 let mupdfPromise: Promise<Mupdf> | null = null;
 
-// Lazy — WASM module isn't loaded until first call.
+// Lazy: WASM module isn't loaded until first call.
 function getMupdf(): Promise<Mupdf> {
   if (!mupdfPromise) mupdfPromise = import("mupdf");
   return mupdfPromise;
@@ -62,7 +62,7 @@ export async function unlock(
 }
 
 /**
- * Password store — filename-pattern keyed, encrypted-at-rest
+ * Password store: filename-pattern keyed, encrypted-at-rest
  */
 
 export interface StoredPassword {
@@ -166,7 +166,7 @@ export function recordUse(db: Database.Database, id: string): void {
 }
 
 /**
- * Unlock orchestrator — probe → try stored → prompt-until-unlocked
+ * Unlock orchestrator: probe → try stored → prompt-until-unlocked
  */
 
 export type UnlockOutcome =
@@ -373,7 +373,7 @@ export async function buildScanAttachment(
 }
 
 /**
- * Page rasterize — PDF → PNG for VL providers that don't accept documents
+ * Page rasterize: PDF → PNG for VL providers that don't accept documents
  */
 
 // Readable to a VL model without blowing up the token bill on a dense statement.
@@ -411,7 +411,7 @@ export async function rasterizePage(
 }
 
 /**
- * Page chunker — split one decrypted PDF into N single-page Chunks
+ * Page chunker: split one decrypted PDF into N single-page Chunks
  */
 
 // mupdf lacks page-range extract; clone and delete other pages back-to-front so indices stay stable.

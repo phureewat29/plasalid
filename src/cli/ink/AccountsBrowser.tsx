@@ -105,8 +105,8 @@ function renderAccountRow(
   const balanceRaw = p.balanceText;
   const metaRaw = p.meta.join(" · ");
 
-  // Layout: "M tag(8)  name  balance[  meta…]"
-  // Just spacing — no column alignment. Balance follows the name directly,
+  // Layout: "M tag(8)  name  balance[  meta...]"
+  // Just spacing, no column alignment. Balance follows the name directly,
   // meta (if any) follows the balance. Truncate name to whatever room remains.
   const fixedWidth =
     1 + 1 + TYPE_TAG_WIDTH + 2 + 2 + balanceRaw.length + (metaRaw ? 2 + metaRaw.length : 0);

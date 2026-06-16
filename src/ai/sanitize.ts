@@ -10,7 +10,7 @@ export function stripControls(text: string): string {
   return text.replace(/[\x00-\x1F\x7F]/g, " ").trim();
 }
 
-/** Sanitize text for prompt interpolation (no length clip — keep full content). */
+/** Sanitize text for prompt interpolation (no length clip: keep full content). */
 export function sanitizeForPrompt(text: string | null | undefined): string {
   if (!text) return "";
   return stripControls(text);

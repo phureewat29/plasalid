@@ -55,7 +55,7 @@ export function recordTransaction(db: Database.Database, input: TransactionInput
 
 /**
  * Validate structural invariants and assign an id. Pure (no DB writes).
- * Balance equality is **not** checked here — `insertTransactionRows` closes any
+ * Balance equality is **not** checked here; `insertTransactionRows` closes any
  * imbalance with an `equity:adjustments` posting at insert time, so callers
  * can record whatever the source document (or the LLM) actually saw.
  */
@@ -130,7 +130,7 @@ export function insertTransactionRows(
 
 /**
  * If the postings don't tie, append a closing entry on `equity:adjustments`.
- * Sums in integer cents to avoid float drift — no tolerance constant needed.
+ * Sums in integer cents to avoid float drift; no tolerance constant needed.
  * Returns the original list when already balanced.
  */
 function balanceWithAdjustment(
@@ -191,7 +191,7 @@ export interface UpdatePostingFields {
 
 /**
  * Safe single-posting edits only. Refuses changes to `debit`, `credit`, or `currency`
- * because those would silently break the transaction's balance — to fix amounts the
+ * because those would silently break the transaction's balance; to fix amounts the
  * caller must delete the transaction and record a fresh one.
  */
 export function updatePosting(
@@ -219,7 +219,7 @@ export function deleteTransaction(db: Database.Database, transactionId: string):
 export interface BulkUpdatePostingsFilter {
   account_id?: string;
   /** Case-insensitive substring match against `transactions.description`.
-   *  Use multiple bulk calls for descriptor variants — there is no regex. */
+   *  Use multiple bulk calls for descriptor variants; there is no regex. */
   description_contains?: string;
   currency?: string;
   from?: string;
@@ -244,7 +244,7 @@ export interface BulkUpdatePostingsResult {
  *
  * Refuses to run without at least one filter field (no "update everything"
  * escape hatch) and without at least one set field. Also refuses a no-op
- * recategorization where `set.account_id` equals `filter.account_id` —
+ * recategorization where `set.account_id` equals `filter.account_id`;
  * agents shouldn't waste tool calls on identity transforms.
  *
  * Safe-field policy mirrors `updatePosting`: account_id + memo only.
@@ -612,7 +612,7 @@ export interface TransactionGroup {
 /**
  * Fold `listPostings` output into per-transaction groups, surfacing the header
  * fields (date, description, merchant) shared by every posting under that
- * transaction. Assumes rows are already in transaction-id order — `listPostings`
+ * transaction. Assumes rows are already in transaction-id order; `listPostings`
  * produces that ordering naturally via its `ORDER BY t.date DESC, t.id DESC`.
  */
 export function groupByTransaction(postings: PostingRow[]): TransactionGroup[] {

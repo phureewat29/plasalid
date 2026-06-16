@@ -124,7 +124,7 @@ function bootstrapScannedFiles(db: Database.Database, state: ScanState): void {
   }
 }
 
-// Sequential by design — password prompts can't share a TTY.
+// Sequential by design: password prompts can't share a TTY.
 export async function decrypt(
   db: Database.Database,
   state: ScanState,

@@ -42,13 +42,13 @@ const SECTION_RULES: SectionRule[] = [
 const NUMERIC_PII_PATTERNS: [RegExp, string][] = [
   // Thai national ID with dashes: 1-2345-67890-12-3
   [/\b\d-\d{4}-\d{5}-\d{2}-\d\b/g, "[NATID]"],
-  // Thai national ID without dashes (13 digits) — must precede the generic ACCT pattern.
+  // Thai national ID without dashes (13 digits): must precede the generic ACCT pattern.
   [/\b\d{13}\b/g, "[NATID]"],
   // Thai mobile numbers: 0[689]xxxxxxxx (10 digits starting 06/08/09)
   [/\b0[689]\d{8}\b/g, "[PHONE]"],
   // 16-digit credit card (with optional separators)
   [/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g, "[CARD]"],
-  // 10–12 digit account / routing numbers at a word boundary
+  // 10-12 digit account / routing numbers at a word boundary
   [/\b\d{10,12}\b(?=\s|$|[,.])/g, "[ACCT]"],
 ];
 

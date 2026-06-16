@@ -164,7 +164,7 @@ export interface CreateAccountInput {
  * Insert a new account row. Enforces the three hierarchy invariants:
  *   1. Top-level roots: parent_id null, id == type, one of TOP_LEVEL_TYPES.
  *   2. Children: parent_id non-null, parent must exist (the top-level root is
- *      auto-bootstrapped if missing — intermediate categories must be created
+ *      auto-bootstrapped if missing; intermediate categories must be created
  *      explicitly), parent.type must equal input.type, input.id must start with
  *      parent.id + ':'.
  *   3. UNIQUE on id (surfaces as code: 'ACCOUNT_EXISTS').
@@ -397,8 +397,8 @@ export interface SimilarAccountPair {
 
 /**
  * Pairwise Levenshtein similarity over `accounts.name`. Returns pairs above the
- * threshold (0–1, where 1 = identical), sorted highest first. Quadratic in the
- * number of accounts — fine for the small N a personal chart of accounts holds.
+ * threshold (0-1, where 1 = identical), sorted highest first. Quadratic in the
+ * number of accounts, but fine for the small N a personal chart of accounts holds.
  */
 export function findSimilarAccounts(db: Database.Database, threshold = 0.85): SimilarAccountPair[] {
   const rows = db.prepare(`SELECT * FROM accounts ORDER BY name`).all() as AccountRow[];

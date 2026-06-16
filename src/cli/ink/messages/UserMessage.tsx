@@ -10,7 +10,7 @@ export function UserMessage({ text }: { text: string }) {
 }
 
 function visibleLength(s: string): number {
-  // Rough approximation — ignores combining characters and wide glyphs.
+  // Rough approximation: ignores combining characters and wide glyphs.
   // Ink pads within its own width calc so this is only for right-edge filler.
   return [...s].length;
 }

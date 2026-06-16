@@ -16,7 +16,7 @@ export interface RuleEntry {
 /**
  * The two cross-scan hints the system carries: long-form user memories, and
  * the per-merchant default account. Both are user-asserted (the scanner is
- * forbidden from writing them) — nothing auto-learned remains.
+ * forbidden from writing them); nothing auto-learned remains.
  */
 export function collectRules(db: Database.Database): RuleEntry[] {
   return [...collectMemories(db), ...collectMerchantDefaults(db)];

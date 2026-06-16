@@ -43,7 +43,7 @@ export interface ClosedQuestion {
 /**
  * Insert a new questions row and flip the `has_question` boolean on whichever
  * target (transaction / account) was named. Returns the new id. The id keeps
- * the historical `cn:` prefix — it's opaque and nothing else references it,
+ * the historical `cn:` prefix: it's opaque and nothing else references it,
  * so the prefix is a no-op detail.
  */
 export function recordQuestion(db: Database.Database, input: RecordQuestionInput): string {
@@ -154,7 +154,7 @@ export interface CountQuestionsScope {
   account_id?: string;
   kind?: string;
   scan_id?: string;
-  /** When true, count deferred rows too (default false — defer hides). */
+  /** When true, count deferred rows too (default false: defer hides). */
   includeDeferred?: boolean;
 }
 

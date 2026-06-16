@@ -85,7 +85,7 @@ export interface Provider {
   supportsThinking: boolean;
   /**
    * True for providers that accept PDF document blocks natively. False for
-   * plain OpenAI-compat endpoints — the scanner rasterizes pages to PNG for
+   * plain OpenAI-compat endpoints: the scanner rasterizes pages to PNG for
    * those and ships `image_url` parts instead.
    */
   acceptsDocuments: boolean;

@@ -139,7 +139,7 @@ export function ScanDashboard(props: Props) {
         const k = keyOf(input, key);
         if (k !== "q" && k !== "escape") return false;
         // Consume the key (return true) so ListBrowser's default `exit` never
-        // runs — that would only unmount the UI while the scan kept going.
+        // runs; that would only unmount the UI while the scan kept going.
         props.onCancel();
         return true;
       },

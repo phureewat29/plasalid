@@ -179,7 +179,7 @@ async function promptModelInput(vendor: Vendor): Promise<string> {
     vendor === "openai-compat" ? "" : RECOMMENDED_MODEL[vendor];
   const defaultValue = carriedOver || recommended;
 
-  // openai-compat has no single recommended model — the scanner rasterizes
+  // openai-compat has no single recommended model; the scanner rasterizes
   // PDFs to PNG on this path, so any non-vision model will fail on scan. Steer
   // the user toward a vision-language model in the prompt.
   const message =
@@ -302,7 +302,7 @@ async function promptCredentials(
 
 /**
  * Encryption key is auto-generated. The work is microseconds,
- * but the banner just told the user to "seal your vault" — hold the spinner
+ * but the banner just told the user to "seal your vault"; hold the spinner
  * so the step is visible.
  */
 async function sealVault(): Promise<void> {

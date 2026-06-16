@@ -120,7 +120,7 @@ function buildUserMessage(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Shared helpers — also imported by openai-compat.ts.               */
+/*  Shared helpers: also imported by openai-compat.ts.                */
 /* ------------------------------------------------------------------ */
 
 function isMaxTokensRejection(e: unknown): boolean {

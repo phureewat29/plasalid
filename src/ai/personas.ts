@@ -1,5 +1,5 @@
 /**
- * Persona text constants for the four agent profiles. These are pure prose —
+ * Persona text constants for the four agent profiles. These are pure prose:
  * no logic, no template assembly. The system-prompt builders import them and
  * concat them with section helpers from prompt-sections.ts.
  *

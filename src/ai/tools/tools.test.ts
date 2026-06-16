@@ -30,7 +30,7 @@ describe("executeTool error tagging", () => {
   });
 
   it("returns isError=true when a mutation throws (e.g. merge_accounts on missing ids)", async () => {
-    // merge_accounts throws when the source has children — easier to trigger
+    // merge_accounts throws when the source has children; easier to trigger
     // by passing non-existent ids, which will throw a FK / lookup error.
     const res = await executeTool(db, "merge_accounts", {
       from_id: "does:not:exist",

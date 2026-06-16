@@ -129,7 +129,7 @@ describe("setMerchantDefaultAccount + listMerchants + findMerchantById", () => {
     const rows = listMerchants(db);
     expect(rows.length).toBeGreaterThan(0);
     const sbux = rows.find(r => r.id === m.id)!;
-    expect(sbux.alias_count).toBe(1); // both aliases normalize to "starbucks" — single row
+    expect(sbux.alias_count).toBe(1); // both aliases normalize to "starbucks": single row
   });
 });
 

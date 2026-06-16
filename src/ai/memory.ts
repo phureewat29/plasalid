@@ -40,7 +40,7 @@ export function countMemories(db: Database.Database): number {
 
 /**
  * Idempotent on (category, content): a verbatim repeat is a no-op. Semantic
- * dedup (different wording for the same rule) is the agent's job — the persona
+ * dedup (different wording for the same rule) is the agent's job: the persona
  * tells it not to save what's already in the loaded memories.
  */
 export function saveMemory(db: Database.Database, content: string, category = "general"): void {

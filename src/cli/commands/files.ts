@@ -4,7 +4,7 @@ import { listScannedFiles } from "../../db/queries/files.js";
 
 /**
  * Open the scanned-files browser. The user-facing surface for dropping a
- * file's data — same `d`-confirm-`y/n` loop as the rules browser, but
+ * file's data: same `d`-confirm-`y/n` loop as the rules browser, but
  * typed for scanned_files rows so the layout shows path / status /
  * provider / model / scanned_at.
  */

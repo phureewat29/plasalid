@@ -173,7 +173,7 @@ const CTRL_HANDLERS: Record<number, Mutator> = {
 };
 
 /** CSI sequences: ESC [ ... <final>. `wordMod` runs when the parameter is one of
- *  the word-step modifiers (Option/Ctrl/Cmd) — `1;3`, `1;5`, `1;9`. */
+ *  the word-step modifiers (Option/Ctrl/Cmd): `1;3`, `1;5`, `1;9`. */
 const CSI_HANDLERS: Record<string, { plain: Mutator; wordMod: Mutator }> = {
   D: { plain: moveLeft, wordMod: moveWordLeft },
   C: { plain: moveRight, wordMod: moveWordRight },
@@ -202,7 +202,7 @@ function handleKittyKey(seq: string, apply: (m: Mutator) => void): void {
 export interface UseTextInputOpts {
   onSubmit: (text: string) => void;
   onCtrlC: (bufferEmpty: boolean) => void;
-  /** Called every time the buffer changes — can be used for hints. */
+  /** Called every time the buffer changes; can be used for hints. */
   onChange?: (buf: TextBuffer) => void;
   /** Return true to signal the key was handled and default behavior should be skipped. */
   onKey?: (key: { code: number; raw: string }) => boolean | void;
@@ -212,7 +212,7 @@ export interface UseTextInputOpts {
 
 /**
  * Raw-stdin driven keystroke state machine that owns a multiline buffer and
- * exposes its current state plus reset/insert helpers. Purely stateful — Ink
+ * exposes its current state plus reset/insert helpers. Purely stateful: Ink
  * re-renders whenever the buffer changes via setBuffer.
  *
  * Handles: Enter/submit, Backspace, Ctrl+A/E/K/U/W, arrow keys, Option+←/→,
@@ -365,7 +365,7 @@ export function useTextInput(opts: UseTextInputOpts) {
             continue;
           }
 
-          // Lone ESC / unknown — ignore
+          // Lone ESC / unknown: ignore
           continue;
         }
 

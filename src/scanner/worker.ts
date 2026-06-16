@@ -47,7 +47,7 @@ export async function runScanWorker(deps: ScanWorkerDeps, hooks: ScanHooks): Pro
 
   hooks.onWorkerEnd?.(workerId, deps.chunk, outcome.ok);
   if (!outcome.ok) {
-    // Ctrl+C cancellation is not a real failure — don't record a chunk_failed row.
+    // Ctrl+C cancellation is not a real failure, so don't record a chunk_failed row.
     if (deps.signal.aborted) return;
     recordChunkFailure(deps, outcome.error);
   }

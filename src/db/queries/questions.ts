@@ -180,6 +180,10 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
 export interface ListQuestionsOptions {
   limit?: number;
   scanId?: string;
+  /** Filter by the question's free-text `kind` column. */
+  kind?: string;
+  /** Filter by the `scanned_files` id the question is attached to. */
+  fileId?: string;
   /** When true, include deferred rows in the result (default false). */
   includeDeferred?: boolean;
 }
@@ -195,6 +199,8 @@ export function listQuestions(
   const conditions: string[] = [];
   const params: any[] = [];
   if (opts.scanId) { conditions.push("scan_id = ?"); params.push(opts.scanId); }
+  if (opts.kind)   { conditions.push("kind = ?");    params.push(opts.kind); }
+  if (opts.fileId) { conditions.push("file_id = ?"); params.push(opts.fileId); }
   if (!opts.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(capped);

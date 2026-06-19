@@ -1,12 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { generateKey } from "../db/encryption.js";
+import { config } from "../config.js";
 import {
   suggestPattern,
   findCandidates,
   savePassword,
   rasterizePage,
+  rasterizePageN,
+  unlockNonInteractive,
 } from "./pdf.js";
 
 describe("suggestPattern", () => {
@@ -63,5 +66,92 @@ describe("rasterizePage", () => {
     expect(result.bytes[0]).toBe(0x89);
     expect(result.bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
     expect(result.bytes.length).toBeGreaterThan(100);
+  });
+});
+
+describe("rasterizePageN", () => {
+  it("renders a given page index to a raw PNG buffer", async () => {
+    const png = await rasterizePageN(minimalPdf(), 0, 72);
+    expect(png[0]).toBe(0x89);
+    expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
+    expect(png.length).toBeGreaterThan(100);
+  });
+});
+
+async function encryptedPdf(password: string): Promise<Buffer> {
+  const mupdf = await import("mupdf");
+  const doc = mupdf.Document.openDocument(minimalPdf(), "application/pdf");
+  try {
+    const out = doc.saveToBuffer(
+      `encrypt=aes-256,user-password=${password},owner-password=${password}`,
+    );
+    return Buffer.from(out.asUint8Array());
+  } finally {
+    doc.destroy();
+  }
+}
+
+function freshDb(): Database.Database {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  return db;
+}
+
+describe("unlockNonInteractive", () => {
+  beforeEach(() => {
+    config.dbEncryptionKey = generateKey();
+  });
+
+  it("passes through a non-encrypted PDF unchanged", async () => {
+    const db = freshDb();
+    const bytes = minimalPdf();
+    const result = await unlockNonInteractive(db, bytes, "plain.pdf", {});
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.decrypted).toBe(bytes);
+  });
+
+  it("unlocks via a matching vault password and records the use", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+    const id = savePassword(db, "^kbank.*", "secret", config.dbEncryptionKey);
+
+    const result = await unlockNonInteractive(db, enc, "kbank-may.pdf", {});
+    expect(result.ok).toBe(true);
+
+    const row = db
+      .prepare(`SELECT use_count FROM file_passwords WHERE id = ?`)
+      .get(id) as { use_count: number };
+    expect(row.use_count).toBe(1);
+  });
+
+  it("persists a caller-supplied password on success", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+
+    const result = await unlockNonInteractive(db, enc, "kbank-may.pdf", {
+      password: "secret",
+    });
+    expect(result.ok).toBe(true);
+
+    const saved = findCandidates(db, "kbank-may.pdf", config.dbEncryptionKey);
+    expect(saved).toHaveLength(1);
+    expect(saved[0].password).toBe("secret");
+  });
+
+  it("reports wrong_password for a bad caller password", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+    const result = await unlockNonInteractive(db, enc, "kbank-may.pdf", {
+      password: "nope",
+    });
+    expect(result).toEqual({ ok: false, reason: "wrong_password" });
+  });
+
+  it("reports password_required when nothing unlocks it", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+    const result = await unlockNonInteractive(db, enc, "kbank-may.pdf", {});
+    expect(result).toEqual({ ok: false, reason: "password_required" });
   });
 });

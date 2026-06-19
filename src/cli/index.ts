@@ -1,56 +1,50 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, Help } from "commander";
 import { createRequire } from "module";
-import chalk from "chalk";
-import { config, isConfigured } from "../config.js";
+import { config } from "../config.js";
 import { helpScreen } from "./format.js";
+import { runAction } from "./output.js";
+
+// Harness command modules. Each registers its own noun + subcommand tree.
+import { registerStatus, runStatus } from "./commands/status.js";
+import { registerDoctor } from "./commands/doctor.js";
+import { registerSetup } from "./commands/setup.js";
+import { registerConfig } from "./commands/config-cmd.js";
+import { registerIngest } from "./commands/ingest.js";
+import { registerFiles } from "./commands/files.js";
+import { registerVault } from "./commands/vault.js";
+import { registerTx } from "./commands/tx.js";
+import { registerPostings } from "./commands/postings.js";
+import { registerAccounts } from "./commands/accounts.js";
+import { registerMerchants } from "./commands/merchants.js";
+import { registerQuestions } from "./commands/questions.js";
+import { registerReport } from "./commands/report.js";
+import { registerAnalyze } from "./commands/analyze.js";
+import { registerNotes } from "./commands/notes.js";
+import { registerTaxonomy } from "./commands/taxonomy.js";
+import { registerContext } from "./commands/context.js";
+import { registerAgentSetup } from "./commands/agent-setup.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json");
 
 const program = new Command();
 
-function ensureConfigured(): void {
-  if (!isConfigured()) {
-    console.error("Plasalid is not configured. Run `plasalid setup` first.");
-    process.exit(1);
-  }
-}
-
-async function runChatOrSetup(): Promise<void> {
-  if (!isConfigured()) {
-    console.log("Plasalid is not configured yet. Running setup...\n");
-    const { runSetup } = await import("./setup.js");
-    await runSetup();
-    return;
-  }
-  const { startChat } = await import("./chat.js");
-  await startChat();
-}
-
 program
   .name("plasalid")
   .description("The Harness Layer for Personal Finance")
   .version(version)
   .addHelpCommand(false)
-  .showHelpAfterError(
-    `Run ${chalk.cyan("plasalid --help")} for the list of commands.`,
-  )
-  .action(runChatOrSetup);
+  .showHelpAfterError("Run `plasalid --help` for the list of commands.")
+  // No-arg default action runs status (same implementation as the `status`
+  // command), so `plasalid` on its own reports harness status.
+  .action(
+    runAction(async () => {
+      await runStatus();
+    }),
+  );
 
-program
-  .command("chat")
-  .description("Open the chat TUI (the default action when running `plasalid`)")
-  .action(runChatOrSetup);
-
-program
-  .command("setup")
-  .description("Configure Plasalid (API key, encryption, data directory)")
-  .action(async () => {
-    const { runSetup } = await import("./setup.js");
-    await runSetup();
-  });
-
+// `data` opens the OS file explorer at the data dir; a thin, db-free command.
 program
   .command("data")
   .alias("open")
@@ -60,170 +54,75 @@ program
     runDataCommand();
   });
 
-program
-  .command("accounts")
-  .description("Browse the chart of accounts with balances")
-  .action(async () => {
-    ensureConfigured();
-    const { showAccounts } = await import("./commands/accounts.js");
-    await showAccounts();
-  });
+registerStatus(program);
+registerDoctor(program);
+registerSetup(program);
+registerConfig(program);
+registerIngest(program);
+registerFiles(program);
+registerVault(program);
+registerTx(program);
+registerPostings(program);
+registerAccounts(program);
+registerMerchants(program);
+registerQuestions(program);
+registerReport(program);
+registerAnalyze(program);
+registerNotes(program);
+registerTaxonomy(program);
+registerContext(program);
+registerAgentSetup(program);
 
-program
-  .command("status")
-  .description("Show net worth and this-month income/expense totals")
-  .action(async () => {
-    ensureConfigured();
-    const { showStatus } = await import("./commands/status.js");
-    showStatus();
-  });
+// Global flags on EVERY command so they are accepted before or after the
+// subcommand (`plasalid --json vault list` and `plasalid vault list --json`).
+// getOutputMode() OR-walks the command chain, so wherever commander lands the
+// flag, the resolved mode sees it. Applied after registration so the whole tree
+// exists.
+function addGlobalOptions(cmd: Command): void {
+  cmd
+    .option("--json", "Emit NDJSON (machine-readable) instead of human output")
+    .option("--no-color", "Disable ANSI color output")
+    .option("--quiet", "Suppress non-essential output");
+  for (const sub of cmd.commands) addGlobalOptions(sub);
+}
+addGlobalOptions(program);
 
-program
-  .command("transactions")
-  .description("Browse transactions")
-  .option("-a, --account <id>", "Filter by account id")
-  .option("--from <date>", "From date YYYY-MM-DD")
-  .option("--to <date>", "To date YYYY-MM-DD")
-  .option("-q, --query <text>", "Free-text search on description / memo")
-  .option("-n, --limit <number>", "Max results (default 1000)")
-  .action(async (opts) => {
-    ensureConfigured();
-    const { showTransactions } = await import("./commands/transactions.js");
-    await showTransactions({
-      account: opts.account,
-      from: opts.from,
-      to: opts.to,
-      query: opts.query,
-      limit: opts.limit != null ? Number(opts.limit) : undefined,
-    });
-  });
+const COMMANDS = [
+  { name: "status", desc: "Harness status: config, database, ledger counts, net worth (default)" },
+  { name: "doctor", desc: "Diagnose the harness environment" },
+  { name: "setup", desc: "Initialize the harness non-interactively" },
+  { name: "agent-setup", desc: "Install the skill pack for external agent CLIs (Claude Code, codex)" },
+  { name: "config", desc: "Show and set harness configuration" },
+  { name: "ingest", desc: "Ingest pipeline: list/prepare/commit/done/fail/clean" },
+  { name: "files", desc: "Browse scanned files (list/show/drop)" },
+  { name: "vault", desc: "Manage file-password patterns for encrypted statements" },
+  { name: "tx", desc: "Create, inspect, edit, and recategorize transactions" },
+  { name: "postings", desc: "List, search, and edit postings" },
+  { name: "accounts", desc: "Manage the chart of accounts" },
+  { name: "merchants", desc: "Manage merchants and their default accounts" },
+  { name: "questions", desc: "List, answer, and defer open questions" },
+  { name: "report", desc: "Net-worth and period reports" },
+  { name: "analyze", desc: "Find duplicate and correlated transactions" },
+  { name: "notes", desc: "Manage freeform notes" },
+  { name: "taxonomy", desc: "Dump the Thai institution registry" },
+  { name: "context", desc: "Show the harness context bundle / its path" },
+  { name: "data", desc: "Open the data folder in your OS file explorer (alias: open)" },
+];
 
-program
-  .command("record <utterance...>")
-  .description(
-    "Add a manual entry, account, or balance update from a plain-language line.",
-  )
-  .action(async (utteranceTokens: string[]) => {
-    ensureConfigured();
-    const { runRecordCommand } = await import("./commands/record.js");
-    await runRecordCommand({ utterance: utteranceTokens.join(" ") });
-  });
-
-program
-  .command("scan [regex...]")
-  .description(
-    "Scan every new PDF under ~/.plasalid/data (optionally filtered by regex)",
-  )
-  .option(
-    "-f, --force",
-    "Re-scan matching files (cascade-deletes prior records)",
-  )
-  .option(
-    "-p, --parallel <n>",
-    "Number of files to scan concurrently (default 3, max 8). Override env PLASALID_SCAN_CONCURRENCY.",
-    (v) => parseInt(v, 10),
-  )
-  .action(async (regexes: string[], opts) => {
-    ensureConfigured();
-    if (regexes.length > 1) {
-      console.error(
-        chalk.red(
-          `scan takes a single regex (or none). got ${regexes.length} arguments — your shell likely expanded a glob like '*' to filenames.`,
-        ),
-      );
-      console.error("");
-      console.error("To scan everything in the data dir:");
-      console.error(`  ${chalk.cyan("plasalid scan")}`);
-      console.error("");
-      console.error("To filter with a regex, quote it:");
-      console.error(`  ${chalk.cyan("plasalid scan '.*'")}`);
-      console.error(`  ${chalk.cyan("plasalid scan 'KBank|SCB'")}`);
-      process.exit(1);
-    }
-    const envParallel = parseInt(
-      process.env.PLASALID_SCAN_CONCURRENCY ?? "",
-      10,
-    );
-    const parallel = Number.isFinite(opts.parallel)
-      ? opts.parallel
-      : Number.isFinite(envParallel)
-        ? envParallel
-        : undefined;
-    const { runScanCommand } = await import("./commands/scan.js");
-    await runScanCommand({ regex: regexes[0], force: !!opts.force, parallel });
-  });
-
-program
-  .command("files")
-  .description(
-    "Browse scanned files; press d to drop one and cascade-remove its data",
-  )
-  .action(async () => {
-    ensureConfigured();
-    const { showFiles } = await import("./commands/files.js");
-    await showFiles();
-  });
-
-program
-  .command("rules")
-  .description("Browse the rules the system has learned (press d to delete)")
-  .action(async () => {
-    ensureConfigured();
-    const { showRules } = await import("./commands/rules.js");
-    await showRules();
-  });
-
-program
-  .command("clarify")
-  .description("Clarify every question across the ledger")
-  .action(async () => {
-    ensureConfigured();
-    const { runClarifyCommand } = await import("./commands/clarify.js");
-    await runClarifyCommand();
-  });
+const GLOBAL_OPTIONS = [
+  { name: "--json", desc: "Emit NDJSON (machine-readable) instead of human output" },
+  { name: "--no-color", desc: "Disable ANSI color output" },
+  { name: "--quiet", desc: "Suppress non-essential output" },
+];
 
 program.configureHelp({
-  formatHelp: () =>
-    helpScreen([
-      {
-        name: "chat",
-        desc: "Open the chat TUI (default when running `plasalid`)",
-      },
-      {
-        name: "setup",
-        desc: "Configure Plasalid (API key, encryption, data dir)",
-      },
-      {
-        name: "data",
-        desc: "Open the data folder in your OS file explorer (alias: open)",
-      },
-      { name: "accounts", desc: "Browse the chart of accounts with balances" },
-      { name: "status", desc: "Show financial and system status (net worth, recurring, questions)" },
-      {
-        name: "transactions",
-        desc: "Browse transactions (with optional filters)",
-      },
-      {
-        name: "record",
-        desc: "Add a manual transaction, account, balance, or merchant from a plain-language line",
-      },
-      {
-        name: "scan",
-        desc: "Scan new PDFs (optionally by regex; --force to re-scan)",
-      },
-      {
-        name: "files",
-        desc: "Browse scanned files; press d to drop one and cascade-remove its data",
-      },
-      {
-        name: "rules",
-        desc: "Browse the rules the system has learned (press d to delete)",
-      },
-      {
-        name: "clarify",
-        desc: "Clarify every question across the ledger",
-      },
-    ]),
+  // Root help stays the branded screen; subcommands fall back to commander's
+  // default formatter so `plasalid <noun> --help` shows the real subcommand tree
+  // (configureHelp is inherited by subcommands, hence the explicit root guard).
+  formatHelp: (cmd, helper) =>
+    cmd === program
+      ? helpScreen(COMMANDS, GLOBAL_OPTIONS)
+      : Help.prototype.formatHelp.call(helper, cmd, helper),
 });
 
 void config; // keep config import live so dotenv loads

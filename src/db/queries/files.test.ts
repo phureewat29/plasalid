@@ -6,6 +6,8 @@ import {
   deleteScannedFile,
   findScannedFileById,
   listScannedFiles,
+  markFileScanned,
+  markFileFailed,
 } from "./files.js";
 import { createAccount } from "./account-balance.js";
 import { recordTransaction } from "./transactions.js";
@@ -50,11 +52,11 @@ describe("countScannedFiles", () => {
 });
 
 describe("listScannedFiles / findScannedFileById", () => {
-  it("returns rows including the new provider/model columns", () => {
+  it("returns rows including the source column", () => {
     const db = freshDb();
     insertFile(db, "a", "scanned");
     db.prepare(
-      `UPDATE scanned_files SET provider = 'anthropic', model = 'claude-sonnet-4-6', scanned_at = '2026-05-24 10:00:00' WHERE id = ?`,
+      `UPDATE scanned_files SET source = 'anthropic', scanned_at = '2026-05-24 10:00:00' WHERE id = ?`,
     ).run("a");
     insertFile(db, "b", "pending");
 
@@ -62,12 +64,10 @@ describe("listScannedFiles / findScannedFileById", () => {
     expect(rows).toHaveLength(2);
 
     const scanned = rows.find(r => r.id === "a")!;
-    expect(scanned.provider).toBe("anthropic");
-    expect(scanned.model).toBe("claude-sonnet-4-6");
+    expect(scanned.source).toBe("anthropic");
 
     const pending = rows.find(r => r.id === "b")!;
-    expect(pending.provider).toBeNull();
-    expect(pending.model).toBeNull();
+    expect(pending.source).toBeNull();
   });
 
   it("findScannedFileById returns null for an unknown id", () => {
@@ -111,5 +111,44 @@ describe("deleteScannedFile", () => {
   it("returns null counts and no error when the id is unknown", () => {
     const result = deleteScannedFile(freshDb(), "nope");
     expect(result).toEqual({ removed: null, removedTransactions: 0, removedQuestions: 0 });
+  });
+});
+
+describe("markFileScanned", () => {
+  it("stamps status/source/scanned_at", () => {
+    const db = freshDb();
+    insertFile(db, "a", "pending");
+
+    const changes = markFileScanned(db, "a", { source: "anthropic" });
+
+    expect(changes).toBe(1);
+    const row = findScannedFileById(db, "a")!;
+    expect(row.status).toBe("scanned");
+    expect(row.source).toBe("anthropic");
+    expect(row.scanned_at).not.toBeNull();
+  });
+
+  it("returns 0 changes for an unknown id", () => {
+    expect(markFileScanned(freshDb(), "nope", { source: "anthropic" })).toBe(0);
+  });
+});
+
+describe("markFileFailed", () => {
+  it("stamps status/source/error, leaving scanned_at untouched", () => {
+    const db = freshDb();
+    insertFile(db, "a", "pending");
+
+    const changes = markFileFailed(db, "a", { source: "external", error: "boom" });
+
+    expect(changes).toBe(1);
+    const row = findScannedFileById(db, "a")!;
+    expect(row.status).toBe("failed");
+    expect(row.source).toBe("external");
+    expect(row.error).toBe("boom");
+    expect(row.scanned_at).toBeNull();
+  });
+
+  it("returns 0 changes for an unknown id", () => {
+    expect(markFileFailed(freshDb(), "nope", { source: "external", error: "x" })).toBe(0);
   });
 });

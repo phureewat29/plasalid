@@ -1,34 +1,430 @@
-import chalk from "chalk";
+import type { Command } from "commander";
 import { getDb } from "../../db/connection.js";
-import { getAccountBalances } from "../../db/queries/account-balance.js";
+import { currentMode, emit, emitList, fail, requireYes, runAction, type Column } from "../output.js";
+import {
+  getAccountBalances,
+  getRollupBalance,
+  createAccount,
+  renameAccount,
+  mergeAccounts,
+  deleteAccount,
+  adjustAccountBalance,
+  findAccountsByFuzzyName,
+  findSimilarAccounts,
+  updateAccountMetadata,
+  findAccountById,
+  type AccountType,
+  type AccountBalance,
+  type CreateAccountInput,
+  type UpdateAccountMetadataPatch,
+  type FuzzyAccountMatch,
+  type SimilarAccountPair,
+} from "../../db/queries/account-balance.js";
+import { applyRedaction } from "../../privacy/redactor.js";
 
-export async function showAccounts(): Promise<void> {
-  const db = getDb();
-  const accounts = getAccountBalances(db);
-  if (accounts.length === 0) {
-    console.log(
-      chalk.yellow(
-        "No accounts yet. Drop your bank/credit card statements into ~/.plasalid/data/ and run `plasalid scan`.",
+// The account display `name` is the only free-text field; id/parent_id/type/
+// currency and the numeric balance are structured data left verbatim.
+const ACCOUNT_REDACT_FIELDS = ["name"] as const;
+
+/** Thrown-Error → exit code mapping shared by create/rename/merge/delete/adjust/metadata:
+ *  messages that name a missing id ("not found" / "does not exist") map to NOT_FOUND,
+ *  everything else (hierarchy mismatches, self-merge, non-empty accounts, duplicates)
+ *  is a constraint violation and maps to INVALID. */
+function mapAccountError(err: unknown): never {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/not found|does not exist/i.test(message)) fail("NOT_FOUND", message);
+  fail("INVALID", message);
+}
+
+function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) fail("USAGE", `${flag} must be a number, got "${value}"`);
+  return n;
+}
+
+const ACCOUNT_COLUMNS: Column<AccountBalance>[] = [
+  { header: "ID", value: (a) => a.id },
+  { header: "Name", value: (a) => a.name },
+  { header: "Type", value: (a) => a.type },
+  { header: "Parent", value: (a) => a.parent_id ?? "" },
+  { header: "Balance", value: (a) => a.balance.toFixed(2), align: "right" },
+  { header: "Currency", value: (a) => a.currency },
+];
+
+const MATCH_COLUMNS: Column<FuzzyAccountMatch>[] = [
+  { header: "ID", value: (m) => m.account.id },
+  { header: "Name", value: (m) => m.account.name },
+  { header: "Type", value: (m) => m.account.type },
+  { header: "Similarity", value: (m) => m.similarity.toFixed(3), align: "right" },
+];
+
+const SIMILAR_COLUMNS: Column<SimilarAccountPair>[] = [
+  { header: "A", value: (p) => `${p.a.name} (${p.a.id})` },
+  { header: "B", value: (p) => `${p.b.name} (${p.b.id})` },
+  { header: "Similarity", value: (p) => p.similarity.toFixed(3), align: "right" },
+];
+
+interface AccountTreeNode {
+  id: string;
+  name: string;
+  type: string;
+  balance: number;
+  rollup: number;
+  children: AccountTreeNode[];
+}
+
+function buildAccountTree(
+  db: ReturnType<typeof getDb>,
+  type: AccountType | undefined,
+): AccountTreeNode[] {
+  const rows = getAccountBalances(db, type ? { type } : {});
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const childrenMap = new Map<string, AccountBalance[]>();
+  const roots: AccountBalance[] = [];
+  for (const r of rows) {
+    if (r.parent_id && byId.has(r.parent_id)) {
+      const arr = childrenMap.get(r.parent_id) ?? [];
+      arr.push(r);
+      childrenMap.set(r.parent_id, arr);
+    } else {
+      roots.push(r);
+    }
+  }
+  const build = (row: AccountBalance): AccountTreeNode => ({
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    balance: row.balance,
+    rollup: getRollupBalance(db, row.id),
+    children: (childrenMap.get(row.id) ?? []).map(build),
+  });
+  return roots.map(build);
+}
+
+function renderTreeTty(nodes: AccountTreeNode[], depth = 0): void {
+  for (const n of nodes) {
+    const indent = "  ".repeat(depth);
+    process.stdout.write(
+      `${indent}${n.name} (${n.id})  ${n.balance.toFixed(2)} [rollup ${n.rollup.toFixed(2)}]\n`,
+    );
+    renderTreeTty(n.children, depth + 1);
+  }
+}
+
+function flattenTree(nodes: AccountTreeNode[], depth: number, out: string[]): void {
+  for (const n of nodes) {
+    out.push(
+      [String(depth), n.id, n.name, n.type, n.balance.toFixed(2), n.rollup.toFixed(2)].join("\t"),
+    );
+    flattenTree(n.children, depth + 1, out);
+  }
+}
+
+function renderTreePlain(nodes: AccountTreeNode[]): void {
+  const out: string[] = [];
+  flattenTree(nodes, 0, out);
+  if (out.length) process.stdout.write(out.join("\n") + "\n");
+}
+
+export function registerAccounts(program: Command): void {
+  const accounts = program.command("accounts").description("Manage accounts");
+
+  accounts
+    .command("list")
+    .description("List accounts")
+    .option("--type <type>", "filter by account type")
+    .option("--redact", "mask PII in the account name field")
+    .action(
+      runAction((opts: { type?: string; redact?: boolean }) => {
+        const db = getDb();
+        const rows = applyRedaction(
+          getAccountBalances(db, opts.type ? { type: opts.type as AccountType } : {}),
+          !!opts.redact,
+          ACCOUNT_REDACT_FIELDS,
+        );
+        emitList(rows, ACCOUNT_COLUMNS);
+      }),
+    );
+
+  accounts
+    .command("tree")
+    .description("Show accounts as a tree")
+    .option("--type <type>", "filter by account type")
+    .action(
+      runAction((opts: { type?: string }) => {
+        const db = getDb();
+        const roots = buildAccountTree(db, opts.type as AccountType | undefined);
+        const mode = currentMode();
+        if (mode.json) {
+          emit(roots);
+          return;
+        }
+        if (mode.tty) {
+          renderTreeTty(roots);
+          return;
+        }
+        renderTreePlain(roots);
+      }),
+    );
+
+  accounts
+    .command("show <id>")
+    .description("Show an account's details")
+    .action(
+      runAction((id: string) => {
+        const db = getDb();
+        const account = findAccountById(db, id);
+        if (!account) fail("NOT_FOUND", `account "${id}" not found`);
+        const balances = getAccountBalances(db);
+        const balance = balances.find((b) => b.id === id)?.balance ?? 0;
+        const rollup = getRollupBalance(db, id);
+        const children = balances
+          .filter((b) => b.parent_id === id)
+          .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance }));
+        emit({ ...account, balance, rollup, children });
+      }),
+    );
+
+  accounts
+    .command("create")
+    .description("Create a new account")
+    .option("--id <id>", "account id")
+    .option("--name <name>", "account name")
+    .option("--type <type>", "account type")
+    .option("--parent <id>", "parent account id")
+    .option("--subtype <s>", "account subtype")
+    .option("--bank <name>", "bank name")
+    .option("--masked <number>", "masked account number")
+    .option("--currency <code>", "currency code")
+    .option("--due-day <n>", "payment due day")
+    .option("--statement-day <n>", "statement closing day")
+    .option("--metadata <json>", "additional metadata as JSON")
+    .action(
+      runAction(
+        (opts: {
+          id?: string;
+          name?: string;
+          type?: string;
+          parent?: string;
+          subtype?: string;
+          bank?: string;
+          masked?: string;
+          currency?: string;
+          dueDay?: string;
+          statementDay?: string;
+          metadata?: string;
+        }) => {
+          const missing: string[] = [];
+          if (!opts.id) missing.push("--id");
+          if (!opts.name) missing.push("--name");
+          if (!opts.type) missing.push("--type");
+          if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
+
+          let metadata: Record<string, unknown> | null = null;
+          if (opts.metadata !== undefined) {
+            try {
+              metadata = JSON.parse(opts.metadata);
+            } catch (err) {
+              fail("USAGE", `--metadata must be valid JSON: ${(err as Error).message}`);
+            }
+          }
+          const dueDay = parseOptionalNumber(opts.dueDay, "--due-day");
+          const statementDay = parseOptionalNumber(opts.statementDay, "--statement-day");
+
+          const db = getDb();
+          const input: CreateAccountInput = {
+            id: opts.id!,
+            name: opts.name!,
+            type: opts.type as AccountType,
+            parent_id: opts.parent ?? null,
+            subtype: opts.subtype ?? null,
+            bank_name: opts.bank ?? null,
+            account_number_masked: opts.masked ?? null,
+            currency: opts.currency,
+            due_day: dueDay ?? null,
+            statement_day: statementDay ?? null,
+            metadata,
+          };
+          try {
+            createAccount(db, input);
+          } catch (err) {
+            mapAccountError(err);
+          }
+          emit({ id: input.id, created: true });
+        },
       ),
     );
-    return;
-  }
 
-  const [
-    { runBrowser },
-    { AccountsBrowser },
-    { createElement },
-    { listPostings },
-  ] = await Promise.all([
-    import("../ink/runBrowser.js"),
-    import("../ink/AccountsBrowser.js"),
-    import("react"),
-    import("../../db/queries/transactions.js"),
-  ]);
-  const recentTransactionsByAccount = new Map<string, ReturnType<typeof listPostings>>();
-  for (const a of accounts) {
-    const rows = listPostings(db, { account_id: a.id, limit: 10 });
-    if (rows.length > 0) recentTransactionsByAccount.set(a.id, rows);
-  }
-  await runBrowser(createElement(AccountsBrowser, { accounts, recentTransactionsByAccount }));
+  accounts
+    .command("rename <id>")
+    .description("Rename an account")
+    .option("--name <name>", "new account name")
+    .action(
+      runAction((id: string, opts: { name?: string }) => {
+        if (!opts.name) fail("USAGE", "--name is required");
+        const db = getDb();
+        const changes = renameAccount(db, id, opts.name);
+        if (changes === 0) fail("NOT_FOUND", `account "${id}" not found`);
+        emit({ id, name: opts.name, renamed: true });
+      }),
+    );
+
+  accounts
+    .command("merge")
+    .description("Merge one account into another")
+    .option("--from <id>", "account id to merge from")
+    .option("--to <id>", "account id to merge into")
+    .option("--yes", "skip confirmation")
+    .action(
+      runAction((opts: { from?: string; to?: string; yes?: boolean }) => {
+        const missing: string[] = [];
+        if (!opts.from) missing.push("--from");
+        if (!opts.to) missing.push("--to");
+        if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
+        requireYes(opts, "merging accounts");
+        const db = getDb();
+        let moved: number;
+        try {
+          moved = mergeAccounts(db, opts.from!, opts.to!);
+        } catch (err) {
+          mapAccountError(err);
+        }
+        emit({ from: opts.from, to: opts.to, postings_moved: moved });
+      }),
+    );
+
+  accounts
+    .command("delete <id>")
+    .description("Delete an account")
+    .option("--yes", "skip confirmation")
+    .action(
+      runAction((id: string, opts: { yes?: boolean }) => {
+        const db = getDb();
+        if (!findAccountById(db, id)) fail("NOT_FOUND", `account "${id}" not found`);
+        requireYes(opts, "deleting this account");
+        try {
+          deleteAccount(db, id);
+        } catch (err) {
+          mapAccountError(err);
+        }
+        emit({ id, deleted: true });
+      }),
+    );
+
+  accounts
+    .command("adjust <id>")
+    .description("Adjust an account balance")
+    .option("--to <amount>", "target balance amount")
+    .option("--reason <text>", "reason for the adjustment")
+    .option("--date <date>", "adjustment date")
+    .action(
+      runAction((id: string, opts: { to?: string; reason?: string; date?: string }) => {
+        const missing: string[] = [];
+        if (opts.to === undefined) missing.push("--to");
+        if (!opts.reason) missing.push("--reason");
+        if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
+        const target = Number(opts.to);
+        if (!Number.isFinite(target)) fail("USAGE", `--to must be a number, got "${opts.to}"`);
+
+        const db = getDb();
+        let result;
+        try {
+          result = adjustAccountBalance(db, {
+            accountId: id,
+            targetAmount: target,
+            reason: opts.reason!,
+            date: opts.date,
+          });
+        } catch (err) {
+          mapAccountError(err);
+        }
+        emit({ transaction_id: result.transactionId, delta: result.delta });
+      }),
+    );
+
+  accounts
+    .command("match")
+    .description("Match accounts against a query")
+    .option("--query <text>", "search text")
+    .option("--threshold <n>", "match confidence threshold")
+    .action(
+      runAction((opts: { query?: string; threshold?: string }) => {
+        if (!opts.query) fail("USAGE", "--query is required");
+        const threshold = parseOptionalNumber(opts.threshold, "--threshold");
+        const db = getDb();
+        const matches = findAccountsByFuzzyName(db, opts.query, threshold);
+        emitList(matches, MATCH_COLUMNS);
+      }),
+    );
+
+  accounts
+    .command("similar")
+    .description("Find similar accounts")
+    .option("--threshold <n>", "similarity threshold")
+    .action(
+      runAction((opts: { threshold?: string }) => {
+        const threshold = parseOptionalNumber(opts.threshold, "--threshold");
+        const db = getDb();
+        const pairs = findSimilarAccounts(db, threshold);
+        emitList(pairs, SIMILAR_COLUMNS);
+      }),
+    );
+
+  accounts
+    .command("metadata <id>")
+    .description("Update account metadata")
+    .option("--due-day <n>", "payment due day")
+    .option("--statement-day <n>", "statement closing day")
+    .option("--points <n>", "reward points balance")
+    .option("--masked <number>", "masked account number")
+    .option("--bank <name>", "bank name")
+    .option("--metadata <json>", "additional metadata as JSON")
+    .action(
+      runAction(
+        (
+          id: string,
+          opts: {
+            dueDay?: string;
+            statementDay?: string;
+            points?: string;
+            masked?: string;
+            bank?: string;
+            metadata?: string;
+          },
+        ) => {
+          const patch: UpdateAccountMetadataPatch = {};
+          const dueDay = parseOptionalNumber(opts.dueDay, "--due-day");
+          if (dueDay !== undefined) patch.due_day = dueDay;
+          const statementDay = parseOptionalNumber(opts.statementDay, "--statement-day");
+          if (statementDay !== undefined) patch.statement_day = statementDay;
+          const points = parseOptionalNumber(opts.points, "--points");
+          if (points !== undefined) patch.points_balance = points;
+          if (opts.masked !== undefined) patch.account_number_masked = opts.masked;
+          if (opts.bank !== undefined) patch.bank_name = opts.bank;
+          if (opts.metadata !== undefined) {
+            try {
+              patch.metadata = JSON.parse(opts.metadata);
+            } catch (err) {
+              fail("USAGE", `--metadata must be valid JSON: ${(err as Error).message}`);
+            }
+          }
+          if (Object.keys(patch).length === 0) {
+            fail(
+              "USAGE",
+              "at least one of --due-day, --statement-day, --points, --masked, --bank, --metadata is required",
+            );
+          }
+
+          const db = getDb();
+          let result;
+          try {
+            result = updateAccountMetadata(db, id, patch);
+          } catch (err) {
+            mapAccountError(err);
+          }
+          emit({ id, ...result });
+        },
+      ),
+    );
 }

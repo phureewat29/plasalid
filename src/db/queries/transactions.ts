@@ -657,3 +657,71 @@ export function countTransactionsBySourceFile(
     .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
     .get(fileId) as { n: number }).n;
 }
+
+export interface TransactionPostingDetail {
+  id: string;
+  account_id: string;
+  account_name: string;
+  debit: number;
+  credit: number;
+  currency: string;
+  memo: string | null;
+}
+
+export interface TransactionDetail {
+  id: string;
+  date: string;
+  description: string;
+  merchant_id: string | null;
+  merchant_name: string | null;
+  raw_descriptor: string | null;
+  source_file_id: string | null;
+  source_page: number | null;
+  has_question: number;
+  created_at: string;
+  postings: TransactionPostingDetail[];
+}
+
+/**
+ * Load a single transaction's header (including its merchant's
+ * canonical_name, nullable) plus every posting on it, joined to the
+ * posting's account name. Returns null when the transaction id doesn't exist.
+ */
+export function getTransaction(db: Database.Database, txId: string): TransactionDetail | null {
+  const header = db
+    .prepare(
+      `SELECT t.id, t.date, t.description, t.merchant_id, t.raw_descriptor,
+              t.source_file_id, t.source_page, t.has_question, t.created_at,
+              m.canonical_name AS merchant_name
+       FROM transactions t
+       LEFT JOIN merchants m ON m.id = t.merchant_id
+       WHERE t.id = ?`,
+    )
+    .get(txId) as
+    | {
+        id: string;
+        date: string;
+        description: string;
+        merchant_id: string | null;
+        raw_descriptor: string | null;
+        source_file_id: string | null;
+        source_page: number | null;
+        has_question: number;
+        created_at: string;
+        merchant_name: string | null;
+      }
+    | undefined;
+  if (!header) return null;
+
+  const postings = db
+    .prepare(
+      `SELECT p.id, p.account_id, a.name AS account_name, p.debit, p.credit, p.currency, p.memo
+       FROM postings p
+       JOIN accounts a ON a.id = p.account_id
+       WHERE p.transaction_id = ?
+       ORDER BY p.id`,
+    )
+    .all(txId) as TransactionPostingDetail[];
+
+  return { ...header, postings };
+}

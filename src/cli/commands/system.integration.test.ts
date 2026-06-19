@@ -1,0 +1,347 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import Database from "libsql";
+import { migrate } from "../../db/schema.js";
+import { createAccount } from "../../db/queries/account-balance.js";
+import { recordTransaction } from "../../db/queries/transactions.js";
+import { recordQuestion } from "../../db/queries/questions.js";
+
+// system.integration.test.ts lives in src/cli/commands/ -> repo root is three
+// levels up. Covers the Phase 2b command modules owned by this worker:
+// questions, report, notes, config/setup, doctor.
+const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+
+interface CliResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+let tmpDir: string;
+let dbPath: string;
+let dataDir: string;
+let baseEnv: NodeJS.ProcessEnv;
+
+function makeEnv(home: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.FORCE_COLOR;
+  delete env.NO_COLOR;
+  delete env.PLASALID_DB_PATH;
+  delete env.PLASALID_DATA_DIR;
+  delete env.PLASALID_CACHE_DIR;
+  delete env.PLASALID_DB_ENCRYPTION_KEY;
+  env.HOME = home;
+  env.USERPROFILE = home;
+  return env;
+}
+
+beforeAll(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), "plasalid-system-it-"));
+  dbPath = join(tmpDir, "db.sqlite");
+  dataDir = join(tmpDir, "data");
+
+  baseEnv = makeEnv(tmpDir);
+  baseEnv.PLASALID_DB_PATH = dbPath;
+  baseEnv.PLASALID_DATA_DIR = dataDir;
+  baseEnv.PLASALID_CACHE_DIR = join(tmpDir, "cache");
+
+  // Minimal config.json so `doctor`'s config_exists check is true and
+  // `config show` / `context path` resolve against the redirected HOME.
+  mkdirSync(join(tmpDir, ".plasalid"), { recursive: true });
+  writeFileSync(
+    join(tmpDir, ".plasalid", "config.json"),
+    JSON.stringify({ displayCurrency: "THB", displayLocale: "th-TH", userName: "Test User" }, null, 2) + "\n",
+  );
+
+  // Create + migrate the shared (unencrypted) db once up front; individual
+  // tests below seed their own rows directly against this same file.
+  const raw = new Database(dbPath);
+  raw.pragma("foreign_keys = ON");
+  migrate(raw);
+  raw.close();
+});
+
+afterAll(() => {
+  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function runCli(args: string[], opts: { env?: NodeJS.ProcessEnv } = {}): Promise<CliResult> {
+  return new Promise((resolvePromise) => {
+    const child = execFile(
+      "npx",
+      ["tsx", "src/cli/index.ts", ...args],
+      {
+        cwd: repoRoot,
+        env: opts.env ?? baseEnv,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const code =
+          error && typeof (error as { code?: unknown }).code === "number"
+            ? (error as { code: number }).code
+            : error
+              ? 1
+              : 0;
+        resolvePromise({ stdout: stdout ?? "", stderr: stderr ?? "", code });
+      },
+    );
+    child.stdin?.end();
+  });
+}
+
+function parseOne(stdout: string): any {
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  expect(lines).toHaveLength(1);
+  return JSON.parse(lines[0]);
+}
+
+function parseNdjson(stdout: string): any[] {
+  return stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+describe("system CLI integration (subprocess)", () => {
+  it(
+    "setup --generate-key on a fresh env: config show reflects it redacted, never plaintext",
+    async () => {
+      const isolatedHome = mkdtempSync(join(tmpdir(), "plasalid-system-setup-it-"));
+      try {
+        const env = makeEnv(isolatedHome);
+        const setupDataDir = join(isolatedHome, "pdata");
+        const setupDbPath = join(isolatedHome, "pledger.sqlite");
+
+        const setup = await runCli(
+          [
+            "setup",
+            "--data-dir",
+            setupDataDir,
+            "--db",
+            setupDbPath,
+            "--generate-key",
+            "--user-name",
+            "Fresh User",
+            "--currency",
+            "THB",
+            "--locale",
+            "th-TH",
+            "--json",
+          ],
+          { env },
+        );
+        expect(setup.code).toBe(0);
+        const setupResult = parseOne(setup.stdout);
+        expect(setupResult.dbEncryptionKey).toMatchObject({ set: true });
+        expect(setupResult.dbEncryptionKey.fingerprint).toMatch(/^sha256:[0-9a-f]{8}$/);
+        expect(setupResult.created).toMatchObject({ db: setupDbPath, data_dir: setupDataDir });
+        // The raw 64-hex-char generated key must never appear on stdout.
+        expect(/[0-9a-f]{64}/i.test(setup.stdout)).toBe(false);
+
+        const show = await runCli(["config", "show", "--json"], { env });
+        expect(show.code).toBe(0);
+        const cfg = parseOne(show.stdout);
+        expect(cfg.dbEncryptionKey).toMatchObject({
+          set: true,
+          fingerprint: setupResult.dbEncryptionKey.fingerprint,
+        });
+        expect(cfg.dataDir).toBe(setupDataDir);
+        expect(cfg.dbPath).toBe(setupDbPath);
+        expect(/[0-9a-f]{64}/i.test(show.stdout)).toBe(false);
+      } finally {
+        rmSync(isolatedHome, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+
+  it(
+    "report net-worth + period reflect directly-seeded ledger data",
+    async () => {
+      const raw = new Database(dbPath);
+      raw.pragma("foreign_keys = ON");
+      try {
+        createAccount(raw, { id: "asset", name: "Assets", type: "asset", parent_id: null });
+        createAccount(raw, { id: "asset:bank", name: "Bank", type: "asset", parent_id: "asset" });
+        createAccount(raw, { id: "income", name: "Income", type: "income", parent_id: null });
+        createAccount(raw, { id: "income:salary", name: "Salary", type: "income", parent_id: "income" });
+        createAccount(raw, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
+        createAccount(raw, { id: "expense:food", name: "Food", type: "expense", parent_id: "expense" });
+
+        recordTransaction(raw, {
+          date: "2026-01-15",
+          description: "Salary deposit",
+          postings: [
+            { account_id: "asset:bank", debit: 1000, currency: "THB" },
+            { account_id: "income:salary", credit: 1000, currency: "THB" },
+          ],
+        });
+        recordTransaction(raw, {
+          date: "2026-01-20",
+          description: "Grocery run",
+          postings: [
+            { account_id: "expense:food", debit: 200, currency: "THB" },
+            { account_id: "asset:bank", credit: 200, currency: "THB" },
+          ],
+        });
+      } finally {
+        raw.close();
+      }
+
+      const nw = await runCli(["report", "net-worth", "--json"]);
+      expect(nw.code).toBe(0);
+      expect(parseOne(nw.stdout)).toMatchObject({
+        assets: 800,
+        liabilities: 0,
+        net_worth: 800,
+        currency: "THB",
+      });
+
+      const period = await runCli(["report", "period", "--from", "2026-01-01", "--to", "2026-01-31", "--json"]);
+      expect(period.code).toBe(0);
+      expect(parseOne(period.stdout)).toMatchObject({
+        from: "2026-01-01",
+        to: "2026-01-31",
+        income: 1000,
+        expenses: 200,
+        net: 800,
+      });
+    },
+    30000,
+  );
+
+  it(
+    "questions list/answer/defer round-trip",
+    async () => {
+      // Depends on the `expense:food` account seeded by the report test above.
+      let q1 = "";
+      let q2 = "";
+      const raw = new Database(dbPath);
+      raw.pragma("foreign_keys = ON");
+      try {
+        q1 = recordQuestion(raw, {
+          file_id: null,
+          transaction_id: null,
+          account_id: "expense:food",
+          kind: "uncategorized",
+          prompt: "Which category for this recurring charge?",
+          options: ["expense:food", "expense:other"],
+          context: { rule_key: "merchant:acme-foodmart" },
+        });
+        q2 = recordQuestion(raw, {
+          file_id: null,
+          transaction_id: null,
+          account_id: "expense:food",
+          kind: "duplicate",
+          prompt: "Possible duplicate — snooze for later review?",
+        });
+      } finally {
+        raw.close();
+      }
+
+      const list = await runCli(["questions", "list", "--json"]);
+      expect(list.code).toBe(0);
+      const rows = parseNdjson(list.stdout);
+      expect(rows.find((r) => r.id === q1)).toMatchObject({
+        kind: "uncategorized",
+        account_id: "expense:food",
+        options: ["expense:food", "expense:other"],
+        context: { rule_key: "merchant:acme-foodmart" },
+      });
+      expect(rows.find((r) => r.id === q2)).toMatchObject({ kind: "duplicate", context: null });
+
+      const answer = await runCli(["questions", "answer", q1, "--answer", "expense:food:groceries", "--json"]);
+      expect(answer.code).toBe(0);
+      expect(parseNdjson(answer.stdout)).toEqual([
+        { id: q1, kind: "uncategorized", answer: "expense:food:groceries", rule_key: "merchant:acme-foodmart" },
+      ]);
+
+      const defer = await runCli(["questions", "defer", q2, "--days", "5", "--json"]);
+      expect(defer.code).toBe(0);
+      expect(parseNdjson(defer.stdout)).toEqual([{ id: q2, days: 5 }]);
+
+      // Verify the underlying effect directly rather than spending another spawn.
+      const raw2 = new Database(dbPath);
+      try {
+        expect(raw2.prepare("SELECT id FROM questions WHERE id = ?").get(q1)).toBeUndefined();
+        const deferred = raw2.prepare("SELECT deferred_until FROM questions WHERE id = ?").get(q2) as
+          | { deferred_until: string }
+          | undefined;
+        expect(deferred?.deferred_until).toBeTruthy();
+      } finally {
+        raw2.close();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "notes add/list/rm round-trip",
+    async () => {
+      const add = await runCli([
+        "notes",
+        "add",
+        "--content",
+        "Prefers window seats on flights",
+        "--category",
+        "preference",
+        "--json",
+      ]);
+      expect(add.code).toBe(0);
+      const added = parseNdjson(add.stdout);
+      expect(added).toHaveLength(1);
+      expect(added[0]).toMatchObject({ content: "Prefers window seats on flights", category: "preference" });
+      const noteId = added[0].id as number;
+
+      const list = await runCli(["notes", "list", "--json"]);
+      expect(list.code).toBe(0);
+      expect(parseNdjson(list.stdout).some((n) => n.id === noteId)).toBe(true);
+
+      const rm = await runCli(["notes", "rm", String(noteId), "--yes", "--json"]);
+      expect(rm.code).toBe(0);
+      expect(parseNdjson(rm.stdout)).toEqual([
+        expect.objectContaining({ id: noteId, content: "Prefers window seats on flights" }),
+      ]);
+
+      const raw = new Database(dbPath);
+      try {
+        expect(raw.prepare("SELECT id FROM memories WHERE id = ?").get(noteId)).toBeUndefined();
+      } finally {
+        raw.close();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "doctor: healthy env exits 0, corrupted db file exits NOT_READY (3)",
+    async () => {
+      const healthy = await runCli(["doctor", "--json"]);
+      expect(healthy.code).toBe(0);
+      const report = parseOne(healthy.stdout);
+      expect(report.ok).toBe(true);
+      const byName = Object.fromEntries(report.checks.map((c: any) => [c.name, c]));
+      expect(byName.db_open.ok).toBe(true);
+      expect(byName.schema_tables_present.ok).toBe(true);
+
+      // Corrupt the shared db file in place. Intentionally the LAST test in
+      // this file: everything above depends on this db being readable.
+      writeFileSync(dbPath, Buffer.from("not a sqlite file"));
+
+      const corrupted = await runCli(["doctor", "--json"]);
+      expect(corrupted.code).toBe(3);
+      const corruptedReport = parseOne(corrupted.stdout);
+      expect(corruptedReport.ok).toBe(false);
+      const corruptedByName = Object.fromEntries(corruptedReport.checks.map((c: any) => [c.name, c]));
+      expect(corruptedByName.db_open.ok).toBe(false);
+      expect(corruptedByName.schema_tables_present.ok).toBe(false);
+    },
+    30000,
+  );
+});

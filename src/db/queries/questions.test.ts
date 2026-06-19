@@ -13,6 +13,12 @@ function freshDb() {
   return db;
 }
 
+function insertFile(db: Database.Database, id: string): void {
+  db.prepare(
+    `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'scanned')`,
+  ).run(id, `/tmp/${id}.pdf`, `hash-${id}`, "application/pdf");
+}
+
 describe("questions table", () => {
   let db: Database.Database;
   beforeEach(() => {
@@ -44,6 +50,44 @@ describe("questions table", () => {
     expect(listQuestions(db, { scanId: "sc:a" }).map(r => r.prompt)).toEqual(["a"]);
     expect(listQuestions(db, { scanId: "sc:b" }).map(r => r.prompt)).toEqual(["b"]);
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("listQuestions filters by kind when supplied", () => {
+    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
+    expect(listQuestions(db, { kind: "uncategorized" }).map(r => r.prompt)).toEqual(["a"]);
+    expect(listQuestions(db, { kind: "duplicate" }).map(r => r.prompt)).toEqual(["b"]);
+    expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b"]);
+  });
+
+  it("listQuestions filters by fileId when supplied", () => {
+    insertFile(db, "sf:a");
+    insertFile(db, "sf:b");
+    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "b" });
+    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
+    expect(listQuestions(db, { fileId: "sf:a" }).map(r => r.prompt)).toEqual(["a"]);
+    expect(listQuestions(db, { fileId: "sf:b" }).map(r => r.prompt)).toEqual(["b"]);
+  });
+
+  it("listQuestions combines kind + fileId filters", () => {
+    insertFile(db, "sf:a");
+    insertFile(db, "sf:b");
+    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "match" });
+    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "wrong-kind" });
+    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "wrong-file" });
+    expect(listQuestions(db, { kind: "uncategorized", fileId: "sf:a" }).map(r => r.prompt)).toEqual(["match"]);
+  });
+
+  it("countQuestions already supports kind and file_id scoping (pre-existing)", () => {
+    insertFile(db, "sf:a");
+    insertFile(db, "sf:b");
+    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
+    expect(countQuestions(db, { kind: "uncategorized" })).toBe(1);
+    expect(countQuestions(db, { file_id: "sf:a" })).toBe(1);
+    expect(countQuestions(db, { kind: "duplicate", file_id: "sf:b" })).toBe(1);
+    expect(countQuestions(db, { kind: "duplicate", file_id: "sf:a" })).toBe(0);
   });
 });
 

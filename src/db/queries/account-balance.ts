@@ -1,4 +1,9 @@
 import type Database from "libsql";
+import {
+  validateTransaction,
+  insertTransactionRows,
+  type TransactionInput,
+} from "./transactions.js";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
@@ -345,6 +350,95 @@ export function deleteAccount(db: Database.Database, id: string): void {
     throw new Error(`Account ${id} has ${childCount.n} child account(s); delete them first.`);
   }
   db.prepare(`DELETE FROM accounts WHERE id = ?`).run(id);
+}
+
+const EQUITY_ADJUST_ID = "equity:adjustments";
+
+export interface AdjustAccountBalanceOpts {
+  accountId: string;
+  /** The new desired balance in the account's currency, in natural sign (positive). */
+  targetAmount: number;
+  reason: string;
+  /** ISO YYYY-MM-DD. Defaults to today. */
+  date?: string;
+}
+
+export interface AdjustAccountBalanceResult {
+  /** Id of the posted balancing transaction, or null when already at target (no-op). */
+  transactionId: string | null;
+  /** target - current, in the account's natural sign. 0 on no-op. */
+  delta: number;
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Move an account's current balance to `targetAmount` by posting a balancing
+ * transaction against `equity:adjustments`. Duplicated from
+ * `ai/tools/record.ts`'s `adjustAccountBalance` tool handler (which is being
+ * removed in a later phase) so the DB-query layer owns this logic going
+ * forward. Delta is computed in integer cents to avoid float drift; a zero
+ * delta is a no-op (no transaction posted, `transactionId` is null).
+ */
+export function adjustAccountBalance(
+  db: Database.Database,
+  opts: AdjustAccountBalanceOpts,
+): AdjustAccountBalanceResult {
+  const account = findAccountById(db, opts.accountId);
+  if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
+
+  const target = Number(opts.targetAmount);
+  if (!Number.isFinite(target)) {
+    throw new Error(`targetAmount must be a number, got ${JSON.stringify(opts.targetAmount)}.`);
+  }
+
+  const balances = getAccountBalances(db);
+  const current = balances.find((b) => b.id === account.id)?.balance ?? 0;
+
+  const targetCents = Math.round(target * 100);
+  const currentCents = Math.round(current * 100);
+  const deltaCents = targetCents - currentCents;
+  if (deltaCents === 0) {
+    return { transactionId: null, delta: 0 };
+  }
+  const delta = deltaCents / 100;
+
+  const amount = Math.abs(delta);
+  const debitNormal = account.type === "asset" || account.type === "expense";
+  const debitAccountId =
+    (debitNormal && delta > 0) || (!debitNormal && delta < 0)
+      ? account.id
+      : EQUITY_ADJUST_ID;
+  const creditAccountId =
+    debitAccountId === account.id ? EQUITY_ADJUST_ID : account.id;
+
+  const date =
+    opts.date && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : todayIso();
+  const reason = String(opts.reason || "Balance adjustment").trim();
+  const currency = account.currency || "THB";
+
+  const txInput: TransactionInput = {
+    date,
+    description: reason,
+    postings: [
+      { account_id: debitAccountId, debit: amount, currency },
+      { account_id: creditAccountId, credit: amount, currency },
+    ],
+  };
+
+  const validated = validateTransaction(txInput);
+
+  const tx = db.transaction((): void => {
+    if (!findAccountById(db, EQUITY_ADJUST_ID)) {
+      ensureStructuralAccount(db, "equity:adjustments");
+    }
+    insertTransactionRows(db, validated);
+  });
+  tx();
+
+  return { transactionId: validated.id, delta };
 }
 
 /**

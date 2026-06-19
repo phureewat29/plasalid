@@ -12,3 +12,6 @@ data/
 .idea/
 coverage/
 examples
+.claude
+AGENT.md
+CLAUDE.md

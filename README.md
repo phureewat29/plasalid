@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-    Turn your scattered financial documents into structured, insightful, AI-readable context.
+    A deterministic CLI that turns scattered financial PDFs into a structured, agent-readable ledger.
 </p>
 
 <p align="center">
@@ -19,41 +19,34 @@
 
 <br />
 
-In US and Europe, most financial apps are powered by aggregators like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
+In the US and Europe, most financial apps are powered by aggregators like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
-**Plasalid is built to fix this. Think of it as a personal financial AI harness**.
+**Plasalid is built to fix this — as a harness, not an app.**
 
-You drop your raw financial documents (bank statements, credit card bills, payslips) straight into a folder on your machine. Plasalid parses those files and extracts every transaction, balance, and holding. It transforms a messy pile of PDFs into a clean, double-entry ledger. You only have to build this foundation once. The result is an open, structured backend for your finances, ready to plug into any tool you want.
+You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Plasalid gives you the primitives to turn that pile of PDFs into a clean, double-entry ledger: page rasterization, an ingest/commit pipeline, duplicate and correlation detection, and a full chart of accounts — all driven through a scriptable CLI, all stored in an encrypted local database.
 
-To show you the power of this harness out of the box, Plasalid includes a built-in AI agent. Because your ledger is fully structured, you can actually talk to your money. Ask a question like "Which subscriptions are still active?" or "What did I spend on food last month?". You get exact numbers pulled directly from your records, not estimates or AI hallucinations.
-
-We also built strict boundaries around your privacy. The database is encrypted locally. Plasalid automatically strips out all PII before sending data to an external API. This means that if you swap in a local AI model, your setup can stay 100% private and offline.
-
-<p align="center">
-  <img src=".github/plasalid-demo.png" alt="demo" width="100%" />
-</p>
+Plasalid itself contains **zero AI**. There is no built-in model, no API key to configure, no chat window. Instead, an agent CLI you already run — [Claude Code](https://claude.com/claude-code), `claude -p`, [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON — drives Plasalid: it finds your statements, reads the pages, decides what each transaction is, and pushes structured rows back in through `plasalid ingest commit`. Plasalid's job is to be the deterministic, auditable ledger underneath — not the intelligence on top.
 
 ## Features
 
 ### Unified ledger from any financial document
 
-* **Drop PDFs, get a complete ledger.** Just drag in your bank statements, credit card bills, payslips, or brokerage summaries. Plasalid uses AI to extract every transaction, balance, and holding straight into a double-entry database.
+* **Drop PDFs, get a pipeline.** `plasalid ingest list` discovers new statements, `plasalid ingest prepare` rasterizes their pages (handling encrypted PDFs via a stored password vault), and `plasalid ingest commit` posts the transactions an agent extracted straight into a double-entry ledger.
 * **No aggregators or per-bank logins.** The big picture builds itself from the documents you already get every month. Zero manual data entry and no fragile bank connectors to maintain.
 
-### Built-in AI agent that queries your real data
+### A harness, not a black box
 
-* **Ask in plain English.** Type questions like "Which subscriptions are still active?", "Where did my money go last month?", or "What is my net worth right now?".
-* **Answers from actual records.** The dates, merchants, and numbers are pulled directly from your ledger. You get hard facts. Nothing is estimated and nothing is invented.
+* **Every command speaks JSON.** `--json` turns any command into NDJSON — one object per line, a `summary` line to close out a batch, and a single JSON object on stderr on failure. Exit codes are stable and specific (see below), so an agent (or a shell script) can branch on outcome without scraping text.
+* **Open questions instead of silent guesses.** When the pipeline can't confidently resolve an account or a merchant, it raises a question (`plasalid questions list`) instead of guessing. You or your agent resolve it once with `plasalid questions answer`, and that resolution is remembered.
+* **Full manual control when you want it.** Every step of the pipeline — accounts, postings, merchants, transactions — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
 
-### Local-first, private, and open as a harness
+### Local-first, encrypted, and inspectable
 
-* **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database. There are no cloud aggregators or upstream accounts. No third party ever touches your data.
-* **PII redacted by default.** Your name, phone numbers, and full account details are completely scrubbed before any prompt leaves your hardware.
-* **Bring your own AI.** Choose Anthropic, OpenAI, Google Gemini, or any OpenAI-compatible local model during setup. If you run a local model, your setup stays 100% private and offline.
-* **A harness layer for AI agents.** The structured ledger acts as your baseline data layer. It is designed to be open and ready for any external tools you want to plug in.
-
+* **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
+* **Redaction on tap.** Read commands that touch free text (`accounts list`, `postings list/search`, `tx show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
 
@@ -66,75 +59,109 @@ Requires Node ≥ 18.
 ## Quick Start
 
 ```bash
-plasalid setup
+plasalid setup --generate-key
 ```
 
-Then:
+This creates `~/.plasalid/` (config, encrypted database, data directory) and generates a database encryption key for you.
 
-1. Run `plasalid data` (alias: `plasalid open`) to pop open your data folder in Finder/Explorer, then drag in any bank or credit-card statement PDF you've got. **One file is enough to start** — Plasalid will already give you useful answers about that account. More files make the picture richer.
-2. Run `plasalid scan` — parses your PDFs end-to-end into ledgers.
-3. Run `plasalid clarify` to clear up anything the scanner flagged as a question. Your answers become memory rules that future scans reuse automatically.
-4. Run `plasalid` to chat with the built-in AI agent over your ledger.
+Then drop some statements in:
 
-Other day-to-day commands:
+```bash
+plasalid data          # opens ~/.plasalid/data in Finder/Explorer — drag PDFs in
+```
 
-- `plasalid scan <regex>` — only scan files whose path matches the regex.
-- `plasalid scan <regex> --force` — re-scan matching files (replaces prior records).
-- `plasalid scan --parallel <n>` — scan up to N files concurrently (default 3, max 8).
-- `plasalid clarify` — walk every open question one at a time and apply your decision (categorize, merge duplicates, etc).
-- `plasalid files` — browse scanned files; press `d` to drop one and its records.
-- `plasalid rules` — browse learned memory rules; press `d` to delete a rule.
+From here you have two paths:
+
+**Drive it yourself:**
+
+```bash
+plasalid ingest list                                  # see what's new
+plasalid ingest prepare <path> --pages 1-3             # rasterize pages to PNG
+# read the pages yourself, build transaction JSON, then:
+plasalid ingest commit < transactions.ndjson
+plasalid questions list                               # resolve anything raised
+```
+
+**Let an agent drive it:**
+
+```bash
+plasalid agent-setup --claude   # or --codex — installs a skill pack for your agent CLI
+```
+
+Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
+
+## The agent workflow
+
+This is the loop `agent-setup`'s skill pack teaches an agent CLI to run:
+
+1. **Discover** — `plasalid ingest list --json` to find new/pending files.
+2. **Export pages** — `plasalid ingest prepare <path>` rasterizes the statement to page images (or extracted PDF pages), handling encrypted files via `plasalid vault`.
+3. **Read** — the agent reads the exported pages itself (it has vision; Plasalid does not).
+4. **Commit** — the agent pipes the transactions it extracted, as NDJSON or a JSON array, into `plasalid ingest commit`, which posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback).
+5. **Resolve** — the agent (or you) works through `plasalid questions list` / `answer` / `defer` for whatever got raised, then closes the file out with `plasalid ingest done <id>`.
 
 ## Commands
 
-Run `plasalid --help` to see all available commands.
-
-```bash
-plasalid                            # Interactive chat with your data
-plasalid setup                      # Configure API key, encryption, and data directory
-plasalid data                       # Open the Plasalid data folder in your file explorer
-plasalid accounts                   # Show the accounts with balances
-plasalid transactions               # List transactions and their postings (filter by --account, --from, --to, --query, --limit)
-plasalid status                     # Net worth and this-month income/expense totals
-plasalid record [utterance]         # Add a manual transaction, account, balance, or merchant from a plain-language line
-plasalid scan [regex] [--force]     # Scan new PDFs; --force cascade-deletes prior records before re-scanning
-plasalid clarify                    # Walk every open question and apply your decision
-plasalid files                      # Browse scanned files;
-plasalid rules                      # Browse learned memory rules;
-```
-
-## How It Works
+Run `plasalid --help` (or `plasalid <noun> --help`) for the full flag reference. Grouped overview:
 
 ```
-  Bank · Card · Payslip · Brokerage · Transfer · Receipt
-                  │
-             (drop PDFs)
-                  │
-       ┌──────────▼──────────┐
-       │  ~/.plasalid/data/  │
-       └──────────┬──────────┘
-                  │
-    plasalid scan / plasalid record
-                  │
-       AI provider (PII-redacted)
-                  │
-       ┌──────────▼──────────┐
-       │     Encrypted DB    │◀──── plasalid clarify
-       └──────────┬──────────┘       
-                  │                   
-               plasalid               
+plasalid                # Harness status: config, database, ledger counts, net worth (default)
+plasalid doctor         # Diagnose the harness environment
+plasalid setup          # Initialize the harness non-interactively
+plasalid config         # Show and set harness configuration
+plasalid agent-setup    # Install the skill pack for an agent CLI (--claude | --codex)
+
+plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail / clean
+plasalid files          # Browse scanned files (list / show / drop)
+plasalid vault          # Manage file-password patterns for encrypted statements
+
+plasalid tx             # Create, inspect, edit, and recategorize transactions
+plasalid postings       # List, search, and edit postings
+plasalid accounts       # Manage the chart of accounts
+plasalid merchants      # Manage merchants and their default accounts
+plasalid questions      # List, answer, and defer open questions
+
+plasalid report         # Net-worth and period reports
+plasalid analyze        # Find duplicate and correlated transactions
+plasalid notes          # Manage freeform notes
+plasalid taxonomy       # Dump the Thai institution registry
+plasalid context        # Show the harness context bundle / its path
+
+plasalid data           # Open the data folder in your OS file explorer (alias: open)
 ```
 
-Two main outbound calls: the AI provider during scan, and the AI provider during chat. Both are PII-redacted. Your financial data is never stored off your machine. No telemetry. No analytics.
+## The `--json` contract
+
+Every command supports three output modes, resolved once per run:
+
+| Mode | Trigger | Shape |
+|---|---|---|
+| NDJSON | `--json` | One JSON object per record on stdout; a `{"type":"summary",...}` line closes out streaming commands; on failure, one JSON object on stderr. Never colored. |
+| Human table | TTY, no `--json` | Aligned, colored (chalk) tables. |
+| Plain | piped, no `--json` | Tab-separated rows, zero ANSI, stable for scripts that don't want JSON. |
+
+Global flags on every command: `--json`, `--no-color`, `--quiet`.
+
+Exit codes are stable across the whole CLI:
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | OK | success |
+| 1 | GENERIC | unexpected error |
+| 2 | USAGE | bad flags/arguments |
+| 3 | NOT_READY | harness not configured / database not reachable |
+| 4 | INPUT_REQUIRED | needs a password, confirmation, or other input |
+| 5 | NOT_FOUND | referenced id/pattern doesn't exist |
+| 6 | INVALID | input failed validation |
+| 7 | PARTIAL | a batch operation partially succeeded (see `ingest commit`) |
 
 ## Security & Privacy
 
-- All financial data stored locally in `~/.plasalid/db.sqlite`
-- Database encrypted with AES-256 (libsql)
-- Config file stored with `0600` permissions
-- PII redacted before sending to any AI provider
-- Encrypted-PDF passwords are AES-GCM-encrypted inside `db.sqlite` under a filename pattern; never written to disk in plaintext.
-- Only outbound traffic is to your configured AI provider
+- All financial data stored locally, encrypted with AES-256 (libsql), default `~/.plasalid/db.sqlite`.
+- Config file (`~/.plasalid/config.json`) written with `0600` permissions; the only secret it holds is the database encryption key, and `config show` only ever surfaces a fingerprint of it, never the plaintext.
+- Encrypted-PDF passwords are stored AES-GCM-encrypted in `db.sqlite` under a filename pattern; never written to disk in plaintext.
+- `--redact` masks PII in free-text fields on read commands before you pipe output anywhere.
+- No telemetry, no analytics, no network calls made by Plasalid itself.
 
 ## Configuration
 
@@ -142,43 +169,31 @@ Plasalid stores everything in `~/.plasalid/`:
 
 ```
 ~/.plasalid/
-  config.json          # API keys and preferences (0600 permissions)
-  context.md           # Persistent personal context
-  db.sqlite            # Encrypted SQLite database
-  data/                # Drop any PDFs here (subfolders allowed; AI classifies)
+  config.json    # locale, currency, paths, encryption key fingerprint (0600 permissions)
+  context.md     # persistent freeform context an agent can read (plasalid context show)
+  db.sqlite      # encrypted SQLite database
+  data/          # drop any PDFs here (subfolders allowed)
+  cache/         # scratch space for rasterized/decrypted pages handed to an agent
 ```
 
-`db.sqlite` holds the three-layer ledger (hierarchical accounts, deduplicated merchants with categories, transactions and postings), scan history, open questions awaiting clarify, persisted long-term memory rules learned across scans, and AES-GCM-encrypted passwords. Everything is wrapped in libsql's AES-256 page encryption.
+### Environment variables
 
-### Environment Variables
-
-Only the provider you select needs its block configured — leave the rest unset.
+See `.env.example` for the full, current list. As of this release:
 
 ```bash
-# Provider selection
-PLASALID_PROVIDER=            # anthropic | openai | gemini | openai-compat (default: anthropic)
+# Passphrase used to encrypt the local SQLite database (AES-256).
+# `plasalid setup` generates one if left blank.
+PLASALID_DB_ENCRYPTION_KEY=
 
-# Anthropic
-ANTHROPIC_API_KEY=            # required when provider is anthropic
-ANTHROPIC_MODEL=              # default: claude-sonnet-4-6
+# Default: ~/.plasalid/db.sqlite
+PLASALID_DB_PATH=
 
-# OpenAI
-OPENAI_API_KEY=               # required when provider is openai
-OPENAI_MODEL=                 # default: gpt-5.4-mini
+# Default: ~/.plasalid/data
+PLASALID_DATA_DIR=
 
-# Google Gemini
-GEMINI_API_KEY=               # required when provider is gemini
-GEMINI_MODEL=                 # default: gemini-2.5-pro
-
-# OpenAI-compatible (LM Studio, Ollama, vLLM, etc.)
-OPENAI_COMPAT_BASE_URL=       # e.g. http://localhost:1234/v1
-OPENAI_COMPAT_API_KEY=        # often blank for local servers
-OPENAI_COMPAT_MODEL=          # e.g. qwen/qwen3-vl-7b
-
-# Storage
-PLASALID_DB_ENCRYPTION_KEY=   # DB encryption passphrase
-PLASALID_DB_PATH=             # Default: ~/.plasalid/db.sqlite
-PLASALID_DATA_DIR=            # Default: ~/.plasalid/data
+# Scratch space for decrypted/rasterized artifacts handed to external agent CLIs.
+# Default: ~/.plasalid/cache
+PLASALID_CACHE_DIR=
 ```
 
 ## Contributing
@@ -190,6 +205,8 @@ npm install
 npm run build
 npm link # makes 'plasalid' available globally
 ```
+
+`npm run smoke` builds and runs a non-TTY smoke test over the full read-only command surface (NDJSON validity, exit codes, zero ANSI).
 
 ## License
 

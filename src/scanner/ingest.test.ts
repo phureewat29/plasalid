@@ -1,0 +1,270 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+} from "fs";
+import { tmpdir } from "os";
+import { resolve } from "path";
+import Database from "libsql";
+import { migrate } from "../db/schema.js";
+import { generateKey } from "../db/encryption.js";
+import { config } from "../config.js";
+import { createAccount } from "../db/queries/account-balance.js";
+import { upsertMerchant } from "../db/queries/merchants.js";
+import {
+  recordTransaction,
+  countTransactionsBySourceFile,
+} from "../db/queries/transactions.js";
+import { findScannedFileById } from "../db/queries/files.js";
+import { savePassword } from "./pdf.js";
+import {
+  discoverFiles,
+  registerPendingFile,
+  prepareFile,
+  cleanCache,
+  PasswordRequiredError,
+} from "./ingest.js";
+
+function minimalPdf(): Buffer {
+  const header = "%PDF-1.4\n";
+  const o1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+  const o2 = "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n";
+  const o3 =
+    "3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\n";
+  const offset1 = header.length;
+  const offset2 = offset1 + o1.length;
+  const offset3 = offset2 + o2.length;
+  const xrefStart = offset3 + o3.length;
+  const xref =
+    `xref\n0 4\n` +
+    `0000000000 65535 f \n` +
+    `${String(offset1).padStart(10, "0")} 00000 n \n` +
+    `${String(offset2).padStart(10, "0")} 00000 n \n` +
+    `${String(offset3).padStart(10, "0")} 00000 n \n`;
+  const trailer = `trailer<</Size 4/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.from(header + o1 + o2 + o3 + xref + trailer, "latin1");
+}
+
+async function encryptedPdf(password: string): Promise<Buffer> {
+  const mupdf = await import("mupdf");
+  const doc = mupdf.Document.openDocument(minimalPdf(), "application/pdf");
+  try {
+    const out = doc.saveToBuffer(
+      `encrypt=aes-256,user-password=${password},owner-password=${password}`,
+    );
+    return Buffer.from(out.asUint8Array());
+  } finally {
+    doc.destroy();
+  }
+}
+
+function freshDb(): Database.Database {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  return db;
+}
+
+let dataDir: string;
+let cacheDir: string;
+let outDir: string;
+
+beforeEach(() => {
+  dataDir = mkdtempSync(resolve(tmpdir(), "plasalid-ingest-data-"));
+  cacheDir = mkdtempSync(resolve(tmpdir(), "plasalid-ingest-cache-"));
+  outDir = mkdtempSync(resolve(tmpdir(), "plasalid-ingest-out-"));
+  config.dataDir = dataDir;
+  config.dbEncryptionKey = generateKey();
+  process.env.PLASALID_CACHE_DIR = cacheDir;
+});
+
+afterEach(() => {
+  for (const dir of [dataDir, cacheDir, outDir]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  delete process.env.PLASALID_CACHE_DIR;
+});
+
+describe("discoverFiles", () => {
+  it("walks recursively, dedups by hash, and flags known files", async () => {
+    const db = freshDb();
+    writeFileSync(resolve(dataDir, "a.pdf"), minimalPdf());
+    mkdirSync(resolve(dataDir, "sub"), { recursive: true });
+    writeFileSync(resolve(dataDir, "sub", "b.pdf"), minimalPdf());
+
+    const first = await discoverFiles(db);
+    expect(first).toHaveLength(2);
+    expect(first.every((e) => e.status === "new" && e.fileId === null)).toBe(true);
+    expect(first.every((e) => !e.encrypted && e.vaultCandidates === 0)).toBe(true);
+    expect(first.map((e) => e.relPath).sort()).toEqual(["a.pdf", "sub/b.pdf"]);
+
+    const target = first.find((e) => e.relPath === "a.pdf")!;
+    const { fileId } = registerPendingFile(db, target.path);
+
+    const second = await discoverFiles(db);
+    const known = second.find((e) => e.relPath === "a.pdf")!;
+    expect(known.status).toBe("pending");
+    expect(known.fileId).toBe(fileId);
+  });
+
+  it("filters by regex against the relative path", async () => {
+    const db = freshDb();
+    writeFileSync(resolve(dataDir, "a.pdf"), minimalPdf());
+    mkdirSync(resolve(dataDir, "sub"), { recursive: true });
+    writeFileSync(resolve(dataDir, "sub", "b.pdf"), minimalPdf());
+
+    const entries = await discoverFiles(db, { regex: /^sub\// });
+    expect(entries.map((e) => e.relPath)).toEqual(["sub/b.pdf"]);
+  });
+
+  it("reports encryption and matching vault candidates", async () => {
+    const db = freshDb();
+    writeFileSync(resolve(dataDir, "kbank.pdf"), await encryptedPdf("secret"));
+    savePassword(db, "^kbank.*", "secret", config.dbEncryptionKey);
+
+    const [entry] = await discoverFiles(db);
+    expect(entry.encrypted).toBe(true);
+    expect(entry.vaultCandidates).toBe(1);
+  });
+});
+
+describe("registerPendingFile", () => {
+  it("inserts a pending row and dedups on re-register", () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+
+    const first = registerPendingFile(db, path);
+    expect(first.alreadyKnown).toBe(false);
+    expect(first.fileId.startsWith("sf:")).toBe(true);
+    expect(findScannedFileById(db, first.fileId)?.status).toBe("pending");
+
+    const second = registerPendingFile(db, path);
+    expect(second).toEqual({ fileId: first.fileId, alreadyKnown: true });
+  });
+});
+
+describe("prepareFile", () => {
+  it("rasterizes requested pages to PNGs (resolving a fileId)", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+    const { fileId } = registerPendingFile(db, path);
+
+    const result = await prepareFile(db, fileId, {
+      format: "png",
+      pages: [0],
+      dpi: 72,
+      outDir,
+    });
+    expect(result.format).toBe("png");
+    expect(result.pageCount).toBe(1);
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0].page).toBe(0);
+    expect(result.pages[0].path).toBe(resolve(outDir, "p0.png"));
+
+    const png = readFileSync(result.pages[0].path);
+    expect(png[0]).toBe(0x89);
+    expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
+  });
+
+  it("defaults to every page when none are requested", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+
+    const result = await prepareFile(db, path, { dpi: 72, outDir });
+    expect(result.pages.map((p) => p.page)).toEqual([0]);
+  });
+
+  it("writes a single decrypted document.pdf for the pdf format", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+
+    const result = await prepareFile(db, path, { format: "pdf", outDir });
+    expect(result.format).toBe("pdf");
+    expect(result.pages).toEqual([{ page: 0, path: resolve(outDir, "document.pdf") }]);
+    expect(readFileSync(result.pages[0].path).subarray(0, 4).toString("latin1")).toBe(
+      "%PDF",
+    );
+  });
+
+  it("force re-registers and cascades away the prior scan's transactions", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+    createAccount(db, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
+    createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
+
+    const { fileId: oldId } = registerPendingFile(db, path);
+    const merchant = upsertMerchant(db, { canonical_name: "Shop" });
+    recordTransaction(db, {
+      date: "2026-05-01",
+      description: "Shop",
+      merchant_id: merchant.id,
+      source_file_id: oldId,
+      postings: [
+        { account_id: "expense", debit: 10 },
+        { account_id: "asset", credit: 10 },
+      ],
+    });
+    expect(countTransactionsBySourceFile(db, oldId)).toBe(1);
+
+    const result = await prepareFile(db, path, { force: true, dpi: 72, outDir });
+    expect(result.fileId).not.toBe(oldId);
+    expect(findScannedFileById(db, oldId)).toBeNull();
+    expect(countTransactionsBySourceFile(db, oldId)).toBe(0);
+  });
+
+  it("throws password_required for an encrypted PDF with no password", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "kbank.pdf");
+    writeFileSync(path, await encryptedPdf("secret"));
+
+    await expect(prepareFile(db, path, { outDir })).rejects.toMatchObject({
+      name: "PasswordRequiredError",
+      reason: "password_required",
+    });
+  });
+
+  it("unlocks an encrypted PDF with the supplied password", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "kbank.pdf");
+    writeFileSync(path, await encryptedPdf("secret"));
+
+    const result = await prepareFile(db, path, {
+      password: "secret",
+      dpi: 72,
+      outDir,
+    });
+    expect(result.pageCount).toBe(1);
+    expect(existsSync(result.pages[0].path)).toBe(true);
+  });
+});
+
+describe("cleanCache", () => {
+  it("purges one file's subdir and then the whole cache", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+
+    // No outDir -> lands under getCacheDir()/<fileId> (redirected to tmp).
+    const one = await prepareFile(db, path, { dpi: 72 });
+    const oneDir = resolve(cacheDir, one.fileId);
+    expect(existsSync(oneDir)).toBe(true);
+
+    const removedOne = cleanCache(one.fileId);
+    expect(removedOne.removed).toEqual([oneDir]);
+    expect(existsSync(oneDir)).toBe(false);
+
+    await prepareFile(db, path, { dpi: 72, force: true });
+    const removedAll = cleanCache();
+    expect(removedAll.removed.length).toBeGreaterThan(0);
+    expect(existsSync(cacheDir)).toBe(false);
+  });
+});

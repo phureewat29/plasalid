@@ -6,6 +6,7 @@ import {
   listPostings,
   countTransactions,
   bulkUpdatePostings,
+  getTransaction,
 } from "./transactions.js";
 import { upsertMerchant } from "./merchants.js";
 import { getAccountBalances, getNetWorth } from "./account-balance.js";
@@ -348,6 +349,62 @@ describe("bulkUpdatePostings", () => {
       { account_id: "income:salary" },
     );
     expect(result.affected).toBe(1);
+  });
+});
+
+describe("getTransaction", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+  });
+
+  it("returns the header, postings (with account names), and merchant canonical_name", () => {
+    const merchant = upsertMerchant(db, { canonical_name: "Spotify" });
+    const id = recordTransaction(db, {
+      date: "2026-02-01",
+      description: "Spotify subscription",
+      merchant_id: merchant.id,
+      postings: [
+        { account_id: "expense:food", debit: 199 },
+        { account_id: "asset:kbank", credit: 199 },
+      ],
+    });
+
+    const detail = getTransaction(db, id)!;
+    expect(detail.id).toBe(id);
+    expect(detail.date).toBe("2026-02-01");
+    expect(detail.description).toBe("Spotify subscription");
+    expect(detail.merchant_id).toBe(merchant.id);
+    expect(detail.merchant_name).toBe("Spotify");
+    expect(detail.postings).toHaveLength(2);
+
+    const foodPosting = detail.postings.find(p => p.account_id === "expense:food")!;
+    expect(foodPosting.account_name).toBe("Food");
+    expect(foodPosting.debit).toBe(199);
+    expect(foodPosting.credit).toBe(0);
+
+    const kbankPosting = detail.postings.find(p => p.account_id === "asset:kbank")!;
+    expect(kbankPosting.account_name).toBe("KBank Savings");
+    expect(kbankPosting.credit).toBe(199);
+  });
+
+  it("returns a null merchant_name when the transaction has no merchant", () => {
+    const id = recordTransaction(db, {
+      date: "2026-02-01",
+      description: "Cash withdrawal",
+      postings: [
+        { account_id: "expense:food", debit: 500 },
+        { account_id: "asset:kbank", credit: 500 },
+      ],
+    });
+
+    const detail = getTransaction(db, id)!;
+    expect(detail.merchant_id).toBeNull();
+    expect(detail.merchant_name).toBeNull();
+  });
+
+  it("returns null for a missing transaction id", () => {
+    expect(getTransaction(db, "tx:nope")).toBeNull();
   });
 });
 

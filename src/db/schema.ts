@@ -1,6 +1,17 @@
 import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
+  // Backward compatibility is NOT required. If we detect a pre-harness-cut
+  // schema (old provider/model columns on scanned_files, or the deleted
+  // conversation_history/hints tables), wipe every table and rebuild the clean
+  // shape below. Data loss on legacy DBs is accepted and intended — the user
+  // gets a fresh, empty ledger. Fresh and already-migrated DBs are NOT legacy,
+  // so they skip the wipe and every CREATE ... IF NOT EXISTS is a no-op, making
+  // a second migrate() call idempotent.
+  if (isLegacySchema(db)) {
+    dropAllTables(db);
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY,
@@ -47,8 +58,7 @@ export function migrate(db: Database.Database): void {
       status TEXT NOT NULL CHECK(status IN ('pending','scanned','failed')),
       raw_text TEXT,
       scanned_at TEXT,
-      provider TEXT,
-      model TEXT,
+      source TEXT,
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -103,13 +113,6 @@ export function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS questions_scan_idx ON questions(scan_id);
     CREATE INDEX IF NOT EXISTS questions_deferred_idx ON questions(deferred_until);
 
-    CREATE TABLE IF NOT EXISTS conversation_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
     CREATE TABLE IF NOT EXISTS memories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       content TEXT NOT NULL,
@@ -130,33 +133,51 @@ export function migrate(db: Database.Database): void {
       use_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-
-    CREATE TABLE IF NOT EXISTS hints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      text TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
   `);
-
-  dropLegacySubsystems(db);
 }
 
 /**
- * One-shot cleanup for DBs that pre-date the rules + recurrences rip-out.
- * Safe on fresh DBs (every step is conditional).
+ * Detect a pre-harness-cut database. Two cheap signals, either of which is
+ * conclusive:
+ *   - the deleted `conversation_history` / `hints` tables still exist, or
+ *   - `scanned_files` still carries the old `provider` / `model` columns.
+ * A fresh (empty) DB and an already-migrated clean DB both return false, so the
+ * caller only wipes genuinely-legacy databases.
  */
-function dropLegacySubsystems(db: Database.Database): void {
-  db.exec(`DROP TABLE IF EXISTS rules`);
-  db.exec(`DROP TABLE IF EXISTS recurrences`);
+function isLegacySchema(db: Database.Database): boolean {
+  const legacyTable = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name IN ('conversation_history', 'hints')
+        LIMIT 1`,
+    )
+    .get();
+  if (legacyTable) return true;
 
-  const cols = db
-    .prepare(`PRAGMA table_info(transactions)`)
+  const fileCols = db
+    .prepare(`PRAGMA table_info(scanned_files)`)
     .all() as { name: string }[];
-  if (cols.some(c => c.name === "recurrence_id")) {
-    db.exec(`ALTER TABLE transactions DROP COLUMN recurrence_id`);
-  }
+  return fileCols.some(c => c.name === "provider" || c.name === "model");
+}
 
-  db.exec(
-    `DELETE FROM questions WHERE kind IN ('recurrence_candidate')`,
-  );
+/**
+ * Drop every user table (nuke). Foreign-key enforcement is toggled off for the
+ * teardown so drop order and cross-table references can't raise constraint
+ * violations, then restored. Called only after isLegacySchema() confirms a
+ * legacy DB; migrate() rebuilds the clean shape immediately afterwards.
+ * (Safe to toggle the pragma here: migrate() runs outside any transaction.)
+ */
+function dropAllTables(db: Database.Database): void {
+  const tables = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+    .all() as { name: string }[];
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    for (const { name } of tables) {
+      db.exec(`DROP TABLE IF EXISTS "${name}"`);
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 }

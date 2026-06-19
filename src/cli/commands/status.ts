@@ -1,117 +1,239 @@
+import type { Command } from "commander";
 import chalk from "chalk";
-import type Database from "libsql";
-import { getDb } from "../../db/connection.js";
-import { getNetWorth } from "../../db/queries/account-balance.js";
-import { countTransactions } from "../../db/queries/transactions.js";
-import { countScannedFiles } from "../../db/queries/files.js";
-import { countQuestions } from "../../db/queries/questions.js";
-import { countMemories } from "../../ai/memory.js";
-import { config, getActiveModel } from "../../config.js";
+import { config, getConfigPath, getDataDir } from "../../config.js";
+import { existsSync } from "fs";
 import { formatAmount } from "../../currency.js";
 import { banner, visibleLength } from "../format.js";
+import { currentMode, emit, runAction } from "../output.js";
+
+interface Counts {
+  accounts: number;
+  transactions: number;
+  postings: number;
+  merchants: number;
+  notes: number;
+}
+
+interface StatusReport {
+  type: "status";
+  configured: boolean;
+  config_path: string;
+  data_dir: string;
+  db: {
+    path: string;
+    reachable: boolean;
+    encrypted: boolean;
+    error: string | null;
+  };
+  counts: Counts | null;
+  files: { scanned: number; pending: number; failed: number } | null;
+  questions: { open: number; deferred: number } | null;
+  net_worth: { assets: number; liabilities: number; net_worth: number } | null;
+}
+
+async function buildReport(): Promise<StatusReport> {
+  const report: StatusReport = {
+    type: "status",
+    configured: existsSync(getConfigPath()),
+    config_path: getConfigPath(),
+    data_dir: getDataDir(),
+    db: {
+      path: config.dbPath,
+      reachable: false,
+      encrypted: !!config.dbEncryptionKey,
+      error: null,
+    },
+    counts: null,
+    files: null,
+    questions: null,
+    net_worth: null,
+  };
+
+  // Heavy db-layer imports are deferred so that other (non-db) commands do not
+  // pay for libsql on startup. getDb() is wrapped so an unconfigured / wrong-key
+  // / unreadable database degrades to a not-ready report rather than crashing.
+  try {
+    const { getDb } = await import("../../db/connection.js");
+    const { getAccountBalances, getNetWorth } = await import(
+      "../../db/queries/account-balance.js"
+    );
+    const { countTransactions } = await import("../../db/queries/transactions.js");
+    const { countScannedFiles } = await import("../../db/queries/files.js");
+    const { countQuestions } = await import("../../db/queries/questions.js");
+    const { listMerchants } = await import("../../db/queries/merchants.js");
+    const { countMemories } = await import("../../db/queries/notes.js");
+
+    const db = getDb();
+    report.db.reachable = true;
+
+    const tx = countTransactions(db);
+    report.counts = {
+      accounts: getAccountBalances(db).length,
+      transactions: tx.transactions,
+      postings: tx.postings,
+      merchants: listMerchants(db, { limit: 1000 }).length,
+      notes: countMemories(db),
+    };
+    report.files = countScannedFiles(db);
+    const open = countQuestions(db);
+    const total = countQuestions(db, { includeDeferred: true });
+    report.questions = { open, deferred: Math.max(0, total - open) };
+    report.net_worth = getNetWorth(db);
+  } catch (err) {
+    report.db.reachable = false;
+    report.db.error = err instanceof Error ? err.message : String(err);
+  }
+
+  return report;
+}
+
+// Free-text / path fields in a StatusReport that can leak the user's name or
+// home directory. Counts, booleans, and net-worth numbers are left verbatim.
+const STATUS_REDACT_FIELDS = ["config_path", "data_dir", "path", "error"] as const;
+
+export async function runStatus(opts: { redact?: boolean } = {}): Promise<void> {
+  let report = await buildReport();
+  if (opts.redact) {
+    const { applyRedaction } = await import("../../privacy/redactor.js");
+    report = applyRedaction(report, true, STATUS_REDACT_FIELDS);
+  }
+  const mode = currentMode();
+  if (mode.json) {
+    emit(report);
+    return;
+  }
+  if (mode.tty) {
+    renderTty(report, mode.color);
+    return;
+  }
+  renderPlain(report);
+}
+
+function renderPlain(r: StatusReport): void {
+  const lines: [string, string | number | boolean][] = [
+    ["configured", r.configured],
+    ["config_path", r.config_path],
+    ["data_dir", r.data_dir],
+    ["db_path", r.db.path],
+    ["db_reachable", r.db.reachable],
+    ["db_encrypted", r.db.encrypted],
+  ];
+  if (r.db.error) lines.push(["db_error", r.db.error]);
+  if (r.counts) {
+    lines.push(
+      ["accounts", r.counts.accounts],
+      ["transactions", r.counts.transactions],
+      ["postings", r.counts.postings],
+      ["merchants", r.counts.merchants],
+      ["notes", r.counts.notes],
+    );
+  }
+  if (r.files) {
+    lines.push(
+      ["files_scanned", r.files.scanned],
+      ["files_pending", r.files.pending],
+      ["files_failed", r.files.failed],
+    );
+  }
+  if (r.questions) {
+    lines.push(
+      ["questions_open", r.questions.open],
+      ["questions_deferred", r.questions.deferred],
+    );
+  }
+  if (r.net_worth) {
+    lines.push(
+      ["net_worth", r.net_worth.net_worth],
+      ["assets", r.net_worth.assets],
+      ["liabilities", r.net_worth.liabilities],
+    );
+  }
+  process.stdout.write(lines.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n");
+}
 
 const LABEL_WIDTH = 18;
 
-interface Row {
-  label: string;
-  value: string;
-  suffix?: string;
-}
+function renderTty(r: StatusReport, color: boolean): void {
+  const dim = (s: string) => (color ? chalk.dim(s) : s);
+  const bold = (s: string) => (color ? chalk.bold.yellow(s) : s);
 
-export function showStatus(): void {
-  const db = getDb();
-  console.log("");
-  console.log(banner());
-  console.log("");
-  printSection("Financial", financialRows(db));
-  console.log("");
-  printSection("System", systemRows(db));
-  console.log("");
-  printSection("Model", modelRows(), { align: "left" });
-}
+  const section = (title: string, rows: [string, string][]): void => {
+    process.stdout.write(bold(title) + "\n");
+    const valueWidth = Math.max(0, ...rows.map(([, v]) => visibleLength(v)));
+    for (const [label, value] of rows) {
+      const pad = " ".repeat(Math.max(0, valueWidth - visibleLength(value)));
+      process.stdout.write(`  ${label.padEnd(LABEL_WIDTH)}${pad}${value}\n`);
+    }
+    process.stdout.write("\n");
+  };
 
-function financialRows(db: Database.Database): Row[] {
-  const nw = getNetWorth(db);
-  return [
-    { label: "Net worth", value: formatAmount(nw.net_worth) },
-    { label: "Assets", value: chalk.dim(formatAmount(nw.assets)) },
-    { label: "Liabilities", value: chalk.dim(formatAmount(nw.liabilities)) },
-  ];
-}
+  process.stdout.write("\n" + (color ? banner() : stripBanner()) + "\n\n");
 
-function systemRows(db: Database.Database): Row[] {
-  const tx = countTransactions(db);
-  const files = countScannedFiles(db);
-  const memories = countMemories(db);
-  const questions = countQuestions(db);
+  section("System", [
+    ["Configured", r.configured ? "yes" : dim("no")],
+    ["Data dir", dim(r.data_dir)],
+    [
+      "Database",
+      r.db.reachable
+        ? `ready${r.db.encrypted ? dim(" (encrypted)") : ""}`
+        : dim(r.db.error ? `not ready — ${r.db.error}` : "not ready"),
+    ],
+  ]);
 
-  const rows: Row[] = [
-    {
-      label: "Transactions",
-      value: formatInteger(tx.transactions),
-      suffix:
-        tx.postings > 0
-          ? chalk.dim(`(${formatInteger(tx.postings)} postings)`)
-          : undefined,
-    },
-  ];
-
-  if (files.scanned + files.pending + files.failed > 0) {
-    const extras: string[] = [];
-    if (files.pending > 0) extras.push(`${files.pending} pending`);
-    if (files.failed > 0) extras.push(chalk.red(`${files.failed} failed`));
-    rows.push({
-      label: "Scanned",
-      value: formatInteger(files.scanned),
-      suffix:
-        extras.length > 0 ? chalk.dim(`(${extras.join(", ")})`) : undefined,
-    });
+  if (r.counts) {
+    section("Ledger", [
+      ["Accounts", formatInt(r.counts.accounts)],
+      [
+        "Transactions",
+        `${formatInt(r.counts.transactions)}  ${dim(`(${formatInt(r.counts.postings)} postings)`)}`,
+      ],
+      ["Merchants", formatInt(r.counts.merchants)],
+      ["Notes", formatInt(r.counts.notes)],
+    ]);
   }
 
-  if (memories > 0) {
-    rows.push({ label: "Memories", value: formatInteger(memories) });
+  if (r.files || r.questions) {
+    const rows: [string, string][] = [];
+    if (r.files) {
+      const extras: string[] = [];
+      if (r.files.pending > 0) extras.push(`${r.files.pending} pending`);
+      if (r.files.failed > 0) extras.push(`${r.files.failed} failed`);
+      rows.push([
+        "Files",
+        `${formatInt(r.files.scanned)}${extras.length ? "  " + dim(`(${extras.join(", ")})`) : ""}`,
+      ]);
+    }
+    if (r.questions) {
+      rows.push([
+        "Questions",
+        `${formatInt(r.questions.open)} open${r.questions.deferred ? "  " + dim(`(${r.questions.deferred} deferred)`) : ""}`,
+      ]);
+    }
+    section("Pipeline", rows);
   }
 
-  if (questions > 0) {
-    rows.push({
-      label: "Questions",
-      value: chalk.yellow(formatInteger(questions)),
-      suffix: chalk.dim("run `plasalid clarify`"),
-    });
-  }
-
-  return rows;
-}
-
-function modelRows(): Row[] {
-  return [
-    { label: "Provider", value: config.providerType },
-    { label: "Model", value: getActiveModel() },
-  ];
-}
-
-function printSection(
-  title: string,
-  rows: Row[],
-  opts?: { align?: "left" | "right" },
-): void {
-  const align = opts?.align ?? "right";
-  console.log(chalk.bold.yellow(title));
-  const valueWidth = Math.max(0, ...rows.map((r) => visibleLength(r.value)));
-  for (const row of rows) {
-    const label = row.label.padEnd(LABEL_WIDTH);
-    const valuePad = " ".repeat(
-      Math.max(0, valueWidth - visibleLength(row.value)),
-    );
-    const suffix = row.suffix ? `  ${row.suffix}` : "";
-    const body =
-      align === "left"
-        ? `${row.value}${valuePad}${suffix}`
-        : `${valuePad}${row.value}${suffix}`;
-    console.log(`  ${label}${body}`);
+  if (r.net_worth) {
+    section("Financial", [
+      ["Net worth", formatAmount(r.net_worth.net_worth)],
+      ["Assets", dim(formatAmount(r.net_worth.assets))],
+      ["Liabilities", dim(formatAmount(r.net_worth.liabilities))],
+    ]);
   }
 }
 
-function formatInteger(n: number): string {
+function stripBanner(): string {
+  // eslint-disable-next-line no-control-regex
+  return banner().replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function formatInt(n: number): string {
   return n.toLocaleString("en-US");
+}
+
+export function registerStatus(program: Command): void {
+  program
+    .command("status")
+    .description("Show harness status: config, database, ledger counts, net worth")
+    .option("--redact", "mask PII (config/data/db paths and error text) in output")
+    .action(runAction(async (opts: { redact?: boolean }) => runStatus(opts)));
 }

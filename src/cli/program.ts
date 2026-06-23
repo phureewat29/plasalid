@@ -1,0 +1,136 @@
+import { Command, Help } from "commander";
+import { createRequire } from "module";
+import { config } from "../config.js";
+import { helpScreen } from "./format.js";
+import { runAction } from "./output.js";
+
+// Harness command modules. Each registers its own noun + subcommand tree.
+import { registerStatus, runStatus } from "./commands/status.js";
+import { registerDoctor } from "./commands/doctor.js";
+import { registerSetup } from "./commands/setup.js";
+import { registerConfig } from "./commands/config-cmd.js";
+import { registerIngest } from "./commands/ingest.js";
+import { registerFiles } from "./commands/files.js";
+import { registerVault } from "./commands/vault.js";
+import { registerTx } from "./commands/tx.js";
+import { registerPostings } from "./commands/postings.js";
+import { registerAccounts } from "./commands/accounts.js";
+import { registerMerchants } from "./commands/merchants.js";
+import { registerQuestions } from "./commands/questions.js";
+import { registerReport } from "./commands/report.js";
+import { registerAnalyze } from "./commands/analyze.js";
+import { registerNotes } from "./commands/notes.js";
+import { registerTaxonomy } from "./commands/taxonomy.js";
+import { registerContext } from "./commands/context.js";
+import { registerAgentSetup } from "./commands/agent-setup.js";
+
+export const COMMANDS = [
+  { name: "status", desc: "Harness status: config, database, ledger counts, net worth (default)" },
+  { name: "doctor", desc: "Diagnose the harness environment" },
+  { name: "setup", desc: "Initialize the harness non-interactively" },
+  { name: "agent-setup", desc: "Install the skill pack for external agent CLIs (Claude Code, codex)" },
+  { name: "config", desc: "Show and set harness configuration" },
+  { name: "ingest", desc: "Ingest pipeline: list/prepare/commit/done/fail/clean" },
+  { name: "files", desc: "Browse scanned files (list/show/drop)" },
+  { name: "vault", desc: "Manage file-password patterns for encrypted statements" },
+  { name: "tx", desc: "Create, inspect, edit, and recategorize transactions" },
+  { name: "postings", desc: "List, search, and edit postings" },
+  { name: "accounts", desc: "Manage the chart of accounts" },
+  { name: "merchants", desc: "Manage merchants and their default accounts" },
+  { name: "questions", desc: "List, answer, and defer open questions" },
+  { name: "report", desc: "Net-worth and period reports" },
+  { name: "analyze", desc: "Find duplicate and correlated transactions" },
+  { name: "notes", desc: "Manage freeform notes" },
+  { name: "taxonomy", desc: "Dump the Thai institution registry" },
+  { name: "context", desc: "Show the harness context bundle / its path" },
+  { name: "data", desc: "Open the data folder in your OS file explorer (alias: open)" },
+];
+
+export const GLOBAL_OPTIONS = [
+  { name: "--json", desc: "Emit NDJSON (machine-readable) instead of human output" },
+  { name: "--no-color", desc: "Disable ANSI color output" },
+];
+
+/**
+ * Construct the full commander program: root command, every noun's
+ * subcommand tree, global flags, and the branded root help screen. Pure
+ * construction only — never parses argv or executes an action. Callers own
+ * calling `.parse()` / `.parseAsync()`.
+ */
+export function buildProgram(): Command {
+  const require = createRequire(import.meta.url);
+  const { version } = require("../../package.json");
+
+  const program = new Command();
+
+  program
+    .name("plasalid")
+    .description("The Harness Layer for Personal Finance")
+    .version(version)
+    .addHelpCommand(false)
+    .showHelpAfterError("Run `plasalid --help` for the list of commands.")
+    // No-arg default action runs status (same implementation as the `status`
+    // command), so `plasalid` on its own reports harness status.
+    .action(
+      runAction(async () => {
+        await runStatus();
+      }),
+    );
+
+  // `data` opens the OS file explorer at the data dir; a thin, db-free command.
+  program
+    .command("data")
+    .alias("open")
+    .description("Open the Plasalid data folder in your OS file explorer")
+    .action(
+      runAction(async () => {
+        const { runDataCommand } = await import("./commands/data.js");
+        await runDataCommand();
+      }),
+    );
+
+  registerStatus(program);
+  registerDoctor(program);
+  registerSetup(program);
+  registerConfig(program);
+  registerIngest(program);
+  registerFiles(program);
+  registerVault(program);
+  registerTx(program);
+  registerPostings(program);
+  registerAccounts(program);
+  registerMerchants(program);
+  registerQuestions(program);
+  registerReport(program);
+  registerAnalyze(program);
+  registerNotes(program);
+  registerTaxonomy(program);
+  registerContext(program);
+  registerAgentSetup(program);
+
+  // Global flags on EVERY command so they are accepted before or after the
+  // subcommand (`plasalid --json vault list` and `plasalid vault list --json`).
+  // getOutputMode() OR-walks the command chain, so wherever commander lands the
+  // flag, the resolved mode sees it. Applied after registration so the whole tree
+  // exists.
+  function addGlobalOptions(cmd: Command): void {
+    cmd
+      .option("--json", "Emit NDJSON (machine-readable) instead of human output")
+      .option("--no-color", "Disable ANSI color output");
+    for (const sub of cmd.commands) addGlobalOptions(sub);
+  }
+  addGlobalOptions(program);
+
+  program.configureHelp({
+    // Root help stays the branded screen; subcommands fall back to commander's
+    // default formatter so `plasalid <noun> --help` shows the real subcommand tree
+    // (configureHelp is inherited by subcommands, hence the explicit root guard).
+    formatHelp: (cmd, helper) =>
+      cmd === program
+        ? helpScreen(COMMANDS, GLOBAL_OPTIONS)
+        : Help.prototype.formatHelp.call(helper, cmd, helper),
+  });
+
+  void config; // keep config import live so dotenv loads
+  return program;
+}

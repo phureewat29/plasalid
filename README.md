@@ -45,7 +45,7 @@ Plasalid itself contains **zero AI**. There is no built-in model, no API key to 
 ### Local-first, encrypted, and inspectable
 
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
-* **Redaction on tap.** Read commands that touch free text (`accounts list`, `postings list/search`, `tx show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `postings list/search`, `tx show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
@@ -140,7 +140,7 @@ Every command supports three output modes, resolved once per run:
 | Human table | TTY, no `--json` | Aligned, colored (chalk) tables. |
 | Plain | piped, no `--json` | Tab-separated rows, zero ANSI, stable for scripts that don't want JSON. |
 
-Global flags on every command: `--json`, `--no-color`, `--quiet`.
+Global flags on every command: `--json`, `--no-color`.
 
 Exit codes are stable across the whole CLI:
 

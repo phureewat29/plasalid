@@ -60,6 +60,12 @@ export function recordTransaction(db: Database.Database, input: TransactionInput
  * can record whatever the source document (or the LLM) actually saw.
  */
 export function validateTransaction(input: TransactionInput): TransactionInput & { id: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) {
+    throw new Error("Transaction date must be an ISO date (YYYY-MM-DD).");
+  }
+  if (!input.description || !input.description.trim()) {
+    throw new Error("Transaction description must not be empty.");
+  }
   if (!input.postings || input.postings.length < 1) {
     throw new Error("Transaction must contain at least one posting.");
   }

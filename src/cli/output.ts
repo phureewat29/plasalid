@@ -62,8 +62,6 @@ export function fail(
 export interface OutputMode {
   /** --json was set anywhere in the command chain. */
   json: boolean;
-  /** --quiet was set anywhere in the command chain. */
-  quiet: boolean;
   /** color is suppressed (--no-color, NO_COLOR env, non-TTY, or --json). */
   noColor: boolean;
   /** stdout is a TTY. */
@@ -84,20 +82,18 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
  */
 function resolveMode(cmd?: Command): OutputMode {
   let json = false;
-  let quiet = false;
   let noColorFlag = false;
   let c: Command | undefined = cmd;
   while (c) {
     const o = c.opts();
     if (o.json) json = true;
-    if (o.quiet) quiet = true;
     if (o.color === false) noColorFlag = true;
     c = c.parent ?? undefined;
   }
   const tty = !!process.stdout.isTTY;
   const envNoColor = !!process.env.NO_COLOR;
   const noColor = json || noColorFlag || envNoColor || !tty;
-  return { json, quiet, noColor, tty, color: !noColor };
+  return { json, noColor, tty, color: !noColor };
 }
 
 let current: OutputMode | null = null;

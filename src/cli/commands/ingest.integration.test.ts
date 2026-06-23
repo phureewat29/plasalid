@@ -192,6 +192,34 @@ describe("ingest commit (subprocess)", () => {
     expect(summary.failed).toBe(1);
   }, 30000);
 
+  it("an item without a date is a clean dirty_input failure, not a raw SQL error", async () => {
+    const ndjson = [
+      JSON.stringify({
+        description: "Missing date",
+        postings: [
+          { account_id: "expense:food", debit: 20 },
+          { account_id: "asset:cash", credit: 20 },
+        ],
+      }),
+    ].join("\n");
+
+    const { stdout, stderr, code } = await runCli(["ingest", "commit", "--json"], { stdin: ndjson });
+    expect(code).toBe(7); // EXIT.PARTIAL
+
+    const objs = parseNdjson(stdout);
+    const results = objs.filter((o) => o.type === "result");
+    const summary = objs.find((o) => o.type === "summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0].ok).toBe(false);
+    expect(results[0].reason).toBe("dirty_input");
+    expect(results[0].message).toMatch(/ISO date/);
+    expect(summary.posted).toBe(0);
+    expect(summary.failed).toBe(1);
+
+    expect(stderr).not.toMatch(/SQLITE|SQL error/i);
+  }, 30000);
+
   it("fails with USAGE when stdin has no transaction data", async () => {
     const { stdout, stderr, code } = await runCli(["ingest", "commit", "--json"], { stdin: "" });
     expect(code).toBe(2); // EXIT.USAGE

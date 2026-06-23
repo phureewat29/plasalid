@@ -57,6 +57,7 @@ You are driving \`plasalid\`, a deterministic CLI harness over a local double-en
 | code | meaning | reaction |
 |---|---|---|
 | 0 | ok | continue |
+| 1 | unexpected error | inspect the message; retry or report the bug |
 | 2 | usage | fix the command line |
 | 3 | not ready | db/config not ready — run \`plasalid doctor --json\` |
 | 4 | input required | password or \`--yes\` missing — ask the human, then retry |
@@ -108,7 +109,7 @@ Example: "300 baht lunch, cash".
 
 ## 7. Cheat sheet + ingest schema
 
-\`status\` · \`doctor\` · \`setup\` · \`config show|set\` · \`ingest list|prepare|commit|done|fail|clean\` · \`files list|show|drop\` · \`vault add|list|rm|test\` · \`tx add|show|update|delete|recategorize\` · \`postings list|search|update\` · \`accounts list|tree|show|create|rename|merge|delete|adjust|match|similar|metadata\` · \`merchants list|resolve|upsert|set-default|clear-default\` · \`questions list|answer|defer\` · \`report net-worth|period\` · \`analyze duplicates|correlations\` · \`notes\` · \`taxonomy\` · \`context show|path\`
+\`status\` · \`doctor\` · \`setup\` · \`config show|set|path\` · \`ingest list|prepare|commit|done|fail|clean\` · \`files list|show|drop\` · \`vault add|list|rm|test\` · \`tx add|show|update|delete|recategorize\` · \`postings list|search|update\` · \`accounts list|tree|show|create|rename|merge|delete|adjust|match|similar|metadata\` · \`merchants list|resolve|upsert|set-default|clear-default\` · \`questions list|answer|defer\` · \`report net-worth|period\` · \`analyze duplicates|correlations\` · \`notes list|add|rm\` · \`taxonomy\` · \`context show|path\`
 
 One ingest transaction (NDJSON — one object per line, piped to \`ingest commit\`):
 
@@ -135,7 +136,6 @@ for agents. Ids are opaque strings minted by the harness — never fabricate the
 
 - \`--json\` — emit NDJSON instead of human tables.
 - \`--no-color\` — disable ANSI color.
-- \`--quiet\` — suppress non-essential output.
 
 Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 (\`--password-stdin\`, \`--encryption-key-stdin\`); they are never passed as flags.
@@ -145,9 +145,11 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 - \`plasalid status [--redact]\` — config, db, ledger counts, net worth. Also the no-arg default (\`plasalid\`).
 - \`plasalid doctor\` — environment checks; exit 3 when a hard check fails.
 - \`plasalid setup [--data-dir <dir>] [--db <path>] [--generate-key | --encryption-key-stdin] [--locale <l>] [--currency <c>] [--user-name <n>] [--force]\` — headless init.
-- \`plasalid config show\` · \`plasalid config set [--data-dir <dir>] [--db <path>] [--locale <l>] [--currency <c>] [--user-name <n>] [--encryption-key-stdin]\` · \`plasalid config path\`.
+- \`plasalid config show\` · \`plasalid config set [--data-dir <dir>] [--db <path>] [--locale <l>] [--currency <c>] [--user-name <n>] [--encryption-key-stdin]\` (>= 1 flag required) · \`plasalid config path\`.
 - \`plasalid context show\` · \`plasalid context path\`.
 - \`plasalid taxonomy\` — dump the Thai institution registry as data.
+- \`plasalid agent-setup [--claude] [--codex] [--global] [--dir <path>] [--force] [--print]\` — install/refresh this skill pack for an agent CLI.
+- \`plasalid data\` — open the data folder in the OS file explorer (alias: \`open\`).
 
 ## Ingest pipeline
 
@@ -166,18 +168,18 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 ## Transactions & postings
 
 - \`plasalid tx add [--resolve] [--date <d>] [--description <t>] [--amount <n>] [--debit-account <id>] [--credit-account <id>] [--currency <c>] [--merchant-name <n>]\` — strict by default (unknown account ids fail with exit 5); \`--resolve\` fuzzy-resolves and raises questions. Also accepts a JSON transaction on stdin.
-- \`plasalid tx show <tx:id> [--redact]\` · \`plasalid tx update <tx:id> [--date <d>] [--description <t>] [--source-page <n>]\` · \`plasalid tx delete <tx:id> --yes\`.
-- \`plasalid tx recategorize --set-account <id> [--set-memo <t>] [--filter-account <id>] [--filter-desc <t>] [--filter-merchant <id>] [--filter-currency <c>] [--from <d>] [--to <d>]\` — bulk move postings (account_id + memo only; amounts are immutable).
-- \`plasalid postings list [--account <id>] [--from <d>] [--to <d>] [--query <t>] [--limit <n>] [--group] [--redact]\` · \`plasalid postings search --query <t> [--limit <n>] [--redact]\` · \`plasalid postings update <p:id> [--account <id>] [--memo <t>]\`.
+- \`plasalid tx show <tx:id> [--redact]\` · \`plasalid tx update <tx:id> [--date <d>] [--description <t>] [--source-page <n>]\` (>= 1 flag required) · \`plasalid tx delete <tx:id> --yes\`.
+- \`plasalid tx recategorize [--set-account <id>] [--set-memo <t>] [--filter-account <id>] [--filter-desc <t>] [--filter-merchant <id>] [--filter-currency <c>] [--from <d>] [--to <d>]\` — bulk move postings (account_id + memo only; amounts are immutable). At least one \`--set-*\` and at least one \`--filter-*\` required.
+- \`plasalid postings list [--account <id>] [--from <d>] [--to <d>] [--query <t>] [--limit <n>] [--group] [--redact]\` · \`plasalid postings search --query <t> [--limit <n>] [--redact]\` · \`plasalid postings update <p:id> [--account <id>] [--memo <t>]\` (>= 1 flag required).
 
 ## Accounts
 
 - \`plasalid accounts list [--type <t>] [--redact]\` · \`plasalid accounts tree [--type <t>]\` · \`plasalid accounts show <id>\`.
 - \`plasalid accounts create --id <id> --name <n> --type <t> [--parent <id>] [--subtype <s>] [--bank <n>] [--masked <num>] [--currency <c>] [--due-day <n>] [--statement-day <n>] [--metadata <json>]\`.
 - \`plasalid accounts rename <id> --name <n>\` · \`plasalid accounts merge --from <id> --to <id> --yes\` · \`plasalid accounts delete <id> --yes\`.
-- \`plasalid accounts adjust <id> --to <amount> [--reason <t>] [--date <d>]\` — post a balancing adjustment to reach a target balance.
+- \`plasalid accounts adjust <id> --to <amount> --reason <t> [--date <d>]\` — post a balancing adjustment to reach a target balance.
 - \`plasalid accounts match --query <t> [--threshold <n>]\` — fuzzy lookup before create. \`plasalid accounts similar [--threshold <n>]\` — find near-duplicate accounts.
-- \`plasalid accounts metadata <id> [--due-day <n>] [--statement-day <n>] [--points <n>] [--masked <num>] [--bank <n>] [--metadata <json>]\`.
+- \`plasalid accounts metadata <id> [--due-day <n>] [--statement-day <n>] [--points <n>] [--masked <num>] [--bank <n>] [--metadata <json>]\` (>= 1 flag required).
 
 ## Merchants
 
@@ -234,7 +236,7 @@ Per input item, one \`result\`, then a terminal \`summary\`.
 Success:
 
 \`\`\`json
-{"type":"result","index":0,"ok":true,"transaction_id":"tx:...","raised_questions":1,"merchant":{"how":"linked","merchant_id":"mrc:..."},"postings":[{"index":0,"requested":"expense:food:coffee","resolved":"expense:food:coffee","how":"exact"}]}
+{"type":"result","index":0,"ok":true,"transaction_id":"tx:...","raised_questions":1,"merchant":{"how":"linked","merchant_id":"m:..."},"postings":[{"index":0,"requested":"expense:food:coffee","resolved":"expense:food:coffee","how":"exact"}]}
 \`\`\`
 
 - \`merchant.how\`: \`none\` (none supplied) | \`unknown\` (id did not exist) | \`linked\` (\`merchant_id\` present).

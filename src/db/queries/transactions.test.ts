@@ -107,6 +107,45 @@ describe("recordTransaction", () => {
     ).toThrow(/at least one/);
   });
 
+  it("rejects a missing date", () => {
+    expect(() =>
+      recordTransaction(db, {
+        date: undefined as unknown as string,
+        description: "Bad",
+        postings: [
+          { account_id: "expense:food", debit: 100 },
+          { account_id: "asset:cash", credit: 100 },
+        ],
+      }),
+    ).toThrow(/ISO date/);
+  });
+
+  it("rejects a badly formatted date", () => {
+    expect(() =>
+      recordTransaction(db, {
+        date: "02/01/2026",
+        description: "Bad",
+        postings: [
+          { account_id: "expense:food", debit: 100 },
+          { account_id: "asset:cash", credit: 100 },
+        ],
+      }),
+    ).toThrow(/ISO date/);
+  });
+
+  it("rejects an empty description", () => {
+    expect(() =>
+      recordTransaction(db, {
+        date: "2026-02-01",
+        description: "   ",
+        postings: [
+          { account_id: "expense:food", debit: 100 },
+          { account_id: "asset:cash", credit: 100 },
+        ],
+      }),
+    ).toThrow(/description must not be empty/);
+  });
+
   it("computes balances from posted transactions", () => {
     recordTransaction(db, {
       date: "2026-01-25",

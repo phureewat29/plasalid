@@ -79,7 +79,7 @@ function parseOne(stdout: string): any {
 
 describe("ledger CLI integration (subprocess)", () => {
   it(
-    "accounts create -> list -> tree round-trip includes rollup math with one recorded tx",
+    "accounts create -> list -> tree round-trip includes rollup math with one recorded transfer",
     async () => {
       const bank = await runCli([
         "accounts",
@@ -116,9 +116,8 @@ describe("ledger CLI integration (subprocess)", () => {
         created: true,
       });
 
-      const txAdd = await runCli([
-        "tx",
-        "add",
+      const rec = await runCli([
+        "record",
         "--date",
         "2026-01-01",
         "--description",
@@ -131,9 +130,9 @@ describe("ledger CLI integration (subprocess)", () => {
         "asset:bank",
         "--json",
       ]);
-      expect(txAdd.code).toBe(0);
-      const txResult = parseOne(txAdd.stdout);
-      expect(txResult.transaction_id).toMatch(/^tx:/);
+      expect(rec.code).toBe(0);
+      const recResult = parseOne(rec.stdout);
+      expect(recResult.transfer_id).toMatch(/^tf:/);
 
       const list = await runCli(["accounts", "list", "--json"]);
       expect(list.code).toBe(0);
@@ -161,11 +160,10 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "tx add strict mode: missing account fails NOT_FOUND (exit 5)",
+    "record strict mode: missing account fails NOT_FOUND (exit 5)",
     async () => {
       const result = await runCli([
-        "tx",
-        "add",
+        "record",
         "--date",
         "2026-01-02",
         "--description",
@@ -187,11 +185,10 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "tx add --resolve creates a placeholder account and raises a question",
+    "record --resolve creates a placeholder account and raises a question",
     async () => {
       const result = await runCli([
-        "tx",
-        "add",
+        "record",
         "--resolve",
         "--date",
         "2026-01-03",
@@ -207,7 +204,7 @@ describe("ledger CLI integration (subprocess)", () => {
       ]);
       expect(result.code).toBe(0);
       const parsed = parseOne(result.stdout);
-      expect(parsed.transaction_id).toMatch(/^tx:/);
+      expect(parsed.transfer_id).toMatch(/^tf:/);
       expect(parsed.raised_questions).toBe(1);
 
       const raw = new Database(dbPath);
@@ -229,23 +226,45 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "tx recategorize round-trip updates matching postings",
+    "record recategorize round-trip re-points matching transfers",
     async () => {
+      const food = await runCli([
+        "accounts",
+        "create",
+        "--id",
+        "expense:food",
+        "--name",
+        "Food",
+        "--type",
+        "expense",
+        "--parent",
+        "expense",
+        "--json",
+      ]);
+      expect(food.code).toBe(0);
+
       const result = await runCli([
-        "tx",
+        "record",
         "recategorize",
         "--filter-account",
         "expense:groceries",
-        "--set-memo",
-        "reviewed",
+        "--set-account",
+        "expense:food",
         "--json",
       ]);
       expect(result.code).toBe(0);
       const parsed = parseOne(result.stdout);
       expect(parsed.affected).toBe(1);
-      expect(parsed.sample_posting_ids).toHaveLength(1);
+      expect(parsed.skipped_self_transfer).toBe(0);
+      expect(parsed.sample_transfer_ids).toHaveLength(1);
+
+      // The transfer now touches expense:food, no longer expense:groceries.
+      const ledger = await runCli(["ledger", "--account", "expense:food", "--json"]);
+      expect(ledger.code).toBe(0);
+      const rows = parseNdjson(ledger.stdout) as any[];
+      expect(rows.some((r) => r.debit_account_id === "expense:food")).toBe(true);
     },
-    30000,
+    45000,
   );
 
   it(
@@ -293,6 +312,137 @@ describe("ledger CLI integration (subprocess)", () => {
         before: null,
         after: "asset:bank",
       });
+    },
+    45000,
+  );
+
+  it(
+    "merchants set-default --clear removes the default account; exactly one of --account/--clear is required",
+    async () => {
+      const upsert = await runCli(["merchants", "upsert", "--name", "Grab", "--json"]);
+      expect(upsert.code).toBe(0);
+      const merchant = parseOne(upsert.stdout);
+
+      const setDefault = await runCli([
+        "merchants",
+        "set-default",
+        "--merchant",
+        merchant.id,
+        "--account",
+        "asset:bank",
+        "--json",
+      ]);
+      expect(setDefault.code).toBe(0);
+
+      const cleared = await runCli([
+        "merchants",
+        "set-default",
+        "--merchant",
+        merchant.id,
+        "--clear",
+        "--json",
+      ]);
+      expect(cleared.code).toBe(0);
+      expect(parseOne(cleared.stdout)).toMatchObject({
+        merchant_id: merchant.id,
+        before: "asset:bank",
+        after: null,
+      });
+
+      const neither = await runCli([
+        "merchants",
+        "set-default",
+        "--merchant",
+        merchant.id,
+        "--json",
+      ]);
+      expect(neither.code).toBe(2); // EXIT.USAGE
+
+      const both = await runCli([
+        "merchants",
+        "set-default",
+        "--merchant",
+        merchant.id,
+        "--account",
+        "asset:bank",
+        "--clear",
+        "--json",
+      ]);
+      expect(both.code).toBe(2); // EXIT.USAGE
+    },
+    45000,
+  );
+
+  it(
+    "accounts update: name only, metadata only, both, and none (USAGE)",
+    async () => {
+      const create = await runCli([
+        "accounts",
+        "create",
+        "--id",
+        "asset:wallet",
+        "--name",
+        "Wallet",
+        "--type",
+        "asset",
+        "--parent",
+        "asset",
+        "--json",
+      ]);
+      expect(create.code).toBe(0);
+
+      const nameOnly = await runCli([
+        "accounts",
+        "update",
+        "asset:wallet",
+        "--name",
+        "Cash Wallet",
+        "--json",
+      ]);
+      expect(nameOnly.code).toBe(0);
+      expect(parseOne(nameOnly.stdout)).toMatchObject({
+        id: "asset:wallet",
+        name: "Cash Wallet",
+        renamed: true,
+      });
+
+      const metadataOnly = await runCli([
+        "accounts",
+        "update",
+        "asset:wallet",
+        "--bank",
+        "SCB",
+        "--json",
+      ]);
+      expect(metadataOnly.code).toBe(0);
+      const metaResult = parseOne(metadataOnly.stdout);
+      expect(metaResult.changed).toBe(true);
+      expect(metaResult.after.bank_name).toBe("SCB");
+      expect(metaResult.renamed).toBeUndefined();
+
+      const both = await runCli([
+        "accounts",
+        "update",
+        "asset:wallet",
+        "--name",
+        "Main Wallet",
+        "--points",
+        "10",
+        "--json",
+      ]);
+      expect(both.code).toBe(0);
+      const bothResult = parseOne(both.stdout);
+      expect(bothResult).toMatchObject({
+        id: "asset:wallet",
+        name: "Main Wallet",
+        renamed: true,
+        changed: true,
+      });
+      expect(bothResult.after.points_balance).toBe(10);
+
+      const none = await runCli(["accounts", "update", "asset:wallet", "--json"]);
+      expect(none.code).toBe(2); // EXIT.USAGE
+      expect(JSON.parse(none.stderr.trim()).error.code).toBe("E_USAGE");
     },
     45000,
   );

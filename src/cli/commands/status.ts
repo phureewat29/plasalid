@@ -8,8 +8,7 @@ import { currentMode, emit, runAction } from "../output.js";
 
 interface Counts {
   accounts: number;
-  transactions: number;
-  postings: number;
+  transfers: number;
   merchants: number;
   notes: number;
 }
@@ -54,10 +53,10 @@ async function buildReport(): Promise<StatusReport> {
   // / unreadable database degrades to a not-ready report rather than crashing.
   try {
     const { getDb } = await import("../../db/connection.js");
-    const { getAccountBalances, getNetWorth } = await import(
+    const { getAccountBalancesFromTransfers, getNetWorthFromTransfers } = await import(
       "../../db/queries/account-balance.js"
     );
-    const { countTransactions } = await import("../../db/queries/transactions.js");
+    const { countTransfers } = await import("../../db/queries/transfers.js");
     const { countScannedFiles } = await import("../../db/queries/files.js");
     const { countQuestions } = await import("../../db/queries/questions.js");
     const { listMerchants } = await import("../../db/queries/merchants.js");
@@ -66,11 +65,9 @@ async function buildReport(): Promise<StatusReport> {
     const db = getDb();
     report.db.reachable = true;
 
-    const tx = countTransactions(db);
     report.counts = {
-      accounts: getAccountBalances(db).length,
-      transactions: tx.transactions,
-      postings: tx.postings,
+      accounts: getAccountBalancesFromTransfers(db).length,
+      transfers: countTransfers(db),
       merchants: listMerchants(db, { limit: 1000 }).length,
       notes: countMemories(db),
     };
@@ -78,7 +75,7 @@ async function buildReport(): Promise<StatusReport> {
     const open = countQuestions(db);
     const total = countQuestions(db, { includeDeferred: true });
     report.questions = { open, deferred: Math.max(0, total - open) };
-    report.net_worth = getNetWorth(db);
+    report.net_worth = getNetWorthFromTransfers(db);
   } catch (err) {
     report.db.reachable = false;
     report.db.error = err instanceof Error ? err.message : String(err);
@@ -122,8 +119,7 @@ function renderPlain(r: StatusReport): void {
   if (r.counts) {
     lines.push(
       ["accounts", r.counts.accounts],
-      ["transactions", r.counts.transactions],
-      ["postings", r.counts.postings],
+      ["transfers", r.counts.transfers],
       ["merchants", r.counts.merchants],
       ["notes", r.counts.notes],
     );
@@ -183,10 +179,7 @@ function renderTty(r: StatusReport, color: boolean): void {
   if (r.counts) {
     section("Ledger", [
       ["Accounts", formatInt(r.counts.accounts)],
-      [
-        "Transactions",
-        `${formatInt(r.counts.transactions)}  ${dim(`(${formatInt(r.counts.postings)} postings)`)}`,
-      ],
+      ["Transfers", formatInt(r.counts.transfers)],
       ["Merchants", formatInt(r.counts.merchants)],
       ["Notes", formatInt(r.counts.notes)],
     ]);

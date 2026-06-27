@@ -1,5 +1,3 @@
-import { existsSync } from "fs";
-import { resolve } from "path";
 import type { Command } from "commander";
 import { config } from "../../config.js";
 import {
@@ -95,20 +93,6 @@ async function vaultRm(patternOrId: string, opts: RmOpts): Promise<void> {
   emitObject({ pattern_or_id: patternOrId, removed: true });
 }
 
-// --- vault test ------------------------------------------------------------
-
-async function vaultTest(path: string): Promise<void> {
-  const abs = resolve(path);
-  if (!existsSync(abs)) fail("NOT_FOUND", `no such file: ${path}`);
-
-  const db = await openDb();
-  const { readPdf, isEncrypted, findCandidates } = await import("../../scanner/pdf.js");
-  const loaded = readPdf(abs);
-  const encrypted = await isEncrypted(loaded.bytes);
-  const vaultCandidates = findCandidates(db, abs, config.dbEncryptionKey).length;
-  emitObject({ path: abs, encrypted, vault_candidates: vaultCandidates });
-}
-
 // --- registration ----------------------------------------------------------
 
 export function registerVault(program: Command): void {
@@ -130,9 +114,4 @@ export function registerVault(program: Command): void {
     .description("Remove a vault entry")
     .option("--yes", "skip confirmation")
     .action(runAction(vaultRm));
-
-  vault
-    .command("test <path>")
-    .description("Test whether a path is encrypted and how many vault entries match it")
-    .action(runAction(vaultTest));
 }

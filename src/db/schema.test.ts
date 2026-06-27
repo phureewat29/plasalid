@@ -25,10 +25,9 @@ describe("migrate", () => {
       "memories",
       "merchant_aliases",
       "merchants",
-      "postings",
       "scanned_files",
       "settings",
-      "transactions",
+      "transfers",
     ];
 
     for (const t of expected) {
@@ -59,25 +58,6 @@ describe("migrate", () => {
     const db = freshDb();
     migrate(db);
     expect(() => migrate(db)).not.toThrow();
-  });
-
-  it("enforces postings debit/credit invariant", () => {
-    const db = freshDb();
-    migrate(db);
-
-    db.prepare(`INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)`)
-      .run("asset", "Assets", "asset");
-    db.prepare(`INSERT INTO accounts (id, name, type, parent_id) VALUES (?, ?, ?, ?)`)
-      .run("asset:test", "Test", "asset", "asset");
-    db.prepare(
-      `INSERT INTO transactions (id, date, description) VALUES (?, ?, ?)`
-    ).run("tx:1", "2026-01-01", "test");
-
-    expect(() =>
-      db.prepare(
-        `INSERT INTO postings (id, transaction_id, account_id, debit, credit) VALUES (?, ?, ?, ?, ?)`
-      ).run("p:1", "tx:1", "asset:test", 100, 50),
-    ).toThrow();
   });
 
   it("accepts hierarchical accounts via parent_id", () => {
@@ -112,6 +92,73 @@ describe("migrate", () => {
         `INSERT INTO merchant_aliases (id, merchant_id, normalized_pattern) VALUES (?, ?, ?)`
       ).run("ma:2", "m:starbucks", "starbucks"),
     ).toThrow();
+  });
+});
+
+describe("transfers table (TigerBeetle-core)", () => {
+  function seededDb() {
+    const db = freshDb();
+    migrate(db);
+    db.prepare(`INSERT INTO accounts (id, name, type) VALUES ('asset', 'Assets', 'asset')`).run();
+    db.prepare(
+      `INSERT INTO accounts (id, name, type, parent_id) VALUES ('asset:a', 'A', 'asset', 'asset')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO accounts (id, name, type, parent_id) VALUES ('asset:b', 'B', 'asset', 'asset')`,
+    ).run();
+    return db;
+  }
+
+  function insertTransfer(
+    db: Database.Database,
+    over: Partial<{ id: string; debit: string; credit: string; amount: number }> = {},
+  ) {
+    return db
+      .prepare(
+        `INSERT INTO transfers (id, date, description, debit_account_id, credit_account_id, amount, currency)
+         VALUES (?, '2026-01-01', 'x', ?, ?, ?, 'THB')`,
+      )
+      .run(over.id ?? "tf:1", over.debit ?? "asset:a", over.credit ?? "asset:b", over.amount ?? 100);
+  }
+
+  it("has the expected columns", () => {
+    const db = seededDb();
+    const cols = (db.prepare(`PRAGMA table_info(transfers)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    for (const c of [
+      "id", "group_id", "date", "description", "merchant_id", "raw_descriptor",
+      "source_file_id", "source_page", "debit_account_id", "credit_account_id",
+      "amount", "currency", "code", "user_ref", "has_question", "created_at",
+    ]) {
+      expect(cols, `missing column: ${c}`).toContain(c);
+    }
+  });
+
+  it("adds a transfer_id column to questions", () => {
+    const db = seededDb();
+    const cols = (db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(cols).toContain("transfer_id");
+    // The retired transaction_id column is gone after the cutover.
+    expect(cols).not.toContain("transaction_id");
+  });
+
+  it("accepts a well-formed transfer", () => {
+    const db = seededDb();
+    expect(() => insertTransfer(db)).not.toThrow();
+  });
+
+  it("rejects amount <= 0 (CHECK)", () => {
+    const db = seededDb();
+    expect(() => insertTransfer(db, { amount: 0 })).toThrow();
+    expect(() => insertTransfer(db, { amount: -100 })).toThrow();
+  });
+
+  it("rejects debit == credit (CHECK)", () => {
+    const db = seededDb();
+    expect(() => insertTransfer(db, { debit: "asset:a", credit: "asset:a" })).toThrow();
   });
 });
 
@@ -204,7 +251,7 @@ describe("legacy DB migration (nuke + recreate)", () => {
     expect(tables).not.toContain("conversation_history");
     expect(tables).not.toContain("hints");
     // Clean schema is present.
-    for (const t of ["accounts", "merchants", "scanned_files", "transactions", "postings", "questions"]) {
+    for (const t of ["accounts", "merchants", "scanned_files", "transfers", "questions"]) {
       expect(tables, `missing table: ${t}`).toContain(t);
     }
     // scanned_files is the new shape.
@@ -219,7 +266,7 @@ describe("legacy DB migration (nuke + recreate)", () => {
     migrate(db);
 
     expect(db.prepare(`SELECT COUNT(*) AS n FROM scanned_files`).get()).toMatchObject({ n: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transfers`).get()).toMatchObject({ n: 0 });
     // The old provider-scanned file is gone.
     expect(db.prepare(`SELECT COUNT(*) AS n FROM scanned_files WHERE id = 'f:1'`).get()).toMatchObject({
       n: 0,

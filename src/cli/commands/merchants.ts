@@ -89,39 +89,34 @@ export function registerMerchants(program: Command): void {
 
   merchants
     .command("set-default")
-    .description("Set a merchant's default account")
+    .description("Set or clear a merchant's default account")
     .option("--merchant <id>", "merchant id")
     .option("--account <id>", "account id")
+    .option("--clear", "clear the default account instead of setting one")
     .action(
-      runAction((opts: { merchant?: string; account?: string }) => {
-        const missing: string[] = [];
-        if (!opts.merchant) missing.push("--merchant");
-        if (!opts.account) missing.push("--account");
-        if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
+      runAction((opts: { merchant?: string; account?: string; clear?: boolean }) => {
+        if (!opts.merchant) fail("USAGE", "--merchant is required");
+        if (!!opts.account === !!opts.clear) {
+          fail("USAGE", "exactly one of --account or --clear is required");
+        }
 
         const db = getDb();
         if (!findMerchantById(db, opts.merchant!)) {
           fail("NOT_FOUND", `merchant "${opts.merchant}" not found`);
         }
+
+        if (opts.clear) {
+          const result = clearMerchantDefaultAccount(db, opts.merchant!);
+          if (!result) fail("NOT_FOUND", `merchant "${opts.merchant}" not found`);
+          emit({ merchant_id: opts.merchant, before: result.before, after: null });
+          return;
+        }
+
         if (!findAccountById(db, opts.account!)) {
           fail("NOT_FOUND", `account "${opts.account}" not found`);
         }
         const result = setMerchantDefaultAccount(db, opts.merchant!, opts.account!);
         emit({ merchant_id: opts.merchant, ...result });
-      }),
-    );
-
-  merchants
-    .command("clear-default")
-    .description("Clear a merchant's default account")
-    .option("--merchant <id>", "merchant id")
-    .action(
-      runAction((opts: { merchant?: string }) => {
-        if (!opts.merchant) fail("USAGE", "--merchant is required");
-        const db = getDb();
-        const result = clearMerchantDefaultAccount(db, opts.merchant);
-        if (!result) fail("NOT_FOUND", `merchant "${opts.merchant}" not found`);
-        emit({ merchant_id: opts.merchant, before: result.before, after: null });
       }),
     );
 }

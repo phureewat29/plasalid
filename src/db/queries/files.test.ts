@@ -10,7 +10,7 @@ import {
   markFileFailed,
 } from "./files.js";
 import { createAccount } from "./account-balance.js";
-import { recordTransaction } from "./transactions.js";
+import { insertTransfer } from "./transfers.js";
 import { recordQuestion } from "./questions.js";
 
 function freshDb(): Database.Database {
@@ -80,18 +80,18 @@ describe("deleteScannedFile", () => {
     const db = freshDb();
     seedChartOfAccounts(db);
     insertFile(db, "a", "scanned");
-    const txId = recordTransaction(db, {
+    const { id: transferId } = insertTransfer(db, {
       date: "2026-05-19",
       description: "Coffee",
       source_file_id: "a",
-      postings: [
-        { account_id: "expense:food", debit: 100 },
-        { account_id: "asset:kbank", credit: 100 },
-      ],
+      debit_account_id: "expense:food",
+      credit_account_id: "asset:kbank",
+      amount: 10000,
+      currency: "THB",
     });
     recordQuestion(db, {
       file_id: "a",
-      transaction_id: txId,
+      transfer_id: transferId,
       account_id: null,
       kind: "uncategorized",
       prompt: "Categorize this",
@@ -100,17 +100,16 @@ describe("deleteScannedFile", () => {
     const result = deleteScannedFile(db, "a");
 
     expect(result.removed?.id).toBe("a");
-    expect(result.removedTransactions).toBe(1);
+    expect(result.removedTransfers).toBe(1);
     expect(result.removedQuestions).toBe(1);
     expect(findScannedFileById(db, "a")).toBeNull();
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM postings`).get()).toMatchObject({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transfers`).get()).toMatchObject({ n: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS n FROM questions`).get()).toMatchObject({ n: 0 });
   });
 
   it("returns null counts and no error when the id is unknown", () => {
     const result = deleteScannedFile(freshDb(), "nope");
-    expect(result).toEqual({ removed: null, removedTransactions: 0, removedQuestions: 0 });
+    expect(result).toEqual({ removed: null, removedTransfers: 0, removedQuestions: 0 });
   });
 });
 

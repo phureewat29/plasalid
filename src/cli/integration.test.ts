@@ -111,9 +111,9 @@ describe("cli integration (subprocess)", () => {
     const { stdout, code } = await runCli(["--help"]);
     expect(code).toBe(0);
     for (const noun of [
-      "status", "doctor", "setup", "config", "ingest", "files", "vault", "tx",
-      "postings", "accounts", "merchants", "questions", "report", "analyze",
-      "notes", "taxonomy", "context", "data",
+      "status", "doctor", "setup", "config", "ingest", "files", "vault", "record",
+      "ledger", "accounts", "merchants", "questions", "report", "analyze",
+      "notes", "context", "data",
     ]) {
       expect(stdout).toContain(noun);
     }

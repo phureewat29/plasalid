@@ -16,7 +16,7 @@ interface Check {
 }
 
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
-const REQUIRED_TABLES = ["accounts", "transactions", "postings", "questions"];
+const REQUIRED_TABLES = ["accounts", "transfers", "questions"];
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

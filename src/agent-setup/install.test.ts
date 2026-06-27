@@ -9,7 +9,7 @@ import {
   getVersion,
   SkillPackVersionError,
 } from "./install.js";
-import { SKILL_MD, renderTaxonomyMd, AGENTS_MD_BLOCK } from "./templates.js";
+import { SKILL_MD, SCHEMAS_MD, renderTaxonomyMd, AGENTS_MD_BLOCK } from "./templates.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -34,6 +34,21 @@ describe("templates", () => {
     expect(fm.name).toBe("plasalid");
     expect(fm.description.length).toBeGreaterThan(20);
     expect(fm.version).toBe("1.2.3");
+  });
+
+  it("SKILL_MD teaches the transfer model: direction table, row_index, and linked splits", () => {
+    const skill = SKILL_MD("1.2.3");
+    // The direction table header (Debit account / Credit account columns).
+    expect(skill).toContain("Debit account");
+    expect(skill).toContain("Credit account");
+    // Idempotency contract + compound form.
+    expect(skill).toContain("row_index");
+    expect(skill).toContain("linked");
+  });
+
+  it("SCHEMAS_MD documents the currency_mismatch drop and idempotent duplicate result", () => {
+    expect(SCHEMAS_MD).toContain("currency_mismatch");
+    expect(SCHEMAS_MD).toContain("duplicate");
   });
 
   it("renderTaxonomyMd reflects the live registry (a known institution + a root)", () => {

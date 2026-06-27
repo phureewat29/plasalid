@@ -1,9 +1,6 @@
 import type Database from "libsql";
-import {
-  validateTransaction,
-  insertTransactionRows,
-  type TransactionInput,
-} from "./transactions.js";
+import { insertTransfer, accountHasTransfers } from "./transfers.js";
+import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
@@ -41,72 +38,15 @@ export interface AccountBalance extends AccountRow {
   balance: number;
 }
 
-/**
- * Balance per account using the natural debit/credit convention:
- *   asset / expense  → debit-normal  → balance = debits − credits
- *   liability / income / equity → credit-normal → balance = credits − debits
- */
-export function getAccountBalances(db: Database.Database, opts: { type?: AccountType } = {}): AccountBalance[] {
-  const params: any[] = [];
-  const where: string[] = [];
-  if (opts.type) {
-    where.push("a.type = ?");
-    params.push(opts.type);
-  }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-  const rows = db.prepare(
-    `SELECT a.*,
-            COALESCE(SUM(p.debit), 0)  AS sum_debit,
-            COALESCE(SUM(p.credit), 0) AS sum_credit
-     FROM accounts a
-     LEFT JOIN postings p ON p.account_id = a.id
-     ${whereSql}
-     GROUP BY a.id
-     ORDER BY a.type, a.id`,
-  ).all(...params) as (AccountRow & { sum_debit: number; sum_credit: number })[];
-
-  return rows.map(r => {
-    const debitNormal = r.type === "asset" || r.type === "expense";
-    const balance = debitNormal ? r.sum_debit - r.sum_credit : r.sum_credit - r.sum_debit;
-    const { sum_debit: _d, sum_credit: _c, ...account } = r;
-    return { ...(account as AccountRow), balance };
-  });
-}
-
 export interface NetWorth {
   assets: number;
   liabilities: number;
   net_worth: number;
 }
 
-export function getNetWorth(db: Database.Database): NetWorth {
-  const balances = getAccountBalances(db);
-  let assets = 0;
-  let liabilities = 0;
-  for (const b of balances) {
-    if (b.type === "asset") assets += b.balance;
-    else if (b.type === "liability") liabilities += b.balance;
-  }
-  return { assets, liabilities, net_worth: assets - liabilities };
-}
-
 export interface PeriodTotals {
   income: number;
   expenses: number;
-}
-
-export function getPeriodTotals(db: Database.Database, from: string, to: string): PeriodTotals {
-  const row = db.prepare(
-    `SELECT
-        COALESCE(SUM(CASE WHEN a.type = 'income'  THEN p.credit - p.debit ELSE 0 END), 0) AS income,
-        COALESCE(SUM(CASE WHEN a.type = 'expense' THEN p.debit - p.credit ELSE 0 END), 0) AS expenses
-     FROM postings p
-     JOIN transactions t ON t.id = p.transaction_id
-     JOIN accounts a ON a.id = p.account_id
-     WHERE t.date BETWEEN ? AND ?`,
-  ).get(from, to) as { income: number; expenses: number };
-  return { income: row.income, expenses: row.expenses };
 }
 
 export function findAccountById(db: Database.Database, id: string): AccountRow | null {
@@ -305,12 +245,24 @@ export function updateAccountMetadata(
   return { before, after, changed: true };
 }
 
+export interface MergeAccountsResult {
+  /** Transfer legs re-pointed from the source account onto the destination. */
+  moved: number;
+  /** Transfers deleted because re-pointing would have collapsed them into a
+   *  degenerate self-transfer (debit == credit). */
+  deletedSelfTransfers: number;
+}
+
 /**
- * Re-point every posting on `fromId` to `toId`, then delete the source account.
- * Wrapped in a transaction. Refuses if the source still has children. Returns
- * the number of postings moved.
+ * Re-point every transfer leg on `fromId` to `toId` (via `repointTransfers`),
+ * then delete the source account. Refuses if the source still has children.
+ * Returns legs moved and self-transfers deleted.
  */
-export function mergeAccounts(db: Database.Database, fromId: string, toId: string): number {
+export function mergeAccounts(
+  db: Database.Database,
+  fromId: string,
+  toId: string,
+): MergeAccountsResult {
   if (fromId === toId) throw new Error("Cannot merge an account into itself.");
   const from = findAccountById(db, fromId);
   if (!from) throw new Error(`Source account ${fromId} not found.`);
@@ -324,24 +276,15 @@ export function mergeAccounts(db: Database.Database, fromId: string, toId: strin
     throw new Error(`Account ${fromId} has ${childCount.n} child account(s); merge or delete them first.`);
   }
 
-  let moved = 0;
-  const tx = db.transaction((): void => {
-    moved = db
-      .prepare(`UPDATE postings SET account_id = ? WHERE account_id = ?`)
-      .run(toId, fromId).changes;
-    db.prepare(`DELETE FROM accounts WHERE id = ?`).run(fromId);
-  });
-  tx();
-  return moved;
+  const { moved, deletedSelfTransfers } = repointTransfers(db, fromId, toId);
+  db.prepare(`DELETE FROM accounts WHERE id = ?`).run(fromId);
+  return { moved, deletedSelfTransfers };
 }
 
-/** Delete an account only if no postings reference it AND it has no children. */
+/** Delete an account only if no transfers reference it AND it has no children. */
 export function deleteAccount(db: Database.Database, id: string): void {
-  const inUse = db
-    .prepare(`SELECT 1 FROM postings WHERE account_id = ? LIMIT 1`)
-    .get(id);
-  if (inUse) {
-    throw new Error(`Account ${id} still has postings; merge it first.`);
+  if (accountHasTransfers(db, id)) {
+    throw new Error(`Account ${id} still has transfers; merge it first.`);
   }
   const childCount = db
     .prepare(`SELECT COUNT(*) AS n FROM accounts WHERE parent_id = ?`)
@@ -354,91 +297,8 @@ export function deleteAccount(db: Database.Database, id: string): void {
 
 const EQUITY_ADJUST_ID = "equity:adjustments";
 
-export interface AdjustAccountBalanceOpts {
-  accountId: string;
-  /** The new desired balance in the account's currency, in natural sign (positive). */
-  targetAmount: number;
-  reason: string;
-  /** ISO YYYY-MM-DD. Defaults to today. */
-  date?: string;
-}
-
-export interface AdjustAccountBalanceResult {
-  /** Id of the posted balancing transaction, or null when already at target (no-op). */
-  transactionId: string | null;
-  /** target - current, in the account's natural sign. 0 on no-op. */
-  delta: number;
-}
-
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/**
- * Move an account's current balance to `targetAmount` by posting a balancing
- * transaction against `equity:adjustments`. Duplicated from
- * `ai/tools/record.ts`'s `adjustAccountBalance` tool handler (which is being
- * removed in a later phase) so the DB-query layer owns this logic going
- * forward. Delta is computed in integer cents to avoid float drift; a zero
- * delta is a no-op (no transaction posted, `transactionId` is null).
- */
-export function adjustAccountBalance(
-  db: Database.Database,
-  opts: AdjustAccountBalanceOpts,
-): AdjustAccountBalanceResult {
-  const account = findAccountById(db, opts.accountId);
-  if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
-
-  const target = Number(opts.targetAmount);
-  if (!Number.isFinite(target)) {
-    throw new Error(`targetAmount must be a number, got ${JSON.stringify(opts.targetAmount)}.`);
-  }
-
-  const balances = getAccountBalances(db);
-  const current = balances.find((b) => b.id === account.id)?.balance ?? 0;
-
-  const targetCents = Math.round(target * 100);
-  const currentCents = Math.round(current * 100);
-  const deltaCents = targetCents - currentCents;
-  if (deltaCents === 0) {
-    return { transactionId: null, delta: 0 };
-  }
-  const delta = deltaCents / 100;
-
-  const amount = Math.abs(delta);
-  const debitNormal = account.type === "asset" || account.type === "expense";
-  const debitAccountId =
-    (debitNormal && delta > 0) || (!debitNormal && delta < 0)
-      ? account.id
-      : EQUITY_ADJUST_ID;
-  const creditAccountId =
-    debitAccountId === account.id ? EQUITY_ADJUST_ID : account.id;
-
-  const date =
-    opts.date && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : todayIso();
-  const reason = String(opts.reason || "Balance adjustment").trim();
-  const currency = account.currency || "THB";
-
-  const txInput: TransactionInput = {
-    date,
-    description: reason,
-    postings: [
-      { account_id: debitAccountId, debit: amount, currency },
-      { account_id: creditAccountId, credit: amount, currency },
-    ],
-  };
-
-  const validated = validateTransaction(txInput);
-
-  const tx = db.transaction((): void => {
-    if (!findAccountById(db, EQUITY_ADJUST_ID)) {
-      ensureStructuralAccount(db, "equity:adjustments");
-    }
-    insertTransactionRows(db, validated);
-  });
-  tx();
-
-  return { transactionId: validated.id, delta };
 }
 
 /**
@@ -454,57 +314,6 @@ export function getAccountSubtree(db: Database.Database, rootId: string): Accoun
      )
      SELECT * FROM subtree ORDER BY id`,
   ).all(rootId) as AccountRow[];
-}
-
-/**
- * Sum the natural balance of every account in a subtree (root inclusive).
- * Uses the same debit-normal / credit-normal convention as `getAccountBalances`.
- */
-export function getRollupBalance(db: Database.Database, rootId: string): number {
-  const subtree = getAccountSubtree(db, rootId);
-  if (subtree.length === 0) return 0;
-  const ids = subtree.map(a => a.id);
-  const placeholders = ids.map(() => "?").join(",");
-  const row = db.prepare(
-    `SELECT a.type,
-            COALESCE(SUM(p.debit), 0)  AS sum_debit,
-            COALESCE(SUM(p.credit), 0) AS sum_credit
-     FROM accounts a
-     LEFT JOIN postings p ON p.account_id = a.id
-     WHERE a.id IN (${placeholders})
-     GROUP BY a.type`,
-  ).all(...ids) as { type: AccountType; sum_debit: number; sum_credit: number }[];
-
-  let total = 0;
-  for (const r of row) {
-    const debitNormal = r.type === "asset" || r.type === "expense";
-    total += debitNormal ? r.sum_debit - r.sum_credit : r.sum_credit - r.sum_debit;
-  }
-  return total;
-}
-
-export interface SimilarAccountPair {
-  a: AccountRow;
-  b: AccountRow;
-  similarity: number;
-}
-
-/**
- * Pairwise Levenshtein similarity over `accounts.name`. Returns pairs above the
- * threshold (0-1, where 1 = identical), sorted highest first. Quadratic in the
- * number of accounts, but fine for the small N a personal chart of accounts holds.
- */
-export function findSimilarAccounts(db: Database.Database, threshold = 0.85): SimilarAccountPair[] {
-  const rows = db.prepare(`SELECT * FROM accounts ORDER BY name`).all() as AccountRow[];
-  const pairs: SimilarAccountPair[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    for (let j = i + 1; j < rows.length; j++) {
-      const sim = similarity(rows[i].name.toLowerCase(), rows[j].name.toLowerCase());
-      if (sim >= threshold) pairs.push({ a: rows[i], b: rows[j], similarity: Math.round(sim * 1000) / 1000 });
-    }
-  }
-  pairs.sort((x, y) => y.similarity - x.similarity);
-  return pairs;
 }
 
 export interface FuzzyAccountMatch {
@@ -615,4 +424,253 @@ function levenshtein(a: string, b: string): number {
     for (let j = 0; j <= n; j++) prev[j] = curr[j];
   }
   return prev[n];
+}
+
+// ---------------------------------------------------------------------------
+// Balance derivations over the single-row `transfers` table (TigerBeetle-core).
+//
+// Every transfer contributes a debit leg and a credit leg via the UNION-ALL
+// subquery, so account balances fall out of the standard normal-balance rule:
+// asset/expense are debit-normal, the rest credit-normal. Amounts are integer
+// minor units in the table; decimal fields are derived per the account's own
+// currency exponent.
+// ---------------------------------------------------------------------------
+
+/** Debit + credit legs of every transfer, one row per leg. Shared by the
+ *  transfer-based aggregates below. */
+const TRANSFER_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS side FROM transfers
+       UNION ALL
+       SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transfers`;
+
+export interface AccountBalanceMinor extends AccountRow {
+  /** Sum of debit legs, minor units. */
+  debits_posted: number;
+  /** Sum of credit legs, minor units. */
+  credits_posted: number;
+  /** Natural balance in minor units (normal-balance rule). */
+  balance_minor: number;
+  /** Natural balance as a decimal (via the account's currency exponent). */
+  balance: number;
+}
+
+/**
+ * Per-account balance from the `transfers` table. Normal-balance rule matches
+ * `getAccountBalances`: asset/expense are debit-normal, the rest credit-normal.
+ */
+export function getAccountBalancesFromTransfers(
+  db: Database.Database,
+  opts: { type?: AccountType } = {},
+): AccountBalanceMinor[] {
+  const params: any[] = [];
+  const where: string[] = [];
+  if (opts.type) {
+    where.push("a.type = ?");
+    params.push(opts.type);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const rows = db
+    .prepare(
+      `SELECT a.*,
+              COALESCE(SUM(CASE WHEN t.side = 'D' THEN t.amount ELSE 0 END), 0) AS sum_debit,
+              COALESCE(SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE 0 END), 0) AS sum_credit
+         FROM accounts a
+         LEFT JOIN (${TRANSFER_LEGS}) t ON t.acct = a.id
+         ${whereSql}
+         GROUP BY a.id
+         ORDER BY a.type, a.id`,
+    )
+    .all(...params) as (AccountRow & { sum_debit: number; sum_credit: number })[];
+
+  return rows.map((r) => {
+    const debitNormal = r.type === "asset" || r.type === "expense";
+    const balance_minor = debitNormal ? r.sum_debit - r.sum_credit : r.sum_credit - r.sum_debit;
+    const { sum_debit, sum_credit, ...account } = r;
+    return {
+      ...(account as AccountRow),
+      debits_posted: sum_debit,
+      credits_posted: sum_credit,
+      balance_minor,
+      balance: fromMinorUnits(balance_minor, account.currency),
+    };
+  });
+}
+
+export function getNetWorthFromTransfers(db: Database.Database): NetWorth {
+  const balances = getAccountBalancesFromTransfers(db);
+  let assets = 0;
+  let liabilities = 0;
+  for (const b of balances) {
+    if (b.type === "asset") assets += b.balance;
+    else if (b.type === "liability") liabilities += b.balance;
+  }
+  return { assets, liabilities, net_worth: assets - liabilities };
+}
+
+/**
+ * Income (credits − debits on income accounts) and expenses (debits − credits
+ * on expense accounts) over a date range, from `transfers`. Grouped by
+ * (type, currency) so each currency's minor units convert with the right
+ * exponent before summing.
+ */
+export function getPeriodTotalsFromTransfers(
+  db: Database.Database,
+  from: string,
+  to: string,
+): PeriodTotals {
+  const rows = db
+    .prepare(
+      `SELECT a.type AS type, a.currency AS currency,
+              SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE -t.amount END) AS c_minus_d
+         FROM (${TRANSFER_LEGS}) t
+         JOIN accounts a ON a.id = t.acct
+         WHERE t.date BETWEEN ? AND ? AND a.type IN ('income', 'expense')
+         GROUP BY a.type, a.currency`,
+    )
+    .all(from, to) as { type: AccountType; currency: string; c_minus_d: number }[];
+
+  let income = 0;
+  let expenses = 0;
+  for (const r of rows) {
+    if (r.type === "income") income += fromMinorUnits(r.c_minus_d, r.currency);
+    else if (r.type === "expense") expenses += fromMinorUnits(-r.c_minus_d, r.currency);
+  }
+  return { income, expenses };
+}
+
+/** Subtree balance (root inclusive) from `transfers`, same convention as
+ *  `getRollupBalance`. Grouped by (type, currency) for correct conversion. */
+export function getRollupBalanceFromTransfers(db: Database.Database, rootId: string): number {
+  const subtree = getAccountSubtree(db, rootId);
+  if (subtree.length === 0) return 0;
+  const ids = subtree.map((a) => a.id);
+  const placeholders = ids.map(() => "?").join(",");
+
+  const rows = db
+    .prepare(
+      `SELECT a.type AS type, a.currency AS currency,
+              COALESCE(SUM(CASE WHEN t.side = 'D' THEN t.amount ELSE 0 END), 0) AS sum_debit,
+              COALESCE(SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE 0 END), 0) AS sum_credit
+         FROM accounts a
+         LEFT JOIN (${TRANSFER_LEGS}) t ON t.acct = a.id
+         WHERE a.id IN (${placeholders})
+         GROUP BY a.type, a.currency`,
+    )
+    .all(...ids) as { type: AccountType; currency: string; sum_debit: number; sum_credit: number }[];
+
+  let total = 0;
+  for (const r of rows) {
+    const debitNormal = r.type === "asset" || r.type === "expense";
+    const minor = debitNormal ? r.sum_debit - r.sum_credit : r.sum_credit - r.sum_debit;
+    total += fromMinorUnits(minor, r.currency);
+  }
+  return total;
+}
+
+/**
+ * Transfer-model counterpart of `mergeAccounts`' re-point step. Moves every
+ * transfer leg on `fromId` to `toId` across BOTH columns. Because the
+ * debit<>credit CHECK forbids a transient self-transfer, rows that would become
+ * degenerate (one side is `fromId`, the other already `toId`) are deleted FIRST,
+ * then the remainder is re-pointed. Returns legs moved and self-transfers
+ * deleted. (Does not touch the accounts table — the caller deletes the source.)
+ */
+export function repointTransfers(
+  db: Database.Database,
+  fromId: string,
+  toId: string,
+): { moved: number; deletedSelfTransfers: number } {
+  if (fromId === toId) throw new Error("Cannot re-point transfers to the same account.");
+
+  let moved = 0;
+  let deletedSelfTransfers = 0;
+  const tx = db.transaction((): void => {
+    deletedSelfTransfers = db
+      .prepare(
+        `DELETE FROM transfers
+          WHERE (debit_account_id = ? AND credit_account_id = ?)
+             OR (credit_account_id = ? AND debit_account_id = ?)`,
+      )
+      .run(fromId, toId, fromId, toId).changes;
+
+    const d = db
+      .prepare(`UPDATE transfers SET debit_account_id = ? WHERE debit_account_id = ?`)
+      .run(toId, fromId).changes;
+    const c = db
+      .prepare(`UPDATE transfers SET credit_account_id = ? WHERE credit_account_id = ?`)
+      .run(toId, fromId).changes;
+    moved = d + c;
+  });
+  tx();
+  return { moved, deletedSelfTransfers };
+}
+
+export interface AdjustViaTransferOpts {
+  accountId: string;
+  /** New desired balance in the account's currency, decimal, natural sign. */
+  targetAmount: number;
+  reason: string;
+  /** ISO YYYY-MM-DD. Defaults to today. */
+  date?: string;
+}
+
+export interface AdjustViaTransferResult {
+  /** Id of the balancing transfer, or null when already at target (no-op). */
+  transferId: string | null;
+  /** target − current, decimal, natural sign. 0 on no-op. */
+  delta: number;
+}
+
+/**
+ * Transfer-model counterpart of `adjustAccountBalance`: move an account to
+ * `targetAmount` by posting one balancing transfer against `equity:adjustments`.
+ * Delta math is done in integer minor units (no float drift); a zero delta is a
+ * no-op. Orientation matches the posting-based version.
+ */
+export function adjustAccountBalanceViaTransfer(
+  db: Database.Database,
+  opts: AdjustViaTransferOpts,
+): AdjustViaTransferResult {
+  const account = findAccountById(db, opts.accountId);
+  if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
+
+  const target = Number(opts.targetAmount);
+  if (!Number.isFinite(target)) {
+    throw new Error(`targetAmount must be a number, got ${JSON.stringify(opts.targetAmount)}.`);
+  }
+
+  const currency = account.currency || "THB";
+  const currentMinor =
+    getAccountBalancesFromTransfers(db).find((b) => b.id === account.id)?.balance_minor ?? 0;
+  const targetMinor = toMinorUnits(target, currency);
+  const deltaMinor = targetMinor - currentMinor;
+  if (deltaMinor === 0) return { transferId: null, delta: 0 };
+
+  const amount = Math.abs(deltaMinor);
+  const debitNormal = account.type === "asset" || account.type === "expense";
+  const accountIsDebit = (debitNormal && deltaMinor > 0) || (!debitNormal && deltaMinor < 0);
+  const debitAccountId = accountIsDebit ? account.id : EQUITY_ADJUST_ID;
+  const creditAccountId = accountIsDebit ? EQUITY_ADJUST_ID : account.id;
+
+  const date =
+    opts.date && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : todayIso();
+  const reason = String(opts.reason || "Balance adjustment").trim();
+
+  let transferId = "";
+  const tx = db.transaction((): void => {
+    if (!findAccountById(db, EQUITY_ADJUST_ID)) {
+      ensureStructuralAccount(db, "equity:adjustments");
+    }
+    transferId = insertTransfer(db, {
+      date,
+      description: reason,
+      debit_account_id: debitAccountId,
+      credit_account_id: creditAccountId,
+      amount,
+      currency,
+    }).id;
+  });
+  tx();
+
+  return { transferId, delta: fromMinorUnits(deltaMinor, currency) };
 }

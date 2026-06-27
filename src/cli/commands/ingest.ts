@@ -2,8 +2,14 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { resolve } from "path";
 import type { Command } from "commander";
-import type { CommitContext, CommitHooks } from "../../scanner/commit.js";
-import type { TransactionInput } from "../../db/queries/transactions.js";
+import type {
+  TransferCommitContext,
+  TransferCommitHooks,
+  TransferSide,
+  RawTransferInput,
+  LinkedTransferHeader,
+  LinkedTransferLeg,
+} from "../../scanner/commit-transfer.js";
 import {
   type Column,
   EXIT,
@@ -21,10 +27,10 @@ import {
 /**
  * `ingest` command tree for the deterministic harness.
  * Everything an external scan agent needs to drive the pipeline without the
- * interactive TUI: list candidate files, prepare pages, commit extracted rows,
- * and mark files done/failed. Heavy db/scanner imports are deferred inside each
- * action so non-db commands don't pay for libsql/mupdf at startup (mirrors the
- * pattern in status.ts).
+ * interactive TUI: list candidate files, prepare pages, commit extracted rows
+ * as transfers, and mark files done/failed. Heavy db/scanner imports are
+ * deferred inside each action so non-db commands don't pay for libsql/mupdf at
+ * startup (mirrors the pattern in status.ts).
  */
 
 // --- small shared output helper -------------------------------------------
@@ -212,86 +218,81 @@ interface CommitOpts {
   scanId?: string;
 }
 
+type SideHow = "exact" | "fuzzy_matched" | "placeholder_created" | "uncategorized_fallback";
+
 type CommitEvent =
-  | { kind: "placeholder"; accountId: string }
-  | { kind: "fuzzy"; originalId: string; matchedId: string }
+  | { kind: "placeholder"; side: TransferSide; accountId: string }
+  | { kind: "fuzzy"; side: TransferSide; originalId: string; matchedId: string }
   | { kind: "unknown_merchant"; attemptedId: string }
-  | { kind: "dirty"; reason: string };
+  | { kind: "dirty"; reason: string }
+  | { kind: "currency_mismatch" };
 
 /** Wrap the default hooks so every raised question still fires (delegated to
  *  the default), while we also capture a typed event per callback to build the
- *  per-posting resolution report afterwards. */
-function makeRecordingHooks(base: CommitHooks, events: CommitEvent[]): CommitHooks {
+ *  per-side resolution report afterwards. */
+function makeRecordingHooks(base: TransferCommitHooks, events: CommitEvent[]): TransferCommitHooks {
   return {
-    onCommitted: (txId) => base.onCommitted(txId),
+    onCommitted: (id) => base.onCommitted(id),
     onDirtyInput: (input, reason) => {
       base.onDirtyInput(input, reason);
       events.push({ kind: "dirty", reason });
     },
-    onUnknownMerchant: (input, txId, attemptedId) => {
-      base.onUnknownMerchant(input, txId, attemptedId);
+    onUnknownMerchant: (input, id, attemptedId) => {
+      base.onUnknownMerchant(input, id, attemptedId);
       events.push({ kind: "unknown_merchant", attemptedId });
     },
-    onPlaceholderAccount: (accountId, txId) => {
-      base.onPlaceholderAccount(accountId, txId);
-      events.push({ kind: "placeholder", accountId });
+    onPlaceholderAccount: (side, accountId, id) => {
+      base.onPlaceholderAccount(side, accountId, id);
+      events.push({ kind: "placeholder", side, accountId });
     },
-    onSimilarAccount: (originalId, matchedId, txId) => {
-      base.onSimilarAccount(originalId, matchedId, txId);
-      events.push({ kind: "fuzzy", originalId, matchedId });
+    onSimilarAccount: (side, originalId, matchedId, id) => {
+      base.onSimilarAccount(side, originalId, matchedId, id);
+      events.push({ kind: "fuzzy", side, originalId, matchedId });
+    },
+    onCurrencyMismatch: (input, debit, credit) => {
+      base.onCurrencyMismatch(input, debit, credit);
+      events.push({ kind: "currency_mismatch" });
     },
   };
 }
-
-function toTransactionInput(item: any, sourceFileId: string | null): TransactionInput {
-  const postings = Array.isArray(item.postings) ? item.postings : [];
-  return {
-    date: item.date,
-    description: item.description,
-    source_file_id: sourceFileId,
-    source_page: item.source_page ?? null,
-    raw_descriptor: item.raw_descriptor ?? null,
-    merchant: item.merchant ?? null,
-    merchant_id: item.merchant_id ?? null,
-    postings: postings.map((p: any) => ({
-      account_id: p.account_id,
-      debit: p.debit ?? 0,
-      credit: p.credit ?? 0,
-      currency: p.currency || "THB",
-      memo: p.memo ?? null,
-    })),
-  };
-}
-
-type PostingHow = "exact" | "fuzzy_matched" | "placeholder_created" | "uncategorized_fallback";
 
 /**
- * Classify how each *input* posting's account_id was resolved. Derived from the
- * captured hook events + a post-commit existence check — deliberately NOT from
- * getTransaction ordering (postings there are ORDER BY p.id, a random UUID, and
- * an extra equity:adjustments row may have been appended, so index alignment to
- * the input is unreliable).
+ * Classify how an input side's account_id was resolved. Derived from the
+ * captured hook events + a post-commit existence check — NOT from the stored
+ * row (a duplicate re-commit fires no hooks, so absence of an event on an
+ * existing account reads correctly as "exact").
  */
-function classifyPosting(
+function classifySide(
   requested: string,
+  side: TransferSide,
   events: CommitEvent[],
   accountExists: (id: string) => boolean,
-): { resolved: string; how: PostingHow } {
+): { resolved: string; how: SideHow } {
   const fuzzy = events.find(
     (e): e is Extract<CommitEvent, { kind: "fuzzy" }> =>
-      e.kind === "fuzzy" && e.originalId === requested,
+      e.kind === "fuzzy" && e.side === side && e.originalId === requested,
   );
   if (fuzzy) return { resolved: fuzzy.matchedId, how: "fuzzy_matched" };
 
   const placeholder = events.find(
-    (e) => e.kind === "placeholder" && e.accountId === requested,
+    (e) => e.kind === "placeholder" && e.side === side && e.accountId === requested,
   );
   if (placeholder) return { resolved: requested, how: "placeholder_created" };
 
-  // No event keyed to `requested`: it was either resolved exactly (account
-  // exists) or redirected to expense:uncategorized (invalid/unresolvable path).
   if (accountExists(requested)) return { resolved: requested, how: "exact" };
   return { resolved: "expense:uncategorized", how: "uncategorized_fallback" };
+}
+
+function classifyMerchant(
+  item: any,
+  events: CommitEvent[],
+  resolvedMerchantId: () => string | null | undefined,
+): { how: string; merchant_id?: string } {
+  const hadMerchant = !!(item.merchant || item.merchant_id);
+  if (!hadMerchant) return { how: "none" };
+  if (events.some((e) => e.kind === "unknown_merchant")) return { how: "unknown" };
+  const mid = resolvedMerchantId();
+  return { how: "linked", merchant_id: mid ?? undefined };
 }
 
 async function ingestCommit(opts: CommitOpts): Promise<void> {
@@ -299,36 +300,125 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
   if (items.length === 0) fail("USAGE", "no transaction data on stdin");
 
   const db = await openDb();
-  const { commitTransaction, defaultCommitHooks } = await import("../../scanner/commit.js");
-  const { getTransaction } = await import("../../db/queries/transactions.js");
+  const { commitTransfer, commitLinkedTransfers, defaultTransferCommitHooks } = await import(
+    "../../scanner/commit-transfer.js"
+  );
+  const { getTransfer } = await import("../../db/queries/transfers.js");
   const { findAccountById } = await import("../../db/queries/account-balance.js");
+  const { findScannedFileById } = await import("../../db/queries/files.js");
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
 
-  // ALWAYS have a scanId: defaultCommitHooks.raise() early-returns when scanId
-  // is null (commit.ts), which silently drops every question. Minted once per
+  // ALWAYS have a scanId: defaultTransferCommitHooks.raise() early-returns when
+  // scanId is null, which silently drops every question. Minted once per
   // invocation unless the caller supplied one.
   const scanId = opts.scanId ?? `sc:${randomUUID()}`;
 
+  // Derive the deterministic-id source hash from the scanned_files row (cached).
+  const fileHashCache = new Map<string, string | null>();
+  const fileHashFor = (fileId: string | null): string | null => {
+    if (!fileId) return null;
+    if (!fileHashCache.has(fileId)) {
+      fileHashCache.set(fileId, findScannedFileById(db, fileId)?.file_hash ?? null);
+    }
+    return fileHashCache.get(fileId) ?? null;
+  };
+
   const results: Record<string, unknown>[] = [];
   let posted = 0;
+  let duplicates = 0;
   let failed = 0;
   let raisedTotal = 0;
 
   for (let index = 0; index < items.length; index++) {
     const item: any = items[index];
-    const sourceFileId = (item.source_file_id ?? opts.file) ?? null;
-    const txInput = toTransactionInput(item, sourceFileId);
-
-    const ctx: CommitContext = {
+    const fileId = (item.source_file_id ?? opts.file) ?? null;
+    const ctx: TransferCommitContext = {
       scanId,
-      fileId: sourceFileId,
+      fileId,
+      fileHash: fileHashFor(fileId),
       chunkId: null,
       progress: null,
     };
     const events: CommitEvent[] = [];
-    const hooks = makeRecordingHooks(defaultCommitHooks(db, ctx), events);
+    const hooks = makeRecordingHooks(defaultTransferCommitHooks(db, ctx), events);
 
-    const outcome = commitTransaction(db, ctx, txInput, hooks);
+    const isCompound = Array.isArray(item.linked) && item.linked.length > 0;
+
+    if (isCompound) {
+      const header: LinkedTransferHeader = {
+        date: item.date,
+        description: item.description,
+        raw_descriptor: item.raw_descriptor ?? null,
+        source_file_id: fileId,
+        source_page: item.source_page ?? null,
+        merchant: item.merchant ?? null,
+        merchant_id: item.merchant_id ?? null,
+        group_id: item.group_id ?? null,
+        row_index: item.row_index ?? null,
+      };
+      const legs: LinkedTransferLeg[] = item.linked.map((l: any) => ({
+        debit_account_id: l.debit_account ?? l.debit_account_id,
+        credit_account_id: l.credit_account ?? l.credit_account_id,
+        amount: l.amount,
+        currency: l.currency ?? null,
+        description: l.description,
+        code: l.code ?? null,
+      }));
+
+      const outcome = commitLinkedTransfers(db, ctx, header, legs, hooks);
+      raisedTotal += outcome.raisedQuestions;
+
+      if (!outcome.ok) {
+        failed++;
+        results.push({
+          type: "result",
+          index,
+          ok: false,
+          reason: outcome.reason,
+          message: outcome.message,
+          raised_questions: outcome.raisedQuestions,
+        });
+        continue;
+      }
+
+      const allDuplicate = outcome.results.every((r) => r.duplicate);
+      if (allDuplicate) duplicates++;
+      else posted++;
+
+      results.push({
+        type: "result",
+        index,
+        ok: true,
+        group_id: outcome.group_id,
+        legs: outcome.results.map((r) => ({ transfer_id: r.id, duplicate: r.duplicate })),
+        duplicate: allDuplicate,
+        raised_questions: outcome.raisedQuestions,
+        merchant: classifyMerchant(item, events, () =>
+          getTransfer(db, outcome.results[0]?.id)?.merchant_id,
+        ),
+      });
+      continue;
+    }
+
+    // Standalone transfer.
+    const raw: RawTransferInput = {
+      id: item.id ?? undefined,
+      date: item.date,
+      description: item.description,
+      raw_descriptor: item.raw_descriptor ?? null,
+      source_file_id: fileId,
+      source_page: item.source_page ?? null,
+      row_index: item.row_index ?? null,
+      merchant: item.merchant ?? null,
+      merchant_id: item.merchant_id ?? null,
+      debit_account_id: item.debit_account ?? item.debit_account_id,
+      credit_account_id: item.credit_account ?? item.credit_account_id,
+      amount: item.amount,
+      currency: item.currency ?? null,
+      code: item.code ?? null,
+    };
+
+    const outcome = commitTransfer(db, ctx, raw, hooks);
     raisedTotal += outcome.raisedQuestions;
 
     if (!outcome.ok) {
@@ -344,52 +434,48 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
       continue;
     }
 
-    posted++;
-    const txId = outcome.transactionId;
-
-    const hadMerchant = !!(item.merchant || item.merchant_id);
-    const unknownMerchant = events.some((e) => e.kind === "unknown_merchant");
-    let merchant: Record<string, unknown>;
-    if (!hadMerchant) {
-      merchant = { how: "none" };
-    } else if (unknownMerchant) {
-      merchant = { how: "unknown" };
-    } else {
-      const detail = getTransaction(db, txId);
-      merchant = { how: "linked", merchant_id: detail?.merchant_id ?? undefined };
-    }
-
-    const postings = txInput.postings.map((p, i) => {
-      const c = classifyPosting(p.account_id, events, accountExists);
-      return { index: i, requested: p.account_id, resolved: c.resolved, how: c.how };
-    });
+    if (outcome.duplicate) duplicates++;
+    else posted++;
 
     results.push({
       type: "result",
       index,
       ok: true,
-      transaction_id: txId,
+      transfer_id: outcome.transferId,
+      duplicate: outcome.duplicate,
       raised_questions: outcome.raisedQuestions,
-      merchant,
-      postings,
+      merchant: classifyMerchant(item, events, () => getTransfer(db, outcome.transferId)?.merchant_id),
+      sides: [
+        {
+          side: "debit",
+          requested: raw.debit_account_id,
+          ...classifySide(raw.debit_account_id, "debit", events, accountExists),
+        },
+        {
+          side: "credit",
+          requested: raw.credit_account_id,
+          ...classifySide(raw.credit_account_id, "credit", events, accountExists),
+        },
+      ],
     });
   }
 
   const mode = currentMode();
   if (mode.json) {
     for (const r of results) emitItem(r);
-    emitSummary({ batch_id: scanId, posted, failed, raised_questions: raisedTotal });
+    emitSummary({ batch_id: scanId, posted, duplicates, failed, raised_questions: raisedTotal });
   } else {
     for (const r of results) emitObject(r);
     process.stdout.write(
-      `\nbatch ${scanId}: ${posted} posted, ${failed} failed, ${raisedTotal} question(s) raised\n`,
+      `\nbatch ${scanId}: ${posted} posted, ${duplicates} duplicate(s), ${failed} failed, ${raisedTotal} question(s) raised\n`,
     );
   }
 
+  // Exit 7 only for genuine failures — duplicates are a successful no-op.
   if (failed > 0) process.exitCode = EXIT.PARTIAL;
 }
 
-// --- ingest done / fail / clean --------------------------------------------
+// --- ingest done / fail ----------------------------------------------------
 
 interface DoneOpts {
   agent?: string;
@@ -423,19 +509,10 @@ async function ingestFail(id: string, opts: FailOpts): Promise<void> {
   const changes = markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
   if (changes === 0) fail("NOT_FOUND", `no ingest entry: ${id}`);
 
-  emitObject({ file_id: id, status: "failed", cache_removed: [] });
-}
-
-interface CleanOpts {
-  file?: string;
-}
-
-async function ingestClean(opts: CleanOpts): Promise<void> {
   const { cleanCache } = await import("../../scanner/ingest.js");
-  const { removed } = cleanCache(opts.file);
-  emitObject({ removed });
+  const { removed } = cleanCache(id);
+  emitObject({ file_id: id, status: "failed", cache_removed: removed });
 }
-
 
 // --- registration ----------------------------------------------------------
 
@@ -461,7 +538,7 @@ export function registerIngest(program: Command): void {
 
   ingest
     .command("commit")
-    .description("Commit prepared transactions (NDJSON/JSON array on stdin) into the ledger")
+    .description("Commit prepared transfers (NDJSON/JSON array on stdin) into the ledger")
     .option("--file <id>", "default source file id for committed rows")
     .option("--scan-id <id>", "scan id to attach questions to (minted when omitted)")
     .action(runAction(ingestCommit));
@@ -479,10 +556,4 @@ export function registerIngest(program: Command): void {
     .option("--agent <name>", "name of the failing agent")
     .option("--error <text>", "failure reason")
     .action(runAction(ingestFail));
-
-  ingest
-    .command("clean")
-    .description("Clean up prepared ingest artifacts")
-    .option("--file <id>", "file id to clean")
-    .action(runAction(ingestClean));
 }

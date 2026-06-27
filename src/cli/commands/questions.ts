@@ -6,7 +6,7 @@ interface QuestionListRow {
   id: string;
   kind: string | null;
   prompt: string;
-  transaction_id: string | null;
+  transfer_id: string | null;
   account_id: string | null;
   options: unknown;
   context: unknown;
@@ -28,7 +28,7 @@ function toListRow(row: QuestionRow): QuestionListRow {
     id: row.id,
     kind: row.kind,
     prompt: row.prompt,
-    transaction_id: row.transaction_id,
+    transfer_id: row.transfer_id,
     account_id: row.account_id,
     options: parseJsonColumn(row.options_json),
     context: parseJsonColumn(row.context_json),
@@ -46,7 +46,7 @@ const LIST_COLUMNS: Column<QuestionListRow>[] = [
   { header: "id", value: (r) => r.id },
   { header: "kind", value: (r) => r.kind ?? "" },
   { header: "prompt", value: (r) => r.prompt },
-  { header: "transaction_id", value: (r) => r.transaction_id ?? "" },
+  { header: "transfer_id", value: (r) => r.transfer_id ?? "" },
   { header: "account_id", value: (r) => r.account_id ?? "" },
   { header: "options", value: (r) => (r.options != null ? JSON.stringify(r.options) : "") },
   { header: "context", value: (r) => (r.context != null ? JSON.stringify(r.context) : "") },

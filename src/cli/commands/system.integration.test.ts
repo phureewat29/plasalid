@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../db/queries/account-balance.js";
-import { recordTransaction } from "../../db/queries/transactions.js";
+import { insertTransfer } from "../../db/queries/transfers.js";
 import { recordQuestion } from "../../db/queries/questions.js";
 
 // system.integration.test.ts lives in src/cli/commands/ -> repo root is three
@@ -162,7 +162,7 @@ describe("system CLI integration (subprocess)", () => {
   );
 
   it(
-    "report net-worth + period reflect directly-seeded ledger data",
+    "status net_worth + report period reflect directly-seeded ledger data",
     async () => {
       const raw = new Database(dbPath);
       raw.pragma("foreign_keys = ON");
@@ -174,33 +174,33 @@ describe("system CLI integration (subprocess)", () => {
         createAccount(raw, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
         createAccount(raw, { id: "expense:food", name: "Food", type: "expense", parent_id: "expense" });
 
-        recordTransaction(raw, {
+        insertTransfer(raw, {
           date: "2026-01-15",
           description: "Salary deposit",
-          postings: [
-            { account_id: "asset:bank", debit: 1000, currency: "THB" },
-            { account_id: "income:salary", credit: 1000, currency: "THB" },
-          ],
+          debit_account_id: "asset:bank",
+          credit_account_id: "income:salary",
+          amount: 100000,
+          currency: "THB",
         });
-        recordTransaction(raw, {
+        insertTransfer(raw, {
           date: "2026-01-20",
           description: "Grocery run",
-          postings: [
-            { account_id: "expense:food", debit: 200, currency: "THB" },
-            { account_id: "asset:bank", credit: 200, currency: "THB" },
-          ],
+          debit_account_id: "expense:food",
+          credit_account_id: "asset:bank",
+          amount: 20000,
+          currency: "THB",
         });
       } finally {
         raw.close();
       }
 
-      const nw = await runCli(["report", "net-worth", "--json"]);
-      expect(nw.code).toBe(0);
-      expect(parseOne(nw.stdout)).toMatchObject({
+      const status = await runCli(["status", "--json"]);
+      expect(status.code).toBe(0);
+      const statusObj = parseOne(status.stdout);
+      expect(statusObj.net_worth).toMatchObject({
         assets: 800,
         liabilities: 0,
         net_worth: 800,
-        currency: "THB",
       });
 
       const period = await runCli(["report", "period", "--from", "2026-01-01", "--to", "2026-01-31", "--json"]);
@@ -227,7 +227,6 @@ describe("system CLI integration (subprocess)", () => {
       try {
         q1 = recordQuestion(raw, {
           file_id: null,
-          transaction_id: null,
           account_id: "expense:food",
           kind: "uncategorized",
           prompt: "Which category for this recurring charge?",
@@ -236,7 +235,6 @@ describe("system CLI integration (subprocess)", () => {
         });
         q2 = recordQuestion(raw, {
           file_id: null,
-          transaction_id: null,
           account_id: "expense:food",
           kind: "duplicate",
           prompt: "Possible duplicate — snooze for later review?",

@@ -9,13 +9,9 @@ import {
   accountNumberKey,
   normalizeMaskedAccountNumber,
   getAccountSubtree,
-  getRollupBalance,
   ensureStructuralAccount,
   ensureTopLevelRoot,
-  adjustAccountBalance,
-  getAccountBalances,
 } from "./account-balance.js";
-import { recordTransaction } from "./transactions.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -140,7 +136,7 @@ describe("ensureStructuralAccount + ensureTopLevelRoot", () => {
   });
 });
 
-describe("hierarchy: getAccountSubtree + getRollupBalance", () => {
+describe("hierarchy: getAccountSubtree", () => {
   let db: Database.Database;
   beforeEach(() => {
     db = freshDb();
@@ -159,27 +155,6 @@ describe("hierarchy: getAccountSubtree + getRollupBalance", () => {
       "expense:food:dining",
       "expense:food:groceries",
     ]);
-  });
-
-  it("sums balances across the subtree", () => {
-    recordTransaction(db, {
-      date: "2026-02-01",
-      description: "Lunch",
-      postings: [
-        { account_id: "expense:food:dining", debit: 350 },
-        { account_id: "asset:cash", credit: 350 },
-      ],
-    });
-    recordTransaction(db, {
-      date: "2026-02-02",
-      description: "Groceries",
-      postings: [
-        { account_id: "expense:food:groceries", debit: 600 },
-        { account_id: "asset:cash", credit: 600 },
-      ],
-    });
-    expect(getRollupBalance(db, "expense:food")).toBe(950);
-    expect(getRollupBalance(db, "asset:cash")).toBe(-950);
   });
 });
 
@@ -292,86 +267,5 @@ describe("normalizeMaskedAccountNumber", () => {
     expect(normalizeMaskedAccountNumber("••7652")).toBe("••7652");
     expect(normalizeMaskedAccountNumber(null)).toBeNull();
     expect(normalizeMaskedAccountNumber("••")).toBe("••");
-  });
-});
-
-describe("adjustAccountBalance", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = freshDb();
-    createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
-    createAccount(db, { id: "asset:cash", name: "Cash", type: "asset", parent_id: "asset" });
-    createAccount(db, { id: "liability", name: "Liabilities", type: "liability", parent_id: null });
-    createAccount(db, { id: "liability:ktc", name: "KTC Card", type: "liability", parent_id: "liability" });
-  });
-
-  it("posts a balancing transaction and returns the positive delta for a debit-normal account", () => {
-    ensureStructuralAccount(db, "equity:opening-balance");
-    recordTransaction(db, {
-      date: "2026-05-01",
-      description: "Opening",
-      postings: [
-        { account_id: "asset:cash", debit: 1000 },
-        { account_id: "equity:opening-balance", credit: 1000 },
-      ],
-    });
-
-    const result = adjustAccountBalance(db, {
-      accountId: "asset:cash",
-      targetAmount: 1500,
-      reason: "Set to current market value",
-    });
-
-    expect(result.delta).toBe(500);
-    expect(result.transactionId).not.toBeNull();
-    const balance = getAccountBalances(db).find(b => b.id === "asset:cash")!.balance;
-    expect(balance).toBe(1500);
-
-    // The equity:adjustments account absorbs the opposite side (credit-normal).
-    const adjustBalance = getAccountBalances(db).find(b => b.id === "equity:adjustments")!.balance;
-    expect(adjustBalance).toBe(500);
-  });
-
-  it("posts a balancing transaction with correct orientation for a credit-normal account", () => {
-    ensureStructuralAccount(db, "equity:opening-balance");
-    recordTransaction(db, {
-      date: "2026-05-01",
-      description: "Opening",
-      postings: [
-        { account_id: "equity:opening-balance", debit: 1000 },
-        { account_id: "liability:ktc", credit: 1000 },
-      ],
-    });
-
-    // liability is credit-normal: balance = credits - debits = 1000.
-    // Target 700 means delta = -300 (balance should decrease).
-    const result = adjustAccountBalance(db, {
-      accountId: "liability:ktc",
-      targetAmount: 700,
-      reason: "Paid down card",
-    });
-
-    expect(result.delta).toBe(-300);
-    expect(result.transactionId).not.toBeNull();
-    const balance = getAccountBalances(db).find(b => b.id === "liability:ktc")!.balance;
-    expect(balance).toBe(700);
-  });
-
-  it("is a no-op returning a null transactionId and zero delta when already at target", () => {
-    createAccount(db, { id: "asset:untouched", name: "Untouched", type: "asset", parent_id: "asset" });
-
-    const result = adjustAccountBalance(db, {
-      accountId: "asset:untouched",
-      targetAmount: 0,
-      reason: "Already zero",
-    });
-
-    expect(result).toEqual({ transactionId: null, delta: 0 });
-  });
-
-  it("throws for an unknown account", () => {
-    expect(() =>
-      adjustAccountBalance(db, { accountId: "asset:nope", targetAmount: 100, reason: "x" }),
-    ).toThrow(/not found/);
   });
 });

@@ -2,31 +2,46 @@ import type { Command } from "commander";
 import { getDb } from "../../db/connection.js";
 import { currentMode, emit, emitList, fail, requireYes, runAction, type Column } from "../output.js";
 import {
-  getAccountBalances,
-  getRollupBalance,
+  getAccountBalancesFromTransfers,
+  getRollupBalanceFromTransfers,
   createAccount,
   renameAccount,
   mergeAccounts,
   deleteAccount,
-  adjustAccountBalance,
+  adjustAccountBalanceViaTransfer,
   findAccountsByFuzzyName,
-  findSimilarAccounts,
   updateAccountMetadata,
   findAccountById,
   type AccountType,
-  type AccountBalance,
+  type AccountBalanceMinor,
   type CreateAccountInput,
   type UpdateAccountMetadataPatch,
   type FuzzyAccountMatch,
-  type SimilarAccountPair,
 } from "../../db/queries/account-balance.js";
+import { fromMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 
 // The account display `name` is the only free-text field; id/parent_id/type/
-// currency and the numeric balance are structured data left verbatim.
+// currency and the numeric balances are structured data left verbatim.
 const ACCOUNT_REDACT_FIELDS = ["name"] as const;
 
-/** Thrown-Error → exit code mapping shared by create/rename/merge/delete/adjust/metadata:
+/** An account balance with its minor-unit sums presented as decimals (the CLI
+ *  boundary), and the internal `balance_minor` dropped. */
+type PresentedAccount = Omit<
+  AccountBalanceMinor,
+  "balance_minor" | "debits_posted" | "credits_posted"
+> & { debits_posted: number; credits_posted: number };
+
+function present(a: AccountBalanceMinor): PresentedAccount {
+  const { balance_minor: _bm, debits_posted, credits_posted, ...rest } = a;
+  return {
+    ...rest,
+    debits_posted: fromMinorUnits(debits_posted, a.currency),
+    credits_posted: fromMinorUnits(credits_posted, a.currency),
+  };
+}
+
+/** Thrown-Error → exit code mapping shared by create/merge/delete/adjust/update:
  *  messages that name a missing id ("not found" / "does not exist") map to NOT_FOUND,
  *  everything else (hierarchy mismatches, self-merge, non-empty accounts, duplicates)
  *  is a constraint violation and maps to INVALID. */
@@ -43,12 +58,14 @@ function parseOptionalNumber(value: string | undefined, flag: string): number | 
   return n;
 }
 
-const ACCOUNT_COLUMNS: Column<AccountBalance>[] = [
+const ACCOUNT_COLUMNS: Column<PresentedAccount>[] = [
   { header: "ID", value: (a) => a.id },
   { header: "Name", value: (a) => a.name },
   { header: "Type", value: (a) => a.type },
   { header: "Parent", value: (a) => a.parent_id ?? "" },
   { header: "Balance", value: (a) => a.balance.toFixed(2), align: "right" },
+  { header: "Debits", value: (a) => a.debits_posted.toFixed(2), align: "right" },
+  { header: "Credits", value: (a) => a.credits_posted.toFixed(2), align: "right" },
   { header: "Currency", value: (a) => a.currency },
 ];
 
@@ -57,12 +74,6 @@ const MATCH_COLUMNS: Column<FuzzyAccountMatch>[] = [
   { header: "Name", value: (m) => m.account.name },
   { header: "Type", value: (m) => m.account.type },
   { header: "Similarity", value: (m) => m.similarity.toFixed(3), align: "right" },
-];
-
-const SIMILAR_COLUMNS: Column<SimilarAccountPair>[] = [
-  { header: "A", value: (p) => `${p.a.name} (${p.a.id})` },
-  { header: "B", value: (p) => `${p.b.name} (${p.b.id})` },
-  { header: "Similarity", value: (p) => p.similarity.toFixed(3), align: "right" },
 ];
 
 interface AccountTreeNode {
@@ -78,10 +89,10 @@ function buildAccountTree(
   db: ReturnType<typeof getDb>,
   type: AccountType | undefined,
 ): AccountTreeNode[] {
-  const rows = getAccountBalances(db, type ? { type } : {});
+  const rows = getAccountBalancesFromTransfers(db, type ? { type } : {});
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const childrenMap = new Map<string, AccountBalance[]>();
-  const roots: AccountBalance[] = [];
+  const childrenMap = new Map<string, AccountBalanceMinor[]>();
+  const roots: AccountBalanceMinor[] = [];
   for (const r of rows) {
     if (r.parent_id && byId.has(r.parent_id)) {
       const arr = childrenMap.get(r.parent_id) ?? [];
@@ -91,12 +102,12 @@ function buildAccountTree(
       roots.push(r);
     }
   }
-  const build = (row: AccountBalance): AccountTreeNode => ({
+  const build = (row: AccountBalanceMinor): AccountTreeNode => ({
     id: row.id,
     name: row.name,
     type: row.type,
     balance: row.balance,
-    rollup: getRollupBalance(db, row.id),
+    rollup: getRollupBalanceFromTransfers(db, row.id),
     children: (childrenMap.get(row.id) ?? []).map(build),
   });
   return roots.map(build);
@@ -139,7 +150,9 @@ export function registerAccounts(program: Command): void {
       runAction((opts: { type?: string; redact?: boolean }) => {
         const db = getDb();
         const rows = applyRedaction(
-          getAccountBalances(db, opts.type ? { type: opts.type as AccountType } : {}),
+          getAccountBalancesFromTransfers(db, opts.type ? { type: opts.type as AccountType } : {}).map(
+            present,
+          ),
           !!opts.redact,
           ACCOUNT_REDACT_FIELDS,
         );
@@ -176,13 +189,19 @@ export function registerAccounts(program: Command): void {
         const db = getDb();
         const account = findAccountById(db, id);
         if (!account) fail("NOT_FOUND", `account "${id}" not found`);
-        const balances = getAccountBalances(db);
-        const balance = balances.find((b) => b.id === id)?.balance ?? 0;
-        const rollup = getRollupBalance(db, id);
+        const balances = getAccountBalancesFromTransfers(db);
+        const self = balances.find((b) => b.id === id);
         const children = balances
           .filter((b) => b.parent_id === id)
           .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance }));
-        emit({ ...account, balance, rollup, children });
+        emit({
+          ...account,
+          balance: self?.balance ?? 0,
+          debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
+          credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
+          rollup: getRollupBalanceFromTransfers(db, id),
+          children,
+        });
       }),
     );
 
@@ -257,20 +276,6 @@ export function registerAccounts(program: Command): void {
     );
 
   accounts
-    .command("rename <id>")
-    .description("Rename an account")
-    .option("--name <name>", "new account name")
-    .action(
-      runAction((id: string, opts: { name?: string }) => {
-        if (!opts.name) fail("USAGE", "--name is required");
-        const db = getDb();
-        const changes = renameAccount(db, id, opts.name);
-        if (changes === 0) fail("NOT_FOUND", `account "${id}" not found`);
-        emit({ id, name: opts.name, renamed: true });
-      }),
-    );
-
-  accounts
     .command("merge")
     .description("Merge one account into another")
     .option("--from <id>", "account id to merge from")
@@ -284,13 +289,18 @@ export function registerAccounts(program: Command): void {
         if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
         requireYes(opts, "merging accounts");
         const db = getDb();
-        let moved: number;
+        let result;
         try {
-          moved = mergeAccounts(db, opts.from!, opts.to!);
+          result = mergeAccounts(db, opts.from!, opts.to!);
         } catch (err) {
           mapAccountError(err);
         }
-        emit({ from: opts.from, to: opts.to, postings_moved: moved });
+        emit({
+          from: opts.from,
+          to: opts.to,
+          moved: result.moved,
+          deleted_self_transfers: result.deletedSelfTransfers,
+        });
       }),
     );
 
@@ -330,7 +340,7 @@ export function registerAccounts(program: Command): void {
         const db = getDb();
         let result;
         try {
-          result = adjustAccountBalance(db, {
+          result = adjustAccountBalanceViaTransfer(db, {
             accountId: id,
             targetAmount: target,
             reason: opts.reason!,
@@ -339,7 +349,7 @@ export function registerAccounts(program: Command): void {
         } catch (err) {
           mapAccountError(err);
         }
-        emit({ transaction_id: result.transactionId, delta: result.delta });
+        emit({ transfer_id: result.transferId, delta: result.delta });
       }),
     );
 
@@ -359,21 +369,9 @@ export function registerAccounts(program: Command): void {
     );
 
   accounts
-    .command("similar")
-    .description("Find similar accounts")
-    .option("--threshold <n>", "similarity threshold")
-    .action(
-      runAction((opts: { threshold?: string }) => {
-        const threshold = parseOptionalNumber(opts.threshold, "--threshold");
-        const db = getDb();
-        const pairs = findSimilarAccounts(db, threshold);
-        emitList(pairs, SIMILAR_COLUMNS);
-      }),
-    );
-
-  accounts
-    .command("metadata <id>")
-    .description("Update account metadata")
+    .command("update <id>")
+    .description("Update an account's name and/or metadata")
+    .option("--name <name>", "new account name")
     .option("--due-day <n>", "payment due day")
     .option("--statement-day <n>", "statement closing day")
     .option("--points <n>", "reward points balance")
@@ -385,6 +383,7 @@ export function registerAccounts(program: Command): void {
         (
           id: string,
           opts: {
+            name?: string;
             dueDay?: string;
             statementDay?: string;
             points?: string;
@@ -409,21 +408,37 @@ export function registerAccounts(program: Command): void {
               fail("USAGE", `--metadata must be valid JSON: ${(err as Error).message}`);
             }
           }
-          if (Object.keys(patch).length === 0) {
+
+          const hasName = opts.name !== undefined;
+          const hasPatch = Object.keys(patch).length > 0;
+          if (!hasName && !hasPatch) {
             fail(
               "USAGE",
-              "at least one of --due-day, --statement-day, --points, --masked, --bank, --metadata is required",
+              "at least one of --name, --due-day, --statement-day, --points, --masked, --bank, --metadata is required",
             );
           }
 
           const db = getDb();
-          let result;
-          try {
-            result = updateAccountMetadata(db, id, patch);
-          } catch (err) {
-            mapAccountError(err);
+          const result: Record<string, unknown> = { id };
+
+          if (hasName) {
+            const changes = renameAccount(db, id, opts.name!);
+            if (changes === 0) fail("NOT_FOUND", `account "${id}" not found`);
+            result.name = opts.name;
+            result.renamed = true;
           }
-          emit({ id, ...result });
+
+          if (hasPatch) {
+            let metaResult;
+            try {
+              metaResult = updateAccountMetadata(db, id, patch);
+            } catch (err) {
+              mapAccountError(err);
+            }
+            Object.assign(result, metaResult);
+          }
+
+          emit(result);
         },
       ),
     );

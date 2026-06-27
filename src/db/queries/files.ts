@@ -59,31 +59,31 @@ export function findScannedFileById(db: Database.Database, id: string): ScannedF
 export interface DeleteScannedFileResult {
   /** The deleted row, or null when no row matched the id. */
   removed: ScannedFileRow | null;
-  /** Count of transaction rows that cascaded out. */
-  removedTransactions: number;
+  /** Count of transfer rows that cascaded out. */
+  removedTransfers: number;
   /** Count of question rows that cascaded out. */
   removedQuestions: number;
 }
 
 /**
- * Delete a `scanned_files` row by id. Cascades remove transactions
- * (`transactions.source_file_id`) and questions (`questions.file_id`) via the
+ * Delete a `scanned_files` row by id. Cascades remove transfers
+ * (`transfers.source_file_id`) and questions (`questions.file_id`) via the
  * schema's ON DELETE CASCADE. Cascaded counts are gathered before the DELETE
  * so callers can report what disappeared.
  */
 export function deleteScannedFile(db: Database.Database, id: string): DeleteScannedFileResult {
   const removed = findScannedFileById(db, id);
   if (!removed) {
-    return { removed: null, removedTransactions: 0, removedQuestions: 0 };
+    return { removed: null, removedTransfers: 0, removedQuestions: 0 };
   }
-  const removedTransactions = (db
-    .prepare(`SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = ?`)
+  const removedTransfers = (db
+    .prepare(`SELECT COUNT(*) AS n FROM transfers WHERE source_file_id = ?`)
     .get(id) as { n: number }).n;
   const removedQuestions = (db
     .prepare(`SELECT COUNT(*) AS n FROM questions WHERE file_id = ?`)
     .get(id) as { n: number }).n;
   db.prepare(`DELETE FROM scanned_files WHERE id = ?`).run(id);
-  return { removed, removedTransactions, removedQuestions };
+  return { removed, removedTransfers, removedQuestions };
 }
 
 export interface MarkFileScannedOpts {

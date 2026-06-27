@@ -27,7 +27,9 @@ Your data is locked in bank silos. Tracking your net worth means logging into ha
 
 You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Plasalid gives you the primitives to turn that pile of PDFs into a clean, double-entry ledger: page rasterization, an ingest/commit pipeline, duplicate and correlation detection, and a full chart of accounts — all driven through a scriptable CLI, all stored in an encrypted local database.
 
-Plasalid itself contains **zero AI**. There is no built-in model, no API key to configure, no chat window. Instead, an agent CLI you already run — [Claude Code](https://claude.com/claude-code), `claude -p`, [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON — drives Plasalid: it finds your statements, reads the pages, decides what each transaction is, and pushes structured rows back in through `plasalid ingest commit`. Plasalid's job is to be the deterministic, auditable ledger underneath — not the intelligence on top.
+Plasalid itself has no built-in AI model, no API key to configure, no chat window. Instead, an agent CLI you already run with [Claude Code](https://claude.com/claude-code), `claude -p`, [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON.
+
+Drives Plasalid to your statements, reads the pages, decides what each transaction is, and pushes structured rows back in through `plasalid ingest commit`. Plasalid's job is to be the deterministic, auditable ledger underneath.
 
 ## Features
 
@@ -40,12 +42,12 @@ Plasalid itself contains **zero AI**. There is no built-in model, no API key to 
 
 * **Every command speaks JSON.** `--json` turns any command into NDJSON — one object per line, a `summary` line to close out a batch, and a single JSON object on stderr on failure. Exit codes are stable and specific (see below), so an agent (or a shell script) can branch on outcome without scraping text.
 * **Open questions instead of silent guesses.** When the pipeline can't confidently resolve an account or a merchant, it raises a question (`plasalid questions list`) instead of guessing. You or your agent resolve it once with `plasalid questions answer`, and that resolution is remembered.
-* **Full manual control when you want it.** Every step of the pipeline — accounts, postings, merchants, transactions — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
+* **Full manual control when you want it.** Every step of the pipeline — accounts, transfers, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
 
 ### Local-first, encrypted, and inspectable
 
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
-* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `postings list/search`, `tx show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `ledger`, `ledger show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
@@ -77,7 +79,7 @@ From here you have two paths:
 ```bash
 plasalid ingest list                                  # see what's new
 plasalid ingest prepare <path> --pages 1-3             # rasterize pages to PNG
-# read the pages yourself, build transaction JSON, then:
+# read the pages yourself, build transfer JSON, then:
 plasalid ingest commit < transactions.ndjson
 plasalid questions list                               # resolve anything raised
 ```
@@ -90,14 +92,20 @@ plasalid agent-setup --claude   # or --codex — installs a skill pack for your 
 
 Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
 
+### Try the demo
+
+A self-contained, fully isolated demo lives in [`examples/claude-agent/`](examples/claude-agent/): it generates a synthetic bank-statement PDF, installs the skill pack into a throwaway workspace, and drives the whole flow live with `claude -p`. Run `./examples/claude-agent/run-demo.sh` (requires the `claude` CLI; nothing touches your real `~/.plasalid`).
+
 ## The agent workflow
+
+Every row becomes a *transfer*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (`agent-setup`'s SKILL.md ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
 
 This is the loop `agent-setup`'s skill pack teaches an agent CLI to run:
 
 1. **Discover** — `plasalid ingest list --json` to find new/pending files.
 2. **Export pages** — `plasalid ingest prepare <path>` rasterizes the statement to page images (or extracted PDF pages), handling encrypted files via `plasalid vault`.
 3. **Read** — the agent reads the exported pages itself (it has vision; Plasalid does not).
-4. **Commit** — the agent pipes the transactions it extracted, as NDJSON or a JSON array, into `plasalid ingest commit`, which posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback).
+4. **Commit** — the agent pipes the transfers it extracted (one debit account, one credit account, one positive amount per row; splits go as a compound `linked` group), as NDJSON or a JSON array, into `plasalid ingest commit`. The harness posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback, cross-currency row).
 5. **Resolve** — the agent (or you) works through `plasalid questions list` / `answer` / `defer` for whatever got raised, then closes the file out with `plasalid ingest done <id>`.
 
 ## Commands
@@ -111,20 +119,19 @@ plasalid setup          # Initialize the harness non-interactively
 plasalid config         # Show and set harness configuration
 plasalid agent-setup    # Install the skill pack for an agent CLI (--claude | --codex)
 
-plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail / clean
+plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail
 plasalid files          # Browse scanned files (list / show / drop)
 plasalid vault          # Manage file-password patterns for encrypted statements
 
-plasalid tx             # Create, inspect, edit, and recategorize transactions
-plasalid postings       # List, search, and edit postings
+plasalid record         # Record transfers; recategorize, edit, and delete them
+plasalid ledger         # Browse the transfer ledger (list / show)
 plasalid accounts       # Manage the chart of accounts
 plasalid merchants      # Manage merchants and their default accounts
 plasalid questions      # List, answer, and defer open questions
 
-plasalid report         # Net-worth and period reports
-plasalid analyze        # Find duplicate and correlated transactions
+plasalid report         # Period reports (net worth: plasalid status)
+plasalid analyze        # Find duplicate and correlated transfers
 plasalid notes          # Manage freeform notes
-plasalid taxonomy       # Dump the Thai institution registry
 plasalid context        # Show the harness context bundle / its path
 
 plasalid data           # Open the data folder in your OS file explorer (alias: open)

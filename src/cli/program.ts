@@ -12,15 +12,14 @@ import { registerConfig } from "./commands/config-cmd.js";
 import { registerIngest } from "./commands/ingest.js";
 import { registerFiles } from "./commands/files.js";
 import { registerVault } from "./commands/vault.js";
-import { registerTx } from "./commands/tx.js";
-import { registerPostings } from "./commands/postings.js";
+import { registerRecord } from "./commands/record.js";
+import { registerLedger } from "./commands/ledger.js";
 import { registerAccounts } from "./commands/accounts.js";
 import { registerMerchants } from "./commands/merchants.js";
 import { registerQuestions } from "./commands/questions.js";
 import { registerReport } from "./commands/report.js";
 import { registerAnalyze } from "./commands/analyze.js";
 import { registerNotes } from "./commands/notes.js";
-import { registerTaxonomy } from "./commands/taxonomy.js";
 import { registerContext } from "./commands/context.js";
 import { registerAgentSetup } from "./commands/agent-setup.js";
 
@@ -30,18 +29,17 @@ export const COMMANDS = [
   { name: "setup", desc: "Initialize the harness non-interactively" },
   { name: "agent-setup", desc: "Install the skill pack for external agent CLIs (Claude Code, codex)" },
   { name: "config", desc: "Show and set harness configuration" },
-  { name: "ingest", desc: "Ingest pipeline: list/prepare/commit/done/fail/clean" },
+  { name: "ingest", desc: "Ingest pipeline: list/prepare/commit/done/fail" },
   { name: "files", desc: "Browse scanned files (list/show/drop)" },
   { name: "vault", desc: "Manage file-password patterns for encrypted statements" },
-  { name: "tx", desc: "Create, inspect, edit, and recategorize transactions" },
-  { name: "postings", desc: "List, search, and edit postings" },
+  { name: "record", desc: "Record transfers; recategorize, edit, and delete them" },
+  { name: "ledger", desc: "Browse the transfer ledger (list/show)" },
   { name: "accounts", desc: "Manage the chart of accounts" },
   { name: "merchants", desc: "Manage merchants and their default accounts" },
   { name: "questions", desc: "List, answer, and defer open questions" },
-  { name: "report", desc: "Net-worth and period reports" },
-  { name: "analyze", desc: "Find duplicate and correlated transactions" },
+  { name: "report", desc: "Period reports (net worth: plasalid status)" },
+  { name: "analyze", desc: "Find duplicate and correlated transfers" },
   { name: "notes", desc: "Manage freeform notes" },
-  { name: "taxonomy", desc: "Dump the Thai institution registry" },
   { name: "context", desc: "Show the harness context bundle / its path" },
   { name: "data", desc: "Open the data folder in your OS file explorer (alias: open)" },
 ];
@@ -62,6 +60,15 @@ export function buildProgram(): Command {
   const { version } = require("../../package.json");
 
   const program = new Command();
+
+  // Positional options: options are bound to the command level whose operand
+  // (subcommand name) precedes them. Required so a parent command that has BOTH
+  // a bare action and subcommands (record, ledger) can reuse an option name on
+  // a subcommand (e.g. --description on `record` create AND `record update`,
+  // --redact on `ledger` list AND `ledger show`) without the parent swallowing
+  // it. Global --json/--no-color live on every level (addGlobalOptions), so the
+  // OR-walk in getOutputMode still sees them wherever they land.
+  program.enablePositionalOptions();
 
   program
     .name("plasalid")
@@ -96,15 +103,14 @@ export function buildProgram(): Command {
   registerIngest(program);
   registerFiles(program);
   registerVault(program);
-  registerTx(program);
-  registerPostings(program);
+  registerRecord(program);
+  registerLedger(program);
   registerAccounts(program);
   registerMerchants(program);
   registerQuestions(program);
   registerReport(program);
   registerAnalyze(program);
   registerNotes(program);
-  registerTaxonomy(program);
   registerContext(program);
   registerAgentSetup(program);
 

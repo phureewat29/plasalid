@@ -28,13 +28,13 @@ describe("questions table", () => {
   it("accepts arbitrary free-text kinds", () => {
     const kinds = ["uncategorized", "duplicate", "correlation", "recurrence_candidate", "similar_accounts", "file_password", "acme.tax_th__refund"];
     for (const k of kinds) {
-      expect(() => recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: k, prompt: k })).not.toThrow();
+      expect(() => recordQuestion(db, { file_id: null, account_id: "expense:food", kind: k, prompt: k })).not.toThrow();
     }
     expect(listQuestions(db, { limit: 100 })).toHaveLength(kinds.length);
   });
 
   it("closeQuestion deletes the row and returns the captured tuple", () => {
-    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "Which category?" });
+    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "Which category?" });
     const open = listQuestions(db);
     expect(open).toHaveLength(1);
     const closed = closeQuestion(db, open[0].id, "expense:food:groceries");
@@ -44,17 +44,17 @@ describe("questions table", () => {
   });
 
   it("listQuestions scopes by scanId when supplied", () => {
-    recordQuestion(db, { file_id: null, scan_id: "sc:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: null, scan_id: "sc:b", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "b" });
-    recordQuestion(db, { file_id: null, scan_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
+    recordQuestion(db, { file_id: null, scan_id: "sc:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: null, scan_id: "sc:b", account_id: "expense:food", kind: "uncategorized", prompt: "b" });
+    recordQuestion(db, { file_id: null, scan_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
     expect(listQuestions(db, { scanId: "sc:a" }).map(r => r.prompt)).toEqual(["a"]);
     expect(listQuestions(db, { scanId: "sc:b" }).map(r => r.prompt)).toEqual(["b"]);
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
   });
 
   it("listQuestions filters by kind when supplied", () => {
-    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
+    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
     expect(listQuestions(db, { kind: "uncategorized" }).map(r => r.prompt)).toEqual(["a"]);
     expect(listQuestions(db, { kind: "duplicate" }).map(r => r.prompt)).toEqual(["b"]);
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b"]);
@@ -63,9 +63,9 @@ describe("questions table", () => {
   it("listQuestions filters by fileId when supplied", () => {
     insertFile(db, "sf:a");
     insertFile(db, "sf:b");
-    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "b" });
-    recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
+    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: "sf:b", account_id: "expense:food", kind: "uncategorized", prompt: "b" });
+    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
     expect(listQuestions(db, { fileId: "sf:a" }).map(r => r.prompt)).toEqual(["a"]);
     expect(listQuestions(db, { fileId: "sf:b" }).map(r => r.prompt)).toEqual(["b"]);
   });
@@ -73,17 +73,17 @@ describe("questions table", () => {
   it("listQuestions combines kind + fileId filters", () => {
     insertFile(db, "sf:a");
     insertFile(db, "sf:b");
-    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "match" });
-    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "wrong-kind" });
-    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "wrong-file" });
+    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "uncategorized", prompt: "match" });
+    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "duplicate", prompt: "wrong-kind" });
+    recordQuestion(db, { file_id: "sf:b", account_id: "expense:food", kind: "uncategorized", prompt: "wrong-file" });
     expect(listQuestions(db, { kind: "uncategorized", fileId: "sf:a" }).map(r => r.prompt)).toEqual(["match"]);
   });
 
   it("countQuestions already supports kind and file_id scoping (pre-existing)", () => {
     insertFile(db, "sf:a");
     insertFile(db, "sf:b");
-    recordQuestion(db, { file_id: "sf:a", transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: "sf:b", transaction_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
+    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: "sf:b", account_id: "expense:food", kind: "duplicate", prompt: "b" });
     expect(countQuestions(db, { kind: "uncategorized" })).toBe(1);
     expect(countQuestions(db, { file_id: "sf:a" })).toBe(1);
     expect(countQuestions(db, { kind: "duplicate", file_id: "sf:b" })).toBe(1);
@@ -98,7 +98,7 @@ describe("deferQuestion", () => {
   });
 
   it("hides a deferred row from listQuestions and countQuestions by default", () => {
-    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
+    const id = recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
     expect(listQuestions(db)).toHaveLength(1);
     expect(countQuestions(db)).toBe(1);
 
@@ -109,7 +109,7 @@ describe("deferQuestion", () => {
   });
 
   it("surfaces deferred rows when includeDeferred is true", () => {
-    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
+    const id = recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "snooze me" });
     deferQuestion(db, id, 7);
 
     expect(listQuestions(db, { includeDeferred: true })).toHaveLength(1);
@@ -117,7 +117,7 @@ describe("deferQuestion", () => {
   });
 
   it("re-surfaces a row whose deferred_until has passed", () => {
-    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "stale defer" });
+    const id = recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "stale defer" });
     deferQuestion(db, id, 7);
     expect(listQuestions(db)).toHaveLength(0);
 
@@ -132,7 +132,7 @@ describe("deferQuestion", () => {
   });
 
   it("floors fractional days and clamps to >= 1", () => {
-    const id = recordQuestion(db, { file_id: null, transaction_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "x" });
+    const id = recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "x" });
     expect(deferQuestion(db, id, 0)).toBe(true);
     // Read the timestamp back; should be roughly 1 day in the future, never in the past.
     const row = db.prepare(`SELECT deferred_until FROM questions WHERE id = ?`).get(id) as { deferred_until: string };

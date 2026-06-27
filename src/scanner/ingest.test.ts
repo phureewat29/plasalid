@@ -15,10 +15,7 @@ import { generateKey } from "../db/encryption.js";
 import { config } from "../config.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
-import {
-  recordTransaction,
-  countTransactionsBySourceFile,
-} from "../db/queries/transactions.js";
+import { insertTransfer, countTransfersBySourceFile } from "../db/queries/transfers.js";
 import { findScannedFileById } from "../db/queries/files.js";
 import { savePassword } from "./pdf.js";
 import {
@@ -194,7 +191,7 @@ describe("prepareFile", () => {
     );
   });
 
-  it("force re-registers and cascades away the prior scan's transactions", async () => {
+  it("force re-registers and cascades away the prior scan's transfers", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
@@ -203,22 +200,22 @@ describe("prepareFile", () => {
 
     const { fileId: oldId } = registerPendingFile(db, path);
     const merchant = upsertMerchant(db, { canonical_name: "Shop" });
-    recordTransaction(db, {
+    insertTransfer(db, {
       date: "2026-05-01",
       description: "Shop",
       merchant_id: merchant.id,
       source_file_id: oldId,
-      postings: [
-        { account_id: "expense", debit: 10 },
-        { account_id: "asset", credit: 10 },
-      ],
+      debit_account_id: "expense",
+      credit_account_id: "asset",
+      amount: 1000,
+      currency: "THB",
     });
-    expect(countTransactionsBySourceFile(db, oldId)).toBe(1);
+    expect(countTransfersBySourceFile(db, oldId)).toBe(1);
 
     const result = await prepareFile(db, path, { force: true, dpi: 72, outDir });
     expect(result.fileId).not.toBe(oldId);
     expect(findScannedFileById(db, oldId)).toBeNull();
-    expect(countTransactionsBySourceFile(db, oldId)).toBe(0);
+    expect(countTransfersBySourceFile(db, oldId)).toBe(0);
   });
 
   it("throws password_required for an encrypted PDF with no password", async () => {

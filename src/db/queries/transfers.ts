@@ -3,11 +3,11 @@ import { randomUUID, createHash } from "crypto";
 import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
 
 /**
- * TigerBeetle-style single-row transfer. Replaces the transactions+postings
- * two-table model: every movement of money is one row with an explicit debit
- * account and credit account. `amount` is an INTEGER in the currency's minor
- * units (satang, cents, ...) — decimal <-> minor conversion happens at the
- * CLI/pipeline boundary, never in this layer.
+ * TigerBeetle-style single-row transfer: every movement of money is one row —
+ * one debit account, one credit account, one positive minor-unit amount.
+ * `amount` is an INTEGER in the currency's minor units (satang, cents, ...) —
+ * decimal <-> minor conversion happens at the CLI/pipeline boundary, never in
+ * this layer.
  */
 export interface TransferInput {
   /** Optional pre-assigned id. Derived (`tf:` + hash) by the pipeline so

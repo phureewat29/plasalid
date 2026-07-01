@@ -35,7 +35,7 @@ Drives Plasalid to your statements, reads the pages, decides what each transacti
 
 ### Unified ledger from any financial document
 
-* **Drop PDFs, get a pipeline.** `plasalid ingest list` discovers new statements, `plasalid ingest prepare` rasterizes their pages (handling encrypted PDFs via a stored password vault), and `plasalid ingest commit` posts the transactions an agent extracted straight into a double-entry ledger.
+* **Drop PDFs, get a pipeline.** `plasalid ingest list` discovers new statements, `plasalid ingest prepare` hands back a readable statement document (unlocking encrypted PDFs via a stored password vault), and `plasalid ingest commit` posts the transactions an agent extracted straight into a double-entry ledger.
 * **No aggregators or per-bank logins.** The big picture builds itself from the documents you already get every month. Zero manual data entry and no fragile bank connectors to maintain.
 
 ### A harness, not a black box
@@ -78,8 +78,8 @@ From here you have two paths:
 
 ```bash
 plasalid ingest list                                  # see what's new
-plasalid ingest prepare <path> --pages 1-3             # rasterize pages to PNG
-# read the pages yourself, build transfer JSON, then:
+plasalid ingest prepare <path>                         # unlock + get the statement document path
+# read the document yourself, build transfer JSON, then:
 plasalid ingest commit < transactions.ndjson
 plasalid questions list                               # resolve anything raised
 ```
@@ -94,7 +94,7 @@ Then just ask your agent: *"ingest my new statements."* It will run `plasalid in
 
 ### Try the demo
 
-A self-contained, fully isolated demo lives in [`examples/claude-agent/`](examples/claude-agent/): it generates a synthetic bank-statement PDF, installs the skill pack into a throwaway workspace, and drives the whole flow live with `claude -p`. Run `./examples/claude-agent/run-demo.sh` (requires the `claude` CLI; nothing touches your real `~/.plasalid`).
+**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected Thai credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions — all live via `claude -p` in an isolated workspace. Run `./examples/corgi-agent/demo.sh` (requires the `claude` CLI; nothing touches your real `~/.plasalid`).
 
 ## The agent workflow
 
@@ -103,8 +103,8 @@ Every row becomes a *transfer*: it debits one account and credits another by the
 This is the loop `agent-setup`'s skill pack teaches an agent CLI to run:
 
 1. **Discover** — `plasalid ingest list --json` to find new/pending files.
-2. **Export pages** — `plasalid ingest prepare <path>` rasterizes the statement to page images (or extracted PDF pages), handling encrypted files via `plasalid vault`.
-3. **Read** — the agent reads the exported pages itself (it has vision; Plasalid does not).
+2. **Prepare** — `plasalid ingest prepare <path>` registers the file and returns its readable `document` path, unlocking encrypted PDFs via `plasalid vault`.
+3. **Read** — the agent reads the statement PDF directly (modern agent models read PDFs natively; Plasalid stays deterministic).
 4. **Commit** — the agent pipes the transfers it extracted (one debit account, one credit account, one positive amount per row; splits go as a compound `linked` group), as NDJSON or a JSON array, into `plasalid ingest commit`. The harness posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback, cross-currency row).
 5. **Resolve** — the agent (or you) works through `plasalid questions list` / `answer` / `defer` for whatever got raised, then closes the file out with `plasalid ingest done <id>`.
 
@@ -213,7 +213,7 @@ npm run build
 npm link # makes 'plasalid' available globally
 ```
 
-`npm run smoke` builds and runs a non-TTY smoke test over the full read-only command surface (NDJSON validity, exit codes, zero ANSI).
+`npm run integration` builds the CLI and runs a two-stage integration test against the built binary: a read-surface sweep (NDJSON validity, exit codes, zero ANSI) and a full write-path lifecycle in an isolated environment.
 
 ## License
 

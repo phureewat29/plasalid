@@ -20,9 +20,8 @@ import { recordQuestion } from "../db/queries/questions.js";
 import type { MerchantUpsertInput } from "../db/queries/merchants.js";
 
 /**
- * Commit context for the transfer pipeline. Extends the transaction one with
- * `fileHash` (drives deterministic id derivation). `chunkId`/`progress` stay in
- * the shape for hook parity but are null in this phase.
+ * Commit context for the transfer pipeline. `fileHash` enables idempotent
+ * transfer id derivation; `chunkId`/`progress` are unused and always null.
  */
 export interface TransferCommitContext {
   readonly scanId: string | null;

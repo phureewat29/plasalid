@@ -7,12 +7,12 @@
 #
 # The whole run is isolated from any real ~/.plasalid installation: HOME,
 # the sqlite db path, the data dir, and the cache dir are all redirected into
-# a throwaway temp workspace (same isolation pattern as scripts/smoke.ts).
+# an isolated workspace (same isolation pattern as scripts/integration.ts).
 #
 # Usage:
-#   ./run-demo.sh                 # full demo (requires the `claude` CLI)
-#   SKIP_CLAUDE=1 ./run-demo.sh   # plumbing-only check, no `claude` required
-#   KEEP_DEMO_TMP=1 ./run-demo.sh # leave the temp workspace on disk afterwards
+#   ./demo.sh                  # full demo (requires the `claude` CLI)
+#   SKIP_CLAUDE=1 ./demo.sh    # plumbing-only check, no `claude` required
+#   KEEP_WORKSPACE=1 ./demo.sh # leave the workspace on disk afterwards
 #
 set -euo pipefail
 
@@ -22,48 +22,52 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd -P)"
 echo "==> Building plasalid ($REPO_ROOT)"
 npm run build --prefix "$REPO_ROOT"
 
-TMP="$(mktemp -d)"
-echo "==> Temp workspace: $TMP"
+WORKSPACE="$(mktemp -d)"
+echo "==> Workspace: $WORKSPACE"
 
 cleanup() {
   local exit_code=$?
-  if [ "${KEEP_DEMO_TMP:-0}" = "1" ]; then
-    echo "==> KEEP_DEMO_TMP=1: leaving temp workspace at $TMP"
+  if [ "${KEEP_WORKSPACE:-0}" = "1" ]; then
+    echo "==> KEEP_WORKSPACE=1: leaving workspace at $WORKSPACE"
   else
-    rm -rf "$TMP"
+    rm -rf "$WORKSPACE"
   fi
   exit "$exit_code"
 }
 trap cleanup EXIT
 
-mkdir -p "$TMP/home" "$TMP/data" "$TMP/cwd" "$TMP/bin" "$TMP/cache"
+mkdir -p "$WORKSPACE/home" "$WORKSPACE/data" "$WORKSPACE/cwd" "$WORKSPACE/bin" "$WORKSPACE/cache"
 
 # --- bin shim: put a `plasalid` on PATH that runs this checkout's build ----
-cat > "$TMP/bin/plasalid" <<EOF
+cat > "$WORKSPACE/bin/plasalid" <<EOF
 #!/bin/sh
 exec node "$REPO_ROOT/dist/cli/index.js" "\$@"
 EOF
-chmod +x "$TMP/bin/plasalid"
-export PATH="$TMP/bin:$PATH"
+chmod +x "$WORKSPACE/bin/plasalid"
+export PATH="$WORKSPACE/bin:$PATH"
 
-# --- isolation env (mirrors scripts/smoke.ts's temp-env pattern) ----------
-export HOME="$TMP/home"
-export USERPROFILE="$TMP/home"
-export PLASALID_DB_PATH="$TMP/db.sqlite"
-export PLASALID_DATA_DIR="$TMP/data"
-export PLASALID_CACHE_DIR="$TMP/cache"
+# --- isolation env (mirrors scripts/integration.ts's isolated-env pattern) --
+export HOME="$WORKSPACE/home"
+export USERPROFILE="$WORKSPACE/home"
+export PLASALID_DB_PATH="$WORKSPACE/db.sqlite"
+export PLASALID_DATA_DIR="$WORKSPACE/data"
+export PLASALID_CACHE_DIR="$WORKSPACE/cache"
 export PLASALID_DB_ENCRYPTION_KEY=""
 export NO_COLOR=1
 
-# --- synthetic, fictional bank statement -----------------------------------
-mkdir -p "$TMP/data/kasibank"
-echo "==> Generating synthetic bank statement"
-npx tsx "$SCRIPT_DIR/generate-statement.ts" "$TMP/data/kasibank/2026-06.pdf"
+# --- card statement (ships already password-protected; the vault decrypts) ---
+STATEMENT_PASSWORD="corgimoho"
+mkdir -p "$WORKSPACE/data/ttb"
+echo "==> Placing the password-protected card statement"
+cp "$SCRIPT_DIR/card-statement-2026-05.pdf" "$WORKSPACE/data/ttb/card-statement-2026-05.pdf"
 
-cd "$TMP/cwd"
+cd "$WORKSPACE/cwd"
 
 echo "==> Installing plasalid skill for Claude Code"
-plasalid agent-setup --dir "$TMP/cwd/.claude" --json
+plasalid agent-setup --dir "$WORKSPACE/cwd/.claude" --json
+
+echo "==> Storing the statement password in the vault"
+printf '%s' "$STATEMENT_PASSWORD" | plasalid vault add '^card-statement' --password-stdin --json
 
 echo "==> Status before ingest"
 plasalid status --json
@@ -105,16 +109,16 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> claude agent: ingest my new statements, then summarize what you found"
-ANSWER_1="$(claude -p "ingest my new statements, then summarize what you found" \
-  --allowedTools "Bash(plasalid:*),Read")"
+echo "==> claude agent: ingest my new statements, then summarize what you found — biggest spending categories, any refunds, and the card payment"
+ANSWER_1="$(claude -p "ingest my new statements, then summarize what you found — biggest spending categories, any refunds, and the card payment" \
+  --allowedTools "Bash(plasalid:*),Read,Write")"
 echo "----- claude answer (ingest + summarize) -----"
 echo "$ANSWER_1"
 echo "-----------------------------------------------"
 
-echo "==> claude agent: what's my net worth and what did I spend money on this month?"
-ANSWER_2="$(claude -p "what's my net worth and what did I spend money on this month?" \
-  --allowedTools "Bash(plasalid:*),Read")"
+echo "==> claude agent: how much did I spend in this billed period, and what were my top merchants?"
+ANSWER_2="$(claude -p "how much did I spend in this billed period, and what were my top merchants?" \
+  --allowedTools "Bash(plasalid:*),Read,Write")"
 echo "----- claude answer (net worth + spending) -----"
 echo "$ANSWER_2"
 echo "-------------------------------------------------"

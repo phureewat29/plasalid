@@ -43,6 +43,10 @@ export interface PrepareResult {
   fileId: string;
   pageCount: number;
   format: "png" | "pdf";
+  // Present for format:"pdf" — the document an agent model should Read
+  // directly (the original data-dir path when unencrypted, a decrypted cache
+  // copy when the source was encrypted).
+  document?: string;
   pages: PreparedPage[];
 }
 
@@ -68,8 +72,7 @@ interface WalkedFile {
   relPath: string;
 }
 
-// Copied from decrypt.ts's walker, decoupled from ScanState so this module
-// survives the Phase 3 rip-out of the interactive pipeline.
+// Recursively walks the data dir for PDFs.
 function walk(dir: string, root: string, out: WalkedFile[]): void {
   const entries = tryExecute(() => readdirSync(dir));
   if (!entries.ok) return;
@@ -169,7 +172,7 @@ export async function prepareFile(
   entryOrId: string,
   opts: PrepareOptions = {},
 ): Promise<PrepareResult> {
-  const format = opts.format ?? "png";
+  const format = opts.format ?? "pdf";
 
   // entryOrId is a fileId when a row matches; otherwise a filesystem path.
   const byId = findScannedFileById(db, entryOrId);
@@ -185,6 +188,20 @@ export async function prepareFile(
     ? known.id
     : registerPendingFile(db, absPath).fileId;
 
+  // PDF-first fast path: an unencrypted statement is handed back by its
+  // original data-dir path — agent models Read PDFs natively, so no cache
+  // copy is made and nothing is written to disk.
+  if (format === "pdf" && !(await isEncrypted(loaded.bytes))) {
+    const pageCount = await countPdfPages(loaded.bytes);
+    return {
+      fileId,
+      pageCount,
+      format,
+      document: absPath,
+      pages: [{ page: 0, path: absPath }],
+    };
+  }
+
   const unlocked = await unlockNonInteractive(db, loaded.bytes, absPath, {
     password: opts.password,
   });
@@ -197,7 +214,7 @@ export async function prepareFile(
   if (format === "pdf") {
     const out = resolve(outDir, "document.pdf");
     writeFileSync(out, unlocked.decrypted, { mode: 0o600 });
-    return { fileId, pageCount, format, pages: [{ page: 0, path: out }] };
+    return { fileId, pageCount, format, document: out, pages: [{ page: 0, path: out }] };
   }
 
   const requested = opts.pages ?? range(pageCount);

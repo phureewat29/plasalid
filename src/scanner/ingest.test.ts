@@ -4,7 +4,9 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   existsSync,
+  statSync,
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
@@ -169,26 +171,55 @@ describe("prepareFile", () => {
     expect(png.subarray(1, 4).toString("latin1")).toBe("PNG");
   });
 
-  it("defaults to every page when none are requested", async () => {
+  it("defaults to every page when none are requested (png fallback)", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
 
-    const result = await prepareFile(db, path, { dpi: 72, outDir });
+    const result = await prepareFile(db, path, { format: "png", dpi: 72, outDir });
     expect(result.pages.map((p) => p.page)).toEqual([0]);
   });
 
-  it("writes a single decrypted document.pdf for the pdf format", async () => {
+  it("defaults to pdf format when none is specified", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+
+    const result = await prepareFile(db, path, { outDir });
+    expect(result.format).toBe("pdf");
+  });
+
+  it("returns the original data-dir path as the document for a non-encrypted pdf, writing nothing to the cache", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
 
     const result = await prepareFile(db, path, { format: "pdf", outDir });
     expect(result.format).toBe("pdf");
-    expect(result.pages).toEqual([{ page: 0, path: resolve(outDir, "document.pdf") }]);
-    expect(readFileSync(result.pages[0].path).subarray(0, 4).toString("latin1")).toBe(
-      "%PDF",
-    );
+    expect(result.document).toBe(path);
+    expect(result.pages).toEqual([{ page: 0, path }]);
+    // Nothing was written under either the explicit outDir or the fileId's cache dir.
+    expect(readdirSync(outDir)).toEqual([]);
+    expect(existsSync(resolve(cacheDir, result.fileId))).toBe(false);
+  });
+
+  it("writes a decrypted document.pdf (mode 0600) to the cache dir for an encrypted pdf, purged by cleanCache", async () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "kbank.pdf");
+    writeFileSync(path, await encryptedPdf("secret"));
+
+    // No outDir -> lands under getCacheDir()/<fileId>, like the png fallback.
+    const result = await prepareFile(db, path, { format: "pdf", password: "secret" });
+    const expectedDir = resolve(cacheDir, result.fileId);
+    expect(result.format).toBe("pdf");
+    expect(result.document).toBe(resolve(expectedDir, "document.pdf"));
+    expect(result.pages).toEqual([{ page: 0, path: result.document }]);
+    expect(readFileSync(result.document!).subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(statSync(result.document!).mode & 0o777).toBe(0o600);
+
+    const removed = cleanCache(result.fileId);
+    expect(removed.removed).toEqual([expectedDir]);
+    expect(existsSync(result.document!)).toBe(false);
   });
 
   it("force re-registers and cascades away the prior scan's transfers", async () => {
@@ -229,16 +260,18 @@ describe("prepareFile", () => {
     });
   });
 
-  it("unlocks an encrypted PDF with the supplied password", async () => {
+  it("unlocks an encrypted PDF with the supplied password (png fallback still rasterizes)", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "kbank.pdf");
     writeFileSync(path, await encryptedPdf("secret"));
 
     const result = await prepareFile(db, path, {
+      format: "png",
       password: "secret",
       dpi: 72,
       outDir,
     });
+    expect(result.format).toBe("png");
     expect(result.pageCount).toBe(1);
     expect(existsSync(result.pages[0].path)).toBe(true);
   });
@@ -251,7 +284,9 @@ describe("cleanCache", () => {
     writeFileSync(path, minimalPdf());
 
     // No outDir -> lands under getCacheDir()/<fileId> (redirected to tmp).
-    const one = await prepareFile(db, path, { dpi: 72 });
+    // format:"png" so a cache write actually happens (the pdf default is a
+    // no-write passthrough for a non-encrypted file — see prepareFile tests).
+    const one = await prepareFile(db, path, { format: "png", dpi: 72 });
     const oneDir = resolve(cacheDir, one.fileId);
     expect(existsSync(oneDir)).toBe(true);
 
@@ -259,7 +294,7 @@ describe("cleanCache", () => {
     expect(removedOne.removed).toEqual([oneDir]);
     expect(existsSync(oneDir)).toBe(false);
 
-    await prepareFile(db, path, { dpi: 72, force: true });
+    await prepareFile(db, path, { format: "png", dpi: 72, force: true });
     const removedAll = cleanCache();
     expect(removedAll.removed.length).toBeGreaterThan(0);
     expect(existsSync(cacheDir)).toBe(false);

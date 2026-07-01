@@ -1,13 +1,13 @@
 import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
-  // Backward compatibility is NOT required. If we detect a pre-harness-cut
-  // schema (old provider/model columns on scanned_files, or the deleted
-  // conversation_history/hints tables), wipe every table and rebuild the clean
-  // shape below. Data loss on legacy DBs is accepted and intended — the user
-  // gets a fresh, empty ledger. Fresh and already-migrated DBs are NOT legacy,
-  // so they skip the wipe and every CREATE ... IF NOT EXISTS is a no-op, making
-  // a second migrate() call idempotent.
+  // Backward compatibility is not supported. If any legacy schema shape is
+  // present — the conversation_history/hints tables, the transactions/postings
+  // tables, provider/model columns on scanned_files, or a transaction_id
+  // column on questions — all tables are dropped and rebuilt (data loss
+  // intended; the user gets a fresh, empty ledger). Fresh and already-migrated
+  // DBs are NOT legacy, so they skip the wipe and every CREATE ... IF NOT
+  // EXISTS is a no-op, making a second migrate() call idempotent.
   if (isLegacySchema(db)) {
     dropAllTables(db);
   }
@@ -134,12 +134,12 @@ export function migrate(db: Database.Database): void {
 }
 
 /**
- * Detect a pre-harness-cut OR pre-TigerBeetle-cutover database. Any of these
- * signals is conclusive:
- *   - the deleted `conversation_history` / `hints` tables still exist, or
- *   - the retired `transactions` / `postings` two-table ledger still exists, or
- *   - `scanned_files` still carries the old `provider` / `model` columns, or
- *   - `questions` still carries the retired `transaction_id` column.
+ * Detects whether any legacy schema shape is present. Any of these signals is
+ * conclusive:
+ *   - the `conversation_history` / `hints` tables exist, or
+ *   - the `transactions` / `postings` two-table ledger exists, or
+ *   - `scanned_files` still carries `provider` / `model` columns, or
+ *   - `questions` still carries a `transaction_id` column.
  * A fresh (empty) DB and an already-migrated clean DB both return false, so the
  * caller only wipes genuinely-legacy databases. Nuke-and-recreate is intended:
  * data loss on a legacy DB is accepted (the user gets a fresh, empty ledger).

@@ -34,7 +34,7 @@
     "test": "vitest run",
     "dev": "tsx src/cli/index.ts",
     "release": "tsx scripts/release.ts",
-    "smoke": "npm run build && tsx scripts/smoke.ts",
+    "integration": "npm run build && tsx scripts/integration.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

@@ -141,7 +141,7 @@ describe("transfers table (TigerBeetle-core)", () => {
       (c) => c.name,
     );
     expect(cols).toContain("transfer_id");
-    // The retired transaction_id column is gone after the cutover.
+    // questions carries transfer_id, not transaction_id.
     expect(cols).not.toContain("transaction_id");
   });
 
@@ -164,12 +164,13 @@ describe("transfers table (TigerBeetle-core)", () => {
 
 describe("legacy DB migration (nuke + recreate)", () => {
   /**
-   * Build a SIMULATED pre-harness-cut DB by hand-executing the OLD DDL:
-   * conversation_history + hints tables, and scanned_files WITH provider/model
-   * and WITHOUT source. Seeds a scanned_files row (provider='anthropic') plus a
-   * referencing transaction so we can assert the wipe removed the old data.
-   * Backward compatibility is NOT required — migrate() is expected to detect
-   * this shape and drop everything before rebuilding the clean schema.
+   * Builds a legacy-shaped DB by hand-executing DDL that isLegacySchema must
+   * detect: conversation_history + hints tables, and scanned_files WITH
+   * provider/model and WITHOUT source. Seeds a scanned_files row
+   * (provider='anthropic') plus a referencing transaction so we can assert the
+   * wipe removed the legacy data. Backward compatibility is not supported —
+   * migrate() is expected to detect this shape and drop everything before
+   * rebuilding the clean schema.
    */
   function legacyDb(): Database.Database {
     const db = freshDb();
@@ -247,14 +248,14 @@ describe("legacy DB migration (nuke + recreate)", () => {
     expect(() => migrate(db)).not.toThrow();
 
     const tables = tableNames(db);
-    // Deleted subsystems are gone and not recreated.
+    // conversation_history and hints no longer exist.
     expect(tables).not.toContain("conversation_history");
     expect(tables).not.toContain("hints");
     // Clean schema is present.
     for (const t of ["accounts", "merchants", "scanned_files", "transfers", "questions"]) {
       expect(tables, `missing table: ${t}`).toContain(t);
     }
-    // scanned_files is the new shape.
+    // scanned_files has the current shape.
     const cols = scannedFilesCols(db);
     expect(cols).toContain("source");
     expect(cols).not.toContain("provider");
@@ -267,7 +268,7 @@ describe("legacy DB migration (nuke + recreate)", () => {
 
     expect(db.prepare(`SELECT COUNT(*) AS n FROM scanned_files`).get()).toMatchObject({ n: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS n FROM transfers`).get()).toMatchObject({ n: 0 });
-    // The old provider-scanned file is gone.
+    // The legacy rows were wiped.
     expect(db.prepare(`SELECT COUNT(*) AS n FROM scanned_files WHERE id = 'f:1'`).get()).toMatchObject({
       n: 0,
     });

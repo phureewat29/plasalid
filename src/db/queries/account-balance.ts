@@ -71,7 +71,7 @@ export function ensureTopLevelRoot(db: Database.Database, type: AccountType): vo
 
 /**
  * Idempotently insert one of the structural accounts the system auto-creates:
- *  - `expense:uncategorized`  (suspense for unclassifiable expense postings)
+ *  - `expense:uncategorized`  (suspense for unclassifiable expense entries)
  *  - `equity:adjustments`     (balancing side of `adjust_account_balance`)
  *  - `equity:opening-balance` (starting state imports)
  * The top-level root is bootstrapped first when missing.

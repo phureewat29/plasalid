@@ -18,9 +18,8 @@ export interface PlasalidConfig {
   userName: string;
 }
 
-/** The persisted config keys. Reads ignore any other (legacy) keys, and
- *  saveConfig writes ONLY these — so legacy provider fields disappear on the
- *  next write rather than being carried forward. */
+/** The persisted config keys. Unknown keys are tolerated on read and dropped
+ *  on the next write — saveConfig writes ONLY these fields. */
 const CONFIG_KEYS: readonly (keyof PlasalidConfig)[] = [
   "displayLocale",
   "displayCurrency",
@@ -54,7 +53,7 @@ function loadFileConfig(): Partial<PlasalidConfig> {
   const configPath = getConfigPath();
   if (!existsSync(configPath)) return {};
   try {
-    // Unknown/legacy keys (e.g. old provider settings) are tolerated on read —
+    // Unknown keys are tolerated on read and dropped on the next write —
     // buildConfig only reads the surviving fields below, and pickConfigFields
     // strips everything else on the next write.
     return JSON.parse(readFileSync(configPath, "utf-8"));
@@ -101,7 +100,7 @@ export function saveConfig(partial: Partial<PlasalidConfig>): void {
 
   const existing = loadFileConfig();
   // Merge onto the existing file, then strip to the surviving keys so any
-  // legacy provider fields still on disk are dropped by this write.
+  // unknown keys still on disk are dropped by this write.
   const merged = pickConfigFields({ ...existing, ...partial });
   writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", {
     mode: 0o600,

@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { resolve } from "path";
+import { Option } from "commander";
 import type { Command } from "commander";
 import type {
   TransferCommitContext,
@@ -164,7 +165,7 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
   if (opts.format && opts.format !== "png" && opts.format !== "pdf") {
     fail("USAGE", `--format must be "png" or "pdf" (got "${opts.format}")`);
   }
-  const format = (opts.format ?? "png") as "png" | "pdf";
+  const format = (opts.format ?? "pdf") as "png" | "pdf";
 
   const pages = parsePagesSpec(opts.pages ?? "all");
 
@@ -202,11 +203,22 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
     throw err;
   }
 
+  if (result.format === "pdf") {
+    emitObject({
+      file_id: result.fileId,
+      format: result.format,
+      document: result.document,
+      page_count: result.pageCount,
+      pages: result.pages,
+    });
+    return;
+  }
+
   emitObject({
     file_id: result.fileId,
     page_count: result.pageCount,
     format: result.format,
-    dpi: result.format === "pdf" ? null : (dpi ?? DEFAULT_DPI),
+    dpi: dpi ?? DEFAULT_DPI,
     pages: result.pages,
   });
 }
@@ -216,6 +228,7 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
 interface CommitOpts {
   file?: string;
   scanId?: string;
+  input?: string;
 }
 
 type SideHow = "exact" | "fuzzy_matched" | "placeholder_created" | "uncategorized_fallback";
@@ -296,8 +309,8 @@ function classifyMerchant(
 }
 
 async function ingestCommit(opts: CommitOpts): Promise<void> {
-  const items = await readStdinTransactions();
-  if (items.length === 0) fail("USAGE", "no transaction data on stdin");
+  const items = await readStdinTransactions(opts.input);
+  if (items.length === 0) fail("USAGE", "no transaction data provided");
 
   const db = await openDb();
   const { commitTransfer, commitLinkedTransfers, defaultTransferCommitHooks } = await import(
@@ -527,20 +540,23 @@ export function registerIngest(program: Command): void {
 
   ingest
     .command("prepare <pathOrId>")
-    .description("Prepare a file for ingestion")
+    .description("Prepare a file for ingestion; returns the statement's document path to Read")
     .option("--password-stdin", "read a password from stdin")
     .option("--force", "overwrite existing prepared output")
-    .option("--format <fmt>", "output format (png|pdf)")
-    .option("--dpi <n>", "rasterization resolution in DPI")
-    .option("--pages <spec>", "page range to prepare (1-based, e.g. all | 1-5,8)")
+    .addOption(new Option("--format <fmt>", "output format (png|pdf)").hideHelp())
+    .addOption(new Option("--dpi <n>", "rasterization resolution in DPI").hideHelp())
+    .addOption(
+      new Option("--pages <spec>", "page range to prepare (1-based, e.g. all | 1-5,8)").hideHelp(),
+    )
     .option("--out <dir>", "output directory")
     .action(runAction(ingestPrepare));
 
   ingest
     .command("commit")
-    .description("Commit prepared transfers (NDJSON/JSON array on stdin) into the ledger")
+    .description("Commit extracted transfers (NDJSON/JSON array via --input file or stdin) into the ledger")
     .option("--file <id>", "default source file id for committed rows")
     .option("--scan-id <id>", "scan id to attach questions to (minted when omitted)")
+    .option("--input <path>", "read the batch from an NDJSON/JSON file instead of stdin")
     .action(runAction(ingestCommit));
 
   ingest

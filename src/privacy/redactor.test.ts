@@ -82,19 +82,19 @@ describe("applyRedaction", () => {
 
   it("deep-walks nested objects and arrays", () => {
     const detail = {
-      id: "tx:1",
+      id: "e:1",
       description: "salary 1-2345-67890-12-3",
-      postings: [
-        { id: "p:1", account_id: "asset:kbank", memo: "card 4111 1111 1111 1111" },
-        { id: "p:2", account_id: "expense:food", memo: null },
+      entries: [
+        { id: "e:2", account_id: "asset:kbank", memo: "card 4111 1111 1111 1111" },
+        { id: "e:3", account_id: "expense:food", memo: null },
       ],
     };
     const out = applyRedaction(detail, true, ["description", "memo"]);
     expect(out.description).toBe("salary [NATID]");
-    expect(out.postings[0].memo).toBe("card [CARD]");
-    expect(out.postings[0].account_id).toBe("asset:kbank");
-    expect(out.postings[1].memo).toBeNull();
-    expect(out.id).toBe("tx:1");
+    expect(out.entries[0].memo).toBe("card [CARD]");
+    expect(out.entries[0].account_id).toBe("asset:kbank");
+    expect(out.entries[1].memo).toBeNull();
+    expect(out.id).toBe("e:1");
   });
 
   it("does not mutate the input", () => {

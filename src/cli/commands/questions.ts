@@ -38,7 +38,7 @@ function toListRow(row: QuestionRow): QuestionListRow {
 }
 
 // The question `prompt` is the free-text field. options/context are structured
-// JSON that can embed account/transaction ids the agent needs verbatim (and
+// JSON that can embed account/transfer ids the agent needs verbatim (and
 // bare-string option arrays with no key to allowlist), so they are left intact.
 const QUESTION_REDACT_FIELDS = ["prompt"] as const;
 

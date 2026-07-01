@@ -161,6 +161,32 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(n).toBe(1);
   }, 30000);
 
+  it("reads the batch from a file via --input (agent file-staging path)", async () => {
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "plasalid-input-"));
+    const inputPath = join(dir, "batch.ndjson");
+    writeFileSync(
+      inputPath,
+      JSON.stringify({
+        date: "2026-01-05",
+        description: "Staged via file",
+        debit_account: "expense:food",
+        credit_account: "asset:cash",
+        amount: 42,
+      }) + "\n",
+    );
+
+    const { stdout, code } = await runCli(["ingest", "commit", "--input", inputPath, "--json"]);
+    expect(code).toBe(0);
+    const objs = parseNdjson(stdout);
+    expect(objs.find((o) => o.type === "summary")?.posted).toBe(1);
+
+    const missing = await runCli(["ingest", "commit", "--input", join(dir, "nope.ndjson"), "--json"]);
+    expect(missing.code).toBe(5);
+  });
+
   it("returns exit 7 (PARTIAL) when one item is valid and one is dirty", async () => {
     const ndjson = [
       JSON.stringify({

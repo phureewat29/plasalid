@@ -1,9 +1,10 @@
 import chalk from "chalk";
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { visibleLength } from "./format.js";
 
 /**
- * Shared output + error layer for the Phase 2 deterministic CLI harness.
+ * Shared output + error layer for the deterministic CLI harness.
  *
  * Output modes (resolved once per action from the global flags + stdout TTY):
  *   --json           → NDJSON. Streaming commands call emitItem() per record and
@@ -207,14 +208,29 @@ export async function readSecretFromStdin(): Promise<string> {
 }
 
 /**
- * Read transactions from stdin, auto-detecting a JSON array (first non-ws char
- * is `[`) vs NDJSON (one object per line). Parse failures raise CliError USAGE
- * with the offending 1-based line number in the message and details.
+ * Read transactions from stdin or a file, auto-detecting a JSON array (first
+ * non-ws char is `[`) vs NDJSON (one object per line). Parse failures raise
+ * CliError USAGE with the offending 1-based line number in the message and
+ * details. `inputPath` lets agents stage the batch with their file tools and
+ * pass a path instead of piping through a shell.
  */
-export async function readStdinTransactions(): Promise<unknown[]> {
-  const raw = (await readStdinToEnd()).replace(/^\uFEFF/, "");
+export async function readStdinTransactions(inputPath?: string): Promise<unknown[]> {
+  let source: string;
+  if (inputPath) {
+    try {
+      source = readFileSync(inputPath, "utf8");
+    } catch (err) {
+      fail("NOT_FOUND", `cannot read --input file: ${(err as Error).message}`, {
+        hint: "pass a readable NDJSON (or JSON array) file path",
+      });
+    }
+  } else {
+    source = await readStdinToEnd();
+  }
+  const raw = source.replace(/^\uFEFF/, "");
   const firstNonWs = raw.match(/\S/);
-  if (!firstNonWs) fail("USAGE", "no transaction data on stdin");
+  if (!firstNonWs)
+    fail("USAGE", inputPath ? `no transaction data in ${inputPath}` : "no transaction data on stdin");
 
   if (firstNonWs[0] === "[") {
     try {

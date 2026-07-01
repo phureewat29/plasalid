@@ -11,8 +11,8 @@ import { insertTransfer } from "../../db/queries/transfers.js";
 import { recordQuestion } from "../../db/queries/questions.js";
 
 // system.integration.test.ts lives in src/cli/commands/ -> repo root is three
-// levels up. Covers the Phase 2b command modules owned by this worker:
-// questions, report, notes, config/setup, doctor.
+// levels up. Covers questions, report, notes, config/setup, and doctor via
+// spawned CLI processes.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 interface CliResult {

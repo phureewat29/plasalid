@@ -54,7 +54,7 @@ You drive \`plasalid\`, a deterministic CLI over a local double-entry ledger. It
 - **The harness never prompts.** Destructive commands need \`--yes\`. Passwords arrive via \`--password-stdin\` or the vault. There is no stdin prompt to wait on.
 - **Branch on the exit code, not stderr prose:** 0 ok · 1 error (inspect; retry or report) · 2 usage (fix the command line) · 3 not-ready (run \`plasalid doctor --json\`) · 4 input required (password or \`--yes\` missing — ask the human, retry) · 5 not-found (wrong id — \`list\`/\`match\`) · 6 invalid input (fix, resend) · 7 partial (batch partly failed — inspect each \`result\` + raised questions). Full table in \`references/schemas.md\`.
 - **Errors** print one object on stderr: \`{"error":{"code":"E_...","message":...,"hint":...}}\`. Always read \`hint\`.
-- **Statement rows go through \`ingest commit --file <sf:id>\` — never \`record\`.** Batch every extracted row (with its \`row_index\`) into ONE \`ingest commit\` call: that links transfers to the source file and makes re-ingest idempotent (\`duplicate:true\` instead of double-posting). \`record\` is only for manual one-off entries the user dictates with no source document.
+- **Statement rows go through \`ingest commit --file <sf:id>\` — never \`record\`.** Batch every extracted row (with its \`row_index\`) into ONE \`ingest commit\` call — write the NDJSON to a file and pass \`--input <path>\`: that links transfers to the source file and makes re-ingest idempotent (\`duplicate:true\` instead of double-posting). \`record\` is only for manual one-off entries the user dictates with no source document.
 
 ## 2. Core concepts
 
@@ -76,6 +76,10 @@ You drive \`plasalid\`, a deterministic CLI over a local double-entry ledger. It
 | Card payment (pay card from bank) | \`liability:credit_card:<x>\` | \`asset:bank:<x>\` |
 | Cash withdrawal | \`asset:cash\` | \`asset:bank:<x>\` |
 | Opening balance (asset) | \`asset:<x>\` | \`equity:opening-balance\` |
+| Opening balance (card / liability) | \`equity:opening-balance\` | \`liability:credit_card:<x>\` |
+
+- **Negative amounts on a statement mean the money flowed BACK.** Never send a negative \`amount\` — flip the direction instead and use the absolute value: a \`-165.00\` refund row on a card is \`debit liability:credit_card:<x> / credit expense:<cat>\` at \`165.00\`; a large negative row like \`Payment via <app>\` is the card payment (\`debit liability:credit_card:<x> / credit asset:bank:<x>\`).
+- **Card statements print two dates per row (transaction date and posted date). Use the TRANSACTION date** for \`date\` — it is when the money actually moved; ignore the posted date.
 
 - **Compound entries = shared-leg decomposition.** A split statement line becomes a compound item: \`linked\` legs that commit atomically under one \`group_id\`. Find the ONE account every leg shares — do NOT invent clearing accounts.
   - _Payslip_ (3 legs, all crediting \`income:salary\`): net \`50000\` -> \`asset:bank:<x>\`, withholding tax \`8000\` -> \`expense:tax\`, social security \`2000\` -> \`expense:social-security\` (\`income:salary\` = gross \`60000\`).
@@ -88,13 +92,16 @@ You drive \`plasalid\`, a deterministic CLI over a local double-entry ledger. It
 ## 3. Workflow: ingest statements
 
 1. \`plasalid ingest list --json\` — every PDF with its status (\`new\`/\`pending\`/\`scanned\`/\`failed\`), \`file_id\`, and whether it is encrypted.
-2. Per new/pending file: \`plasalid ingest prepare <pathOrId> --json\` — registers/unlocks the PDF and exports page PNGs (paths in the result).
+2. Per new/pending file: run \`plasalid ingest prepare <pathOrId> --json\` — registers/unlocks the PDF and returns its \`document\` path.
    - Exit 4 means encrypted and locked. Ask the human for the password, then retry: \`printf '%s' "$PW" | plasalid ingest prepare <id> --password-stdin --json\`. Persist it with \`plasalid vault add <pattern> --password-stdin\`.
-3. **Read the exported PNG pages** — they are image files; view them.
+3. **Read the returned \`document\` PDF directly** (your model reads PDFs natively) — extract every transaction row.
+   - If your environment cannot read PDFs (Read fails or lacks PDF support), fall back to plasalid's built-in rasterizer — no system dependencies needed: \`plasalid ingest prepare <sf:id> --format png --json\` returns \`pages\` as PNG images; Read those instead.
 4. Extract every row into one NDJSON transfer item (schema in section 7 / \`references/schemas.md\`). Number rows with \`row_index\` (0-based, per page) and set \`source_page\` so the commit is idempotent.
-5. Commit: \`... | plasalid ingest commit --file <sf:id> --json\`. Each line returns a \`result\`; the \`summary\` carries \`batch_id\`, \`posted\`, \`duplicates\`, \`failed\`. Exit 7 = some rows failed — inspect each \`result\` (a \`duplicate\` is a successful no-op, not a failure).
-6. \`plasalid questions list --batch <batch_id> --json\` — resolve with the human or defer (section 4).
-7. \`plasalid ingest done <sf:id> --agent claude-code --json\`. (On unrecoverable failure: \`plasalid ingest fail <sf:id> --error "<why>" --json\`.)
+5. Commit: write the NDJSON batch to a file with your file tools, then \`plasalid ingest commit --file <sf:id> --input <path> --json\` (piping the batch on stdin also works where your shell allows it). Each line returns a \`result\`; the \`summary\` carries \`batch_id\`, \`posted\`, \`duplicates\`, \`failed\`. Exit 7 = some rows failed — inspect each \`result\` (a \`duplicate\` is a successful no-op, not a failure).
+   - If this is the first statement for an account, reconcile afterwards: the statement header's balances imply opening balances — post them per the direction table (\`equity:opening-balance\`) so the ledger matches reality, and confirm with the human.
+6. Capture the statement header onto the account: card statements print the masked card number, points balance, and due/statement dates — persist them with \`plasalid accounts update <liability:credit_card:x> --masked <mask> --points <n> --due-day <d> --statement-day <d> --json\`.
+7. \`plasalid questions list --batch <batch_id> --json\` — resolve with the human or defer (section 4).
+8. \`plasalid ingest done <sf:id> --agent claude-code --json\`. (On unrecoverable failure: \`plasalid ingest fail <sf:id> --error "<why>" --json\`.)
 
 ## 4. Workflow: clear the question backlog
 
@@ -170,8 +177,8 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 ## Ingest pipeline
 
 - \`plasalid ingest list [--regex <pattern>]\` — discover data-dir PDFs vs the db.
-- \`plasalid ingest prepare <pathOrId> [--password-stdin] [--force] [--format png|pdf] [--dpi <n>] [--pages "1-5,8"] [--out <dir>]\` — register + unlock + export pages for you to Read. Exit 4 when a password is required.
-- \`plasalid ingest commit [--file <sf:id>] [--scan-id <sc:id>]\` — read NDJSON/JSON-array transfer items from stdin, post them, mint a batch id, return per-item results + summary. Exit 7 on partial failure (duplicates are a successful no-op).
+- \`plasalid ingest prepare <pathOrId> [--password-stdin] [--force] [--out <dir>]\` — register + unlock, returning \`document\` (the statement PDF path) for you to Read. Exit 4 when a password is required. A hidden \`--format png --dpi <n>\` fallback rasterizes to page PNGs for vision-only models.
+- \`plasalid ingest commit [--file <sf:id>] [--scan-id <sc:id>] [--input <path>]\` — read NDJSON/JSON-array transfer items from the \`--input\` file (or stdin), post them, mint a batch id, return per-item results + summary. Exit 7 on partial failure (duplicates are a successful no-op).
 - \`plasalid ingest done <sf:id> [--agent <name>] [--note <text>]\` — mark scanned (clears the page cache).
 - \`plasalid ingest fail <sf:id> --error <text> [--agent <name>]\` — mark failed (also clears the page cache).
 
@@ -215,10 +222,28 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 
 export const SCHEMAS_MD = `# plasalid schemas
 
-## Ingest commit input (stdin)
+## Ingest prepare output (\`ingest prepare <pathOrId> --json\`)
+
+Default format is \`pdf\`:
+
+\`\`\`json
+{"file_id":"sf:...","format":"pdf","document":"/abs/path/to/statement.pdf","page_count":3,"pages":[{"page":0,"path":"/abs/path/to/statement.pdf"}]}
+\`\`\`
+
+\`document\` is the PDF to Read directly (your model reads PDFs natively). When the source PDF is not encrypted, \`document\` IS the original data-dir path — nothing is written to disk. When it was encrypted, \`document\` is a decrypted copy under the cache dir (cleared by \`ingest done\`/\`ingest fail\`).
+
+A hidden \`--format png --dpi <n>\` fallback rasterizes each page to a PNG for vision-only models instead:
+
+\`\`\`json
+{"file_id":"sf:...","format":"png","dpi":150,"page_count":3,"pages":[{"page":0,"path":"/cache/.../p0.png"}]}
+\`\`\`
+
+## Ingest commit input
 
 \`plasalid ingest commit\` reads either NDJSON (one object per line) or a single
-JSON array. One object = one transfer item (standalone or compound):
+JSON array — from a file passed via \`--input <path>\` (preferred for agents:
+stage the batch with your file tools) or from stdin. One object = one transfer
+item (standalone or compound):
 
 | field | type | required | notes |
 |---|---|---|---|
@@ -424,7 +449,7 @@ export function AGENTS_MD_BLOCK(version: string): string {
 - **Exit codes:** 0 ok · 2 usage · 3 not-ready · 4 need password/\`--yes\` (ask the human, retry) · 5 wrong id (list to find it) · 6 invalid input · 7 batch partial (inspect results + questions; duplicates are NOT failures). Errors are \`{"error":{code,message,hint}}\` on stderr.
 - **Double-entry (transfers):** every entry is one transfer — debit exactly one account, credit exactly one account, single positive amount (direction is WHICH account, never a sign). Normal balances: \`asset\`/\`expense\` up on debit; \`liability\`/\`income\`/\`equity\` up on credit. Card purchase = debit \`expense:<cat>\` / credit \`liability:credit_card:<x>\`; bank spend = debit \`expense:<cat>\` / credit \`asset:bank:<x>\`; salary = debit \`asset:bank:<x>\` / credit \`income:salary\`; a refund or card payment flips the card side (full direction table in SKILL.md). Splits (payslip, loan payment, FX) are a compound \`linked:[...]\` sharing one group. A cross-currency move is a linked conversion pair through \`equity:conversion:<ccy>\`, never one transfer. Accounts are colon-paths under \`asset|liability|income|expense|equity\`. Amounts decimal THB; dates ISO (Thai Buddhist-Era years minus 543).
 
-**Ingest:** \`ingest list\` -> \`ingest prepare <id>\` (exit 4 -> ask for password, retry \`--password-stdin\`) -> Read the exported page PNGs -> build NDJSON transfer items -> \`ingest commit --file <sf:id>\` -> \`questions list --batch <batch_id>\` -> \`ingest done <id> --agent codex\`. Each item is \`{date, description, debit_account, credit_account, amount, ...}\` (or a compound \`linked:[...]\`); the account ids are hints (exact -> fuzzy -> placeholder -> uncategorized). Number each row with \`row_index\` (0-based, per page) + \`source_page\` and pass \`--file <sf:id>\` so re-ingest is an idempotent no-op (\`duplicate:true\`). Always send \`raw_descriptor\` + \`merchant:{canonical_name,alias}\`.
+**Ingest:** \`ingest list\` -> \`ingest prepare <id>\` (exit 4 -> ask for password, retry \`--password-stdin\`) -> Read the returned \`document\` PDF directly -> build NDJSON transfer items in a file -> \`ingest commit --file <sf:id> --input <path>\` -> \`questions list --batch <batch_id>\` -> \`ingest done <id> --agent codex\`. Each item is \`{date, description, debit_account, credit_account, amount, ...}\` (or a compound \`linked:[...]\`); the account ids are hints (exact -> fuzzy -> placeholder -> uncategorized). Number each row with \`row_index\` (0-based, per page) + \`source_page\` and pass \`--file <sf:id>\` so re-ingest is an idempotent no-op (\`duplicate:true\`). Always send \`raw_descriptor\` + \`merchant:{canonical_name,alias}\`.
 
 **Clarify:** \`questions list\`; similar_accounts -> \`accounts merge\`; uncategorized -> \`record recategorize\` + \`merchants set-default\`; unknown_merchant -> \`merchants upsert\`; currency_mismatch -> re-record as a linked conversion pair; answer with \`questions answer <id> --answer ...\` (\`--also\` for siblings), or \`questions defer\`. Durable prefs/rules: \`notes add --content ... --category preference\` (check \`notes list\` first).
 

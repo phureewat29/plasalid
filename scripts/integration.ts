@@ -22,7 +22,7 @@
  * a direct `tsx scripts/integration.ts` invocation is self-sufficient.
  */
 import { execSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -232,9 +232,10 @@ function shOk(ctx: Ctx, args: string[], opts: { stdin?: string } = {}): { stdout
   return r;
 }
 
-/** The three statement rows committed in the main lifecycle batch (and
- *  re-committed verbatim to prove idempotency). Dates/amounts match the
- *  KASI BANK statement examples/corgi-agent/generate-statement.ts produces. */
+/** The three rows committed in the main lifecycle batch (and re-committed
+ *  verbatim to prove idempotency). The rows are hand-crafted — the fixture
+ *  PDF's printed contents are never parsed by this test; the PDF exists only
+ *  to exercise discovery, vault unlock, and prepare. */
 function lifecycleItems(): Record<string, unknown>[] {
   return [
     {
@@ -295,29 +296,27 @@ function stepConfigShowEncrypted(ctx: Ctx): void {
   assert(cfg.dbEncryptionKey?.set === true, `config show did not reflect the generated key: ${JSON.stringify(cfg)}`);
 }
 
-function stepGenerateStatement(ctx: Ctx): void {
-  const outPath = join(ctx.dataDir, "kasibank", "2026-06.pdf");
-  const res = spawnSync(
-    "npx",
-    ["tsx", "examples/corgi-agent/generate-statement.ts", outPath, "--encrypt", "integr8"],
-    { cwd: REPO_ROOT, encoding: "utf8" },
-  );
-  ctx.last = {
-    args: ["(generate-statement.ts)", outPath],
-    stdout: res.stdout ?? "",
-    stderr: res.stderr ?? "",
-    code: res.status ?? -1,
-  };
-  if (res.error) throw new AssertionFailure(`spawn error generating statement: ${res.error.message}`);
-  assert(res.status === 0, `generate-statement.ts exited ${res.status}`);
-  assert(existsSync(outPath), `expected generated statement at ${outPath}`);
+/** Fixture: the committed demo statement (examples/corgi-agent/) — a real,
+ *  AES-256 password-protected 4-page card statement. The integration test
+ *  depends on that asset staying in the repo. */
+const FIXTURE_STATEMENT = join(REPO_ROOT, "examples", "corgi-agent", "card-statement-2026-05.pdf");
+const FIXTURE_PASSWORD = "corgimoho";
+
+function stepPlaceStatement(ctx: Ctx): void {
+  const outPath = join(ctx.dataDir, "ttb", "card-statement-2026-05.pdf");
+  mkdirSync(dirname(outPath), { recursive: true });
+  copyFileSync(FIXTURE_STATEMENT, outPath);
+  ctx.last = { args: ["(copy fixture statement)", outPath], stdout: "", stderr: "", code: 0 };
+  assert(existsSync(outPath), `expected fixture statement at ${outPath}`);
   ctx.statementPath = outPath;
 }
 
 function stepVaultAddIngestList(ctx: Ctx): void {
-  const add = shOk(ctx, ["vault", "add", "^2026-06", "--password-stdin"], { stdin: "integr8" });
+  const add = shOk(ctx, ["vault", "add", "^card-statement", "--password-stdin"], {
+    stdin: FIXTURE_PASSWORD,
+  });
   const addResult = parseOne(add.stdout);
-  assert(addResult.pattern === "^2026-06", `unexpected vault add result: ${JSON.stringify(addResult)}`);
+  assert(addResult.pattern === "^card-statement", `unexpected vault add result: ${JSON.stringify(addResult)}`);
 
   const list = shOk(ctx, ["ingest", "list"]);
   const objs = parseNdjson(list.stdout);
@@ -333,7 +332,7 @@ function stepIngestPrepare(ctx: Ctx): void {
   const res = shOk(ctx, ["ingest", "prepare", ctx.statementPath]);
   const result = parseOne(res.stdout);
   assert(typeof result.file_id === "string" && result.file_id.startsWith("sf:"), `bad file_id: ${JSON.stringify(result)}`);
-  assert(result.page_count === 1, `expected page_count 1, got ${result.page_count}`);
+  assert(result.page_count === 4, `expected page_count 4, got ${result.page_count}`);
   const cacheDirResolved = resolve(ctx.cacheDir);
   assert(
     typeof result.document === "string" && result.document.startsWith(cacheDirResolved),
@@ -635,7 +634,7 @@ function stepClosingStatus(ctx: Ctx): void {
 const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
   { label: "lifecycle: setup --generate-key", fn: stepSetup },
   { label: "lifecycle: config show reflects encryption key", fn: stepConfigShowEncrypted },
-  { label: "lifecycle: generate encrypted statement", fn: stepGenerateStatement },
+  { label: "lifecycle: place encrypted statement fixture", fn: stepPlaceStatement },
   { label: "lifecycle: vault add + ingest list (encrypted)", fn: stepVaultAddIngestList },
   { label: "lifecycle: ingest prepare (vault unlock)", fn: stepIngestPrepare },
   { label: "lifecycle: ingest commit (salary/dogfood/grooming)", fn: stepIngestCommit },

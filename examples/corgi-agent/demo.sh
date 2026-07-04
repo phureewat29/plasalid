@@ -53,7 +53,7 @@ export PLASALID_DB_PATH="$WORKSPACE/db.sqlite"
 export PLASALID_DATA_DIR="$WORKSPACE/data"
 export PLASALID_CACHE_DIR="$WORKSPACE/cache"
 export PLASALID_DB_ENCRYPTION_KEY=""
-export NO_COLOR=1
+export NO_COLOR=0
 
 # --- card statement (ships already password-protected; the vault decrypts) ---
 STATEMENT_PASSWORD="corgimoho"
@@ -109,19 +109,31 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> claude agent: ingest my new statements, then summarize what you found — biggest spending categories, any refunds, and the card payment"
-ANSWER_1="$(claude -p "ingest my new statements, then summarize what you found — biggest spending categories, any refunds, and the card payment" \
-  --allowedTools "Bash(plasalid:*),Read,Write")"
-echo "----- claude answer (ingest + summarize) -----"
-echo "$ANSWER_1"
-echo "-----------------------------------------------"
+# Three turns, ONE continued session — the agent keeps its context across
+# turns exactly like day-to-day usage. HOME points into the workspace, so
+# --continue deterministically resumes this demo's own session.
+DEMO_TOOLS="Bash(plasalid:*),Read,Write"
 
-echo "==> claude agent: how much did I spend in this billed period, and what were my top merchants?"
-ANSWER_2="$(claude -p "how much did I spend in this billed period, and what were my top merchants?" \
-  --allowedTools "Bash(plasalid:*),Read,Write")"
-echo "----- claude answer (net worth + spending) -----"
+TURN_1="ingest my new statements, then give me a quick summary of what you found"
+echo "==> turn 1: $TURN_1"
+ANSWER_1="$(claude -p "$TURN_1" --allowedTools "$DEMO_TOOLS")"
+echo "----- turn 1 answer (ingest + summary) -----"
+echo "$ANSWER_1"
+echo "--------------------------------------------"
+
+TURN_2="resolve any open questions using your own judgment, and capture the card's statement metadata (masked number, points, due day) onto the account"
+echo "==> turn 2 (continued session): $TURN_2"
+ANSWER_2="$(claude -p --continue "$TURN_2" --allowedTools "$DEMO_TOOLS")"
+echo "----- turn 2 answer (clarify + metadata) -----"
 echo "$ANSWER_2"
-echo "-------------------------------------------------"
+echo "----------------------------------------------"
+
+TURN_3="how much did I spend this billed period, what were my top merchants, and what should I watch next month?"
+echo "==> turn 3 (continued session): $TURN_3"
+ANSWER_3="$(claude -p --continue "$TURN_3" --allowedTools "$DEMO_TOOLS")"
+echo "----- turn 3 answer (report + advice) -----"
+echo "$ANSWER_3"
+echo "-------------------------------------------"
 
 echo "==> Deterministic assertions"
 STATUS_JSON="$(plasalid status --json)"
@@ -146,5 +158,8 @@ fi
 
 echo "==> Ledger (for flavor)"
 plasalid ledger --json | head -5 || true
+
+echo "==> Open questions after the clarify turn (informational — the agent may defer some)"
+plasalid questions list --json || true
 
 echo "PASS: files.scanned >= 1 and counts.transfers > 0"

@@ -47,14 +47,19 @@ Two environment variables change the script's behavior:
 
 The script builds the project, places the statement, stores its password in
 the vault, installs the plasalid skill so `claude` can discover it, then runs
-two non-interactive `claude -p` prompts:
+a three-turn conversation in ONE continued session (`claude -p`, then
+`claude -p --continue` — the agent keeps its context across turns, exactly
+like day-to-day usage):
 
-1. *"ingest my new statements, then summarize what you found — biggest
-   spending categories, any refunds, and the card payment"*
-2. *"how much did I spend in this billed period, and what were my top
-   merchants?"*
+1. *"ingest my new statements, then give me a quick summary of what you
+   found"*
+2. *"resolve any open questions using your own judgment, and capture the
+   card's statement metadata (masked number, points, due day) onto the
+   account"*
+3. *"how much did I spend this billed period, what were my top merchants,
+   and what should I watch next month?"*
 
-Both answers are printed to the terminal, followed by a deterministic
+Each answer is printed to the terminal, followed by a deterministic
 assertion check (at least one file scanned, at least one transfer recorded)
 and a final `PASS` or `FAIL` line.
 
@@ -79,5 +84,4 @@ vault, which is how the harness unlocks statements without ever prompting.
 | --- | --- |
 | `card-statement-2026-05.pdf` | The password-protected card statement the agent ingests. |
 | `demo.sh` | Builds the project, sets up an isolated workspace, places the statement, stores its password in the vault, installs the plasalid skill for Claude Code, runs the live `claude -p` demo (or the `SKIP_CLAUDE=1` plumbing check), and asserts the outcome. |
-| `generate-statement.ts` | Builds a one-page card-statement PDF from constant data (optionally `--encrypt`ed) — used by `npm run integration` as its test fixture. |
 | `README.md` | This file. |

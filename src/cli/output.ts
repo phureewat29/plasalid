@@ -278,7 +278,7 @@ export function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
   if (isNotReadyError(err)) {
     return new CliError("NOT_READY", (err as Error).message, {
-      hint: "run `plasalid config set` / `plasalid setup` to configure the harness",
+      hint: "run `plasalid config --generate-key` to configure the harness",
     });
   }
   const message = err instanceof Error ? err.message : String(err);

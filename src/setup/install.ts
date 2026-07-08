@@ -60,7 +60,7 @@ export class SkillPackVersionError extends Error {
   }
 }
 
-// install.ts compiles to dist/agent-setup/install.js; ../../package.json from
+// install.ts compiles to dist/setup/install.js; ../../package.json from
 // there is the package root (same 2-level depth as src/cli/index.ts uses).
 const require = createRequire(import.meta.url);
 

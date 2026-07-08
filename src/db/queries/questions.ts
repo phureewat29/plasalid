@@ -2,8 +2,8 @@ import type Database from "libsql";
 import { randomUUID } from "crypto";
 
 export interface QuestionTarget {
-  /** The transfer this question is about, when it targets a specific movement. */
-  transfer_id?: string | null;
+  /** The transaction this question is about, when it targets a specific movement. */
+  transaction_id?: string | null;
   account_id: string | null;
 }
 
@@ -21,7 +21,7 @@ export interface QuestionRow {
   id: string;
   scan_id: string | null;
   file_id: string | null;
-  transfer_id: string | null;
+  transaction_id: string | null;
   account_id: string | null;
   kind: string | null;
   prompt: string;
@@ -43,28 +43,28 @@ export interface ClosedQuestion {
 
 /**
  * Insert a new questions row and flip the `has_question` boolean on whichever
- * target (transfer / account) was named. Returns the new id. The id keeps
+ * target (transaction / account) was named. Returns the new id. The id keeps
  * the historical `cn:` prefix: it's opaque and nothing else references it,
  * so the prefix is a no-op detail.
  */
 export function recordQuestion(db: Database.Database, input: RecordQuestionInput): string {
   const id = `cn:${randomUUID()}`;
   db.prepare(
-    `INSERT INTO questions (id, scan_id, file_id, transfer_id, account_id, kind, prompt, options_json, context_json)
+    `INSERT INTO questions (id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.scan_id ?? null,
     input.file_id,
-    input.transfer_id ?? null,
+    input.transaction_id ?? null,
     input.account_id,
     input.kind ?? null,
     input.prompt,
     input.options ? JSON.stringify(input.options) : null,
     input.context ? JSON.stringify(input.context) : null,
   );
-  if (input.transfer_id) {
-    db.prepare(`UPDATE transfers SET has_question = 1 WHERE id = ?`).run(input.transfer_id);
+  if (input.transaction_id) {
+    db.prepare(`UPDATE transactions SET has_question = 1 WHERE id = ?`).run(input.transaction_id);
   }
   if (input.account_id) {
     db.prepare(`UPDATE accounts SET has_question = 1 WHERE id = ?`).run(input.account_id);
@@ -84,13 +84,13 @@ export function closeQuestion(
 ): ClosedQuestion | null {
   const row = db
     .prepare(
-      `SELECT prompt, kind, transfer_id, account_id, context_json FROM questions WHERE id = ?`,
+      `SELECT prompt, kind, transaction_id, account_id, context_json FROM questions WHERE id = ?`,
     )
     .get(id) as
     | {
         prompt: string;
         kind: string | null;
-        transfer_id: string | null;
+        transaction_id: string | null;
         account_id: string | null;
         context_json: string | null;
       }
@@ -98,7 +98,7 @@ export function closeQuestion(
   if (!row) return null;
   db.prepare(`DELETE FROM questions WHERE id = ?`).run(id);
   maybeClearHasQuestionFlags(db, {
-    transfer_id: row.transfer_id,
+    transaction_id: row.transaction_id,
     account_id: row.account_id,
   });
   return {
@@ -120,26 +120,26 @@ function extractRuleKey(contextJson: string | null): string | null {
 }
 
 /**
- * Look up the transfer/account a question is attached to. Returns null when
+ * Look up the transaction/account a question is attached to. Returns null when
  * the question id doesn't exist.
  */
 export function getQuestionTarget(db: Database.Database, id: string): QuestionTarget | null {
   const row = db
-    .prepare(`SELECT transfer_id, account_id FROM questions WHERE id = ?`)
+    .prepare(`SELECT transaction_id, account_id FROM questions WHERE id = ?`)
     .get(id) as QuestionTarget | undefined;
   return row ?? null;
 }
 
 /**
- * Clear `has_question` on the named transfer / account if no other
+ * Clear `has_question` on the named transaction / account if no other
  * questions still reference it. Safe to call after any resolution; idempotent.
  */
 function maybeClearHasQuestionFlags(db: Database.Database, target: QuestionTarget): void {
-  if (target.transfer_id) {
+  if (target.transaction_id) {
     const open = db
-      .prepare(`SELECT 1 FROM questions WHERE transfer_id = ? LIMIT 1`)
-      .get(target.transfer_id);
-    if (!open) db.prepare(`UPDATE transfers SET has_question = 0 WHERE id = ?`).run(target.transfer_id);
+      .prepare(`SELECT 1 FROM questions WHERE transaction_id = ? LIMIT 1`)
+      .get(target.transaction_id);
+    if (!open) db.prepare(`UPDATE transactions SET has_question = 0 WHERE id = ?`).run(target.transaction_id);
   }
   if (target.account_id) {
     const open = db
@@ -151,7 +151,7 @@ function maybeClearHasQuestionFlags(db: Database.Database, target: QuestionTarge
 
 export interface CountQuestionsScope {
   file_id?: string;
-  transfer_id?: string;
+  transaction_id?: string;
   account_id?: string;
   kind?: string;
   scan_id?: string;
@@ -166,7 +166,7 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
   const conditions: string[] = [];
   const params: any[] = [];
   if (scope.file_id)     { conditions.push("file_id = ?");     params.push(scope.file_id); }
-  if (scope.transfer_id) { conditions.push("transfer_id = ?"); params.push(scope.transfer_id); }
+  if (scope.transaction_id) { conditions.push("transaction_id = ?"); params.push(scope.transaction_id); }
   if (scope.account_id)  { conditions.push("account_id = ?");  params.push(scope.account_id); }
   if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
   if (scope.scan_id)        { conditions.push("scan_id = ?");        params.push(scope.scan_id); }
@@ -181,16 +181,12 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
 export interface ListQuestionsOptions {
   limit?: number;
   scanId?: string;
-  /** Filter by the question's free-text `kind` column. */
-  kind?: string;
-  /** Filter by the `scanned_files` id the question is attached to. */
-  fileId?: string;
   /** When true, include deferred rows in the result (default false). */
   includeDeferred?: boolean;
 }
 
 const ROW_COLUMNS =
-  "id, scan_id, file_id, transfer_id, account_id, kind, prompt, options_json, context_json, deferred_until, created_at";
+  "id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, deferred_until, created_at";
 
 export function listQuestions(
   db: Database.Database,
@@ -200,8 +196,6 @@ export function listQuestions(
   const conditions: string[] = [];
   const params: any[] = [];
   if (opts.scanId) { conditions.push("scan_id = ?"); params.push(opts.scanId); }
-  if (opts.kind)   { conditions.push("kind = ?");    params.push(opts.kind); }
-  if (opts.fileId) { conditions.push("file_id = ?"); params.push(opts.fileId); }
   if (!opts.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(capped);

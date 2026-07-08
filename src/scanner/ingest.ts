@@ -7,7 +7,7 @@ import {
   existsSync,
   rmSync,
 } from "fs";
-import { resolve, relative, sep } from "path";
+import { isAbsolute, resolve, relative, sep } from "path";
 import type Database from "libsql";
 import { config, getDataDir, getCacheDir } from "../config.js";
 import {
@@ -167,6 +167,32 @@ export interface PrepareOptions {
   outDir?: string;
 }
 
+/**
+ * Resolve an `ingest prepare` argument that may be an absolute path, a
+ * data-dir-relative path (what `ingest list`'s `rel_path` emits), a
+ * cwd-relative path, or a `sf:` scanned_files id. Tried in that order;
+ * returns null when nothing matches.
+ */
+export function resolveEntryPath(db: Database.Database, entryOrId: string): string | null {
+  // 1. Absolute path that exists as-is.
+  if (isAbsolute(entryOrId) && existsSync(entryOrId)) return entryOrId;
+
+  // 2. Relative to the data dir — makes `rel_path` from `ingest list` work
+  //    regardless of the caller's cwd.
+  const viaDataDir = resolve(getDataDir(), entryOrId);
+  if (existsSync(viaDataDir)) return viaDataDir;
+
+  // 3. Relative to the current working directory (legacy behavior).
+  const viaCwd = resolve(entryOrId);
+  if (existsSync(viaCwd)) return viaCwd;
+
+  // 4. A scanned_files id.
+  const byId = findScannedFileById(db, entryOrId);
+  if (byId) return byId.path;
+
+  return null;
+}
+
 export async function prepareFile(
   db: Database.Database,
   entryOrId: string,
@@ -174,9 +200,10 @@ export async function prepareFile(
 ): Promise<PrepareResult> {
   const format = opts.format ?? "pdf";
 
-  // entryOrId is a fileId when a row matches; otherwise a filesystem path.
-  const byId = findScannedFileById(db, entryOrId);
-  const absPath = byId ? byId.path : resolve(entryOrId);
+  const absPath = resolveEntryPath(db, entryOrId);
+  if (absPath === null) {
+    throw new Error(`no ingest entry or file at "${entryOrId}"`);
+  }
 
   const loaded = readPdf(absPath);
   let known = findKnownByHash(db, loaded.hash);

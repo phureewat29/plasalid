@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { getConfigPath, getDataDir } from "../../config.js";
-import { getVersion } from "../../agent-setup/install.js";
+import { getVersion } from "../../setup/install.js";
 import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
 
 interface Check {
@@ -16,7 +16,7 @@ interface Check {
 }
 
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
-const REQUIRED_TABLES = ["accounts", "transfers", "questions"];
+const REQUIRED_TABLES = ["accounts", "transactions", "questions"];
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -98,7 +98,7 @@ function skillPackCheck(): Check {
     return {
       name: "skill_pack",
       ok: false,
-      detail: `installed ${installed}, cli ${cli} — run plasalid agent-setup --force`,
+      detail: `installed ${installed}, cli ${cli} — run plasalid setup --force`,
     };
   }
   return { name: "skill_pack", ok: true, detail: `installed ${installed}` };

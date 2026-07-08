@@ -36,9 +36,9 @@ export function registerReport(program: Command): void {
         }
 
         const { getDb } = await import("../../db/connection.js");
-        const { getPeriodTotalsFromTransfers } = await import("../../db/queries/account-balance.js");
+        const { getPeriodTotalsFromTransactions } = await import("../../db/queries/account-balance.js");
         const db = getDb();
-        const totals = getPeriodTotalsFromTransfers(db, opts.from, opts.to);
+        const totals = getPeriodTotalsFromTransactions(db, opts.from, opts.to);
         const result = {
           from: opts.from as string,
           to: opts.to as string,

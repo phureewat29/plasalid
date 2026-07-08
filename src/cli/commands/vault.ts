@@ -34,7 +34,7 @@ async function openDb() {
   return getDb();
 }
 
-// --- vault add -------------------------------------------------------------
+// vault add
 
 interface AddOpts {
   passwordStdin?: boolean;
@@ -61,7 +61,7 @@ async function vaultAdd(pattern: string, _opts: AddOpts): Promise<void> {
   emitObject({ id, pattern });
 }
 
-// --- vault list ------------------------------------------------------------
+// vault list
 
 async function vaultList(): Promise<void> {
   const db = await openDb();
@@ -77,7 +77,7 @@ async function vaultList(): Promise<void> {
   emitList(rows, columns);
 }
 
-// --- vault rm --------------------------------------------------------------
+// vault rm
 
 interface RmOpts {
   yes?: boolean;
@@ -92,8 +92,6 @@ async function vaultRm(patternOrId: string, opts: RmOpts): Promise<void> {
   }
   emitObject({ pattern_or_id: patternOrId, removed: true });
 }
-
-// --- registration ----------------------------------------------------------
 
 export function registerVault(program: Command): void {
   const vault = program.command("vault").description("Manage the credential vault");

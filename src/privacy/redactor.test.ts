@@ -27,7 +27,7 @@ describe("redact", () => {
   });
 
   it("redacts partner names from context", () => {
-    expect(redact("Transfer to Corgi")).toBe("Transfer to [PARTNER]");
+    expect(redact("Payment to Corgi")).toBe("Payment to [PARTNER]");
   });
 
   it("redacts employer", () => {

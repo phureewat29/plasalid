@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { config, getConfigPath, getDataDir } from "../../config.js";
+import { config, getConfigPath, getDataDir, keyFingerprint } from "../../config.js";
 import { existsSync } from "fs";
 import { formatAmount } from "../../currency.js";
 import { banner, visibleLength } from "../format.js";
@@ -8,7 +8,7 @@ import { currentMode, emit, runAction } from "../output.js";
 
 interface Counts {
   accounts: number;
-  transfers: number;
+  transactions: number;
   merchants: number;
   notes: number;
 }
@@ -18,10 +18,14 @@ interface StatusReport {
   configured: boolean;
   config_path: string;
   data_dir: string;
+  locale: string;
+  currency: string;
+  user_name: string;
   db: {
     path: string;
     reachable: boolean;
     encrypted: boolean;
+    key_fingerprint: string | null;
     error: string | null;
   };
   counts: Counts | null;
@@ -36,10 +40,14 @@ async function buildReport(): Promise<StatusReport> {
     configured: existsSync(getConfigPath()),
     config_path: getConfigPath(),
     data_dir: getDataDir(),
+    locale: config.displayLocale,
+    currency: config.displayCurrency,
+    user_name: config.userName,
     db: {
       path: config.dbPath,
       reachable: false,
       encrypted: !!config.dbEncryptionKey,
+      key_fingerprint: config.dbEncryptionKey ? keyFingerprint(config.dbEncryptionKey) : null,
       error: null,
     },
     counts: null,
@@ -53,10 +61,10 @@ async function buildReport(): Promise<StatusReport> {
   // / unreadable database degrades to a not-ready report rather than crashing.
   try {
     const { getDb } = await import("../../db/connection.js");
-    const { getAccountBalancesFromTransfers, getNetWorthFromTransfers } = await import(
+    const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
       "../../db/queries/account-balance.js"
     );
-    const { countTransfers } = await import("../../db/queries/transfers.js");
+    const { countTransactions } = await import("../../db/queries/transactions.js");
     const { countScannedFiles } = await import("../../db/queries/files.js");
     const { countQuestions } = await import("../../db/queries/questions.js");
     const { listMerchants } = await import("../../db/queries/merchants.js");
@@ -66,8 +74,8 @@ async function buildReport(): Promise<StatusReport> {
     report.db.reachable = true;
 
     report.counts = {
-      accounts: getAccountBalancesFromTransfers(db).length,
-      transfers: countTransfers(db),
+      accounts: getAccountBalancesFromTransactions(db).length,
+      transactions: countTransactions(db),
       merchants: listMerchants(db, { limit: 1000 }).length,
       notes: countMemories(db),
     };
@@ -75,7 +83,7 @@ async function buildReport(): Promise<StatusReport> {
     const open = countQuestions(db);
     const total = countQuestions(db, { includeDeferred: true });
     report.questions = { open, deferred: Math.max(0, total - open) };
-    report.net_worth = getNetWorthFromTransfers(db);
+    report.net_worth = getNetWorthFromTransactions(db);
   } catch (err) {
     report.db.reachable = false;
     report.db.error = err instanceof Error ? err.message : String(err);
@@ -86,7 +94,7 @@ async function buildReport(): Promise<StatusReport> {
 
 // Free-text / path fields in a StatusReport that can leak the user's name or
 // home directory. Counts, booleans, and net-worth numbers are left verbatim.
-const STATUS_REDACT_FIELDS = ["config_path", "data_dir", "path", "error"] as const;
+const STATUS_REDACT_FIELDS = ["config_path", "data_dir", "path", "error", "user_name"] as const;
 
 export async function runStatus(opts: { redact?: boolean } = {}): Promise<void> {
   let report = await buildReport();
@@ -111,15 +119,19 @@ function renderPlain(r: StatusReport): void {
     ["configured", r.configured],
     ["config_path", r.config_path],
     ["data_dir", r.data_dir],
+    ["locale", r.locale],
+    ["currency", r.currency],
+    ["user_name", r.user_name],
     ["db_path", r.db.path],
     ["db_reachable", r.db.reachable],
     ["db_encrypted", r.db.encrypted],
+    ["db_key_fingerprint", r.db.key_fingerprint ?? "not set"],
   ];
   if (r.db.error) lines.push(["db_error", r.db.error]);
   if (r.counts) {
     lines.push(
       ["accounts", r.counts.accounts],
-      ["transfers", r.counts.transfers],
+      ["transactions", r.counts.transactions],
       ["merchants", r.counts.merchants],
       ["notes", r.counts.notes],
     );
@@ -167,6 +179,9 @@ function renderTty(r: StatusReport, color: boolean): void {
 
   section("System", [
     ["Configured", r.configured ? "yes" : dim("no")],
+    ["User", dim(r.user_name)],
+    ["Locale", dim(r.locale)],
+    ["Currency", dim(r.currency)],
     ["Data dir", dim(r.data_dir)],
     [
       "Database",
@@ -174,12 +189,13 @@ function renderTty(r: StatusReport, color: boolean): void {
         ? `ready${r.db.encrypted ? dim(" (encrypted)") : ""}`
         : dim(r.db.error ? `not ready — ${r.db.error}` : "not ready"),
     ],
+    ["Key", r.db.key_fingerprint ? dim(r.db.key_fingerprint) : dim("not set")],
   ]);
 
   if (r.counts) {
     section("Ledger", [
       ["Accounts", formatInt(r.counts.accounts)],
-      ["Transfers", formatInt(r.counts.transfers)],
+      ["Transactions", formatInt(r.counts.transactions)],
       ["Merchants", formatInt(r.counts.merchants)],
       ["Notes", formatInt(r.counts.notes)],
     ]);

@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { insertTransfer, accountHasTransfers } from "./transfers.js";
+import { insertTransaction, accountHasTransactions } from "./transactions.js";
 import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
@@ -246,17 +246,17 @@ export function updateAccountMetadata(
 }
 
 export interface MergeAccountsResult {
-  /** Transfer legs re-pointed from the source account onto the destination. */
+  /** Transaction legs re-pointed from the source account onto the destination. */
   moved: number;
-  /** Transfers deleted because re-pointing would have collapsed them into a
-   *  degenerate self-transfer (debit == credit). */
-  deletedSelfTransfers: number;
+  /** Transactions deleted because re-pointing would have collapsed them into a
+   *  degenerate self-transaction (debit == credit). */
+  deletedSelfTransactions: number;
 }
 
 /**
- * Re-point every transfer leg on `fromId` to `toId` (via `repointTransfers`),
+ * Re-point every transaction leg on `fromId` to `toId` (via `repointTransactions`),
  * then delete the source account. Refuses if the source still has children.
- * Returns legs moved and self-transfers deleted.
+ * Returns legs moved and self-transactions deleted.
  */
 export function mergeAccounts(
   db: Database.Database,
@@ -276,15 +276,15 @@ export function mergeAccounts(
     throw new Error(`Account ${fromId} has ${childCount.n} child account(s); merge or delete them first.`);
   }
 
-  const { moved, deletedSelfTransfers } = repointTransfers(db, fromId, toId);
+  const { moved, deletedSelfTransactions } = repointTransactions(db, fromId, toId);
   db.prepare(`DELETE FROM accounts WHERE id = ?`).run(fromId);
-  return { moved, deletedSelfTransfers };
+  return { moved, deletedSelfTransactions };
 }
 
-/** Delete an account only if no transfers reference it AND it has no children. */
+/** Delete an account only if no transactions reference it AND it has no children. */
 export function deleteAccount(db: Database.Database, id: string): void {
-  if (accountHasTransfers(db, id)) {
-    throw new Error(`Account ${id} still has transfers; merge it first.`);
+  if (accountHasTransactions(db, id)) {
+    throw new Error(`Account ${id} still has transactions; merge it first.`);
   }
   const childCount = db
     .prepare(`SELECT COUNT(*) AS n FROM accounts WHERE parent_id = ?`)
@@ -321,19 +321,44 @@ export interface FuzzyAccountMatch {
   similarity: number;
 }
 
+// Characters statements use to blank out the hidden middle of an account
+// number (`470686XXXXXX9483`, `••7652`, `**1234`, `…9483`).
+const MASK_CHARS = "Xx•*…";
+
+/**
+ * Everything after the LAST mask character in `s`, or `s` unchanged when it
+ * contains none. Anchoring on the last mask char (rather than e.g. splitting
+ * on all non-digits) means a masked run like `XXXXXX` isn't confused with the
+ * separators (`-`, ` `) a plain check-digit suffix uses.
+ */
+function tailAfterMask(s: string): string {
+  let lastAt = -1;
+  for (const ch of MASK_CHARS) {
+    const i = s.lastIndexOf(ch);
+    if (i > lastAt) lastAt = i;
+  }
+  return lastAt === -1 ? s : s.slice(lastAt + 1);
+}
+
 /**
  * Canonical key for an account number, tolerant of a trailing check digit.
  * Statements sometimes print the same account with or without a trailing check
- * digit (`xxx-7652-0` vs `xxx-7652`); both should resolve to one account. Keep
- * digits only, drop the final digit when the run is long enough to carry a
- * separate check digit, and return the last 4.
+ * digit (`xxx-7652-0` vs `xxx-7652`); both should resolve to one account.
+ * Masked numbers are first reduced to the tail after their last mask
+ * character — this matters when real digits precede the mask
+ * (`470686XXXXXX9483`), which would otherwise get concatenated with the
+ * trailing digits and corrupt the check-digit heuristic below. From that
+ * tail, keep digits only, drop the final digit when the run is long enough
+ * to carry a separate check digit, and return the last 4.
  *
- *   "••7652"   -> "7652"
- *   "••7652-0" -> "76520" -> "7652"
- *   "1234"     -> "1234"
+ *   "••7652"           -> "7652"
+ *   "••7652-0"         -> "76520" -> "7652"
+ *   "470686XXXXXX9483" -> "9483" (tail after the mask; no check digit to drop)
+ *   "1234"             -> "1234"
  */
 export function accountNumberKey(raw: string | null | undefined): string {
-  const digits = String(raw ?? "").replace(/\D+/g, "");
+  const tail = tailAfterMask(String(raw ?? ""));
+  const digits = tail.replace(/\D+/g, "");
   if (!digits) return "";
   const core = digits.length >= 5 ? digits.slice(0, -1) : digits;
   return core.slice(-4);
@@ -342,7 +367,9 @@ export function accountNumberKey(raw: string | null | undefined): string {
 /**
  * Normalize a masked account number for storage so a trailing check digit
  * doesn't split one account into two: `••7652-0` and `••76520` both store as
- * `••7652`. Preserves the leading bullet mask; defaults to `••` when absent.
+ * `••7652`. Preserves the leading bullet mask; defaults to `••` when absent
+ * (including when the input's own mask is a literal digit run with nothing
+ * to preserve, e.g. `470686XXXXXX9483` -> `••9483`).
  */
 export function normalizeMaskedAccountNumber(
   masked: string | null | undefined,
@@ -355,8 +382,18 @@ export function normalizeMaskedAccountNumber(
   return prefix + key;
 }
 
-/** Longest digit run in free text, reduced to an account-number key. */
+/**
+ * Account-number key for a free-text query. When the text itself carries a
+ * mask (a bank hint like `470686XXXXXX9483`), the tail after the mask is
+ * authoritative — skip the "longest digit run" heuristic below, which would
+ * otherwise pick the longer, unmasked prefix instead of the visible trailing
+ * digits. Otherwise, fall back to the longest digit run in the text (e.g. a
+ * plain check-digit-suffixed number typed alongside other words).
+ */
 function queryNumberKey(text: string): string {
+  const tail = tailAfterMask(text);
+  if (tail !== text) return accountNumberKey(tail);
+
   const runs = text.match(/\d+/g);
   if (!runs) return "";
   const longest = runs.reduce((a, b) => (b.length > a.length ? b : a));
@@ -426,21 +463,21 @@ function levenshtein(a: string, b: string): number {
   return prev[n];
 }
 
-// ---------------------------------------------------------------------------
-// Balance derivations over the single-row `transfers` table (TigerBeetle-core).
-//
-// Every transfer contributes a debit leg and a credit leg via the UNION-ALL
-// subquery, so account balances fall out of the standard normal-balance rule:
-// asset/expense are debit-normal, the rest credit-normal. Amounts are integer
-// minor units in the table; decimal fields are derived per the account's own
-// currency exponent.
-// ---------------------------------------------------------------------------
+/**
+ * Balance derivations over the single-row `transactions` table (TigerBeetle-core).
+ *
+ * Every transaction contributes a debit leg and a credit leg via the UNION-ALL
+ * subquery, so account balances fall out of the standard normal-balance rule:
+ * asset/expense are debit-normal, the rest credit-normal. Amounts are integer
+ * minor units in the table; decimal fields are derived per the account's own
+ * currency exponent.
+ */
 
-/** Debit + credit legs of every transfer, one row per leg. Shared by the
- *  transfer-based aggregates below. */
-const TRANSFER_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS side FROM transfers
+/** Debit + credit legs of every transaction, one row per leg. Shared by the
+ *  transaction-based aggregates below. */
+const TRANSACTION_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS side FROM transactions
        UNION ALL
-       SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transfers`;
+       SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transactions`;
 
 export interface AccountBalanceMinor extends AccountRow {
   /** Sum of debit legs, minor units. */
@@ -454,10 +491,10 @@ export interface AccountBalanceMinor extends AccountRow {
 }
 
 /**
- * Per-account balance from the `transfers` table. Normal-balance rule matches
+ * Per-account balance from the `transactions` table. Normal-balance rule matches
  * `getAccountBalances`: asset/expense are debit-normal, the rest credit-normal.
  */
-export function getAccountBalancesFromTransfers(
+export function getAccountBalancesFromTransactions(
   db: Database.Database,
   opts: { type?: AccountType } = {},
 ): AccountBalanceMinor[] {
@@ -475,7 +512,7 @@ export function getAccountBalancesFromTransfers(
               COALESCE(SUM(CASE WHEN t.side = 'D' THEN t.amount ELSE 0 END), 0) AS sum_debit,
               COALESCE(SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE 0 END), 0) AS sum_credit
          FROM accounts a
-         LEFT JOIN (${TRANSFER_LEGS}) t ON t.acct = a.id
+         LEFT JOIN (${TRANSACTION_LEGS}) t ON t.acct = a.id
          ${whereSql}
          GROUP BY a.id
          ORDER BY a.type, a.id`,
@@ -496,8 +533,8 @@ export function getAccountBalancesFromTransfers(
   });
 }
 
-export function getNetWorthFromTransfers(db: Database.Database): NetWorth {
-  const balances = getAccountBalancesFromTransfers(db);
+export function getNetWorthFromTransactions(db: Database.Database): NetWorth {
+  const balances = getAccountBalancesFromTransactions(db);
   let assets = 0;
   let liabilities = 0;
   for (const b of balances) {
@@ -509,11 +546,11 @@ export function getNetWorthFromTransfers(db: Database.Database): NetWorth {
 
 /**
  * Income (credits − debits on income accounts) and expenses (debits − credits
- * on expense accounts) over a date range, from `transfers`. Grouped by
+ * on expense accounts) over a date range, from `transactions`. Grouped by
  * (type, currency) so each currency's minor units convert with the right
  * exponent before summing.
  */
-export function getPeriodTotalsFromTransfers(
+export function getPeriodTotalsFromTransactions(
   db: Database.Database,
   from: string,
   to: string,
@@ -522,7 +559,7 @@ export function getPeriodTotalsFromTransfers(
     .prepare(
       `SELECT a.type AS type, a.currency AS currency,
               SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE -t.amount END) AS c_minus_d
-         FROM (${TRANSFER_LEGS}) t
+         FROM (${TRANSACTION_LEGS}) t
          JOIN accounts a ON a.id = t.acct
          WHERE t.date BETWEEN ? AND ? AND a.type IN ('income', 'expense')
          GROUP BY a.type, a.currency`,
@@ -538,9 +575,9 @@ export function getPeriodTotalsFromTransfers(
   return { income, expenses };
 }
 
-/** Subtree balance (root inclusive) from `transfers`, same convention as
+/** Subtree balance (root inclusive) from `transactions`, same convention as
  *  `getRollupBalance`. Grouped by (type, currency) for correct conversion. */
-export function getRollupBalanceFromTransfers(db: Database.Database, rootId: string): number {
+export function getRollupBalanceFromTransactions(db: Database.Database, rootId: string): number {
   const subtree = getAccountSubtree(db, rootId);
   if (subtree.length === 0) return 0;
   const ids = subtree.map((a) => a.id);
@@ -552,7 +589,7 @@ export function getRollupBalanceFromTransfers(db: Database.Database, rootId: str
               COALESCE(SUM(CASE WHEN t.side = 'D' THEN t.amount ELSE 0 END), 0) AS sum_debit,
               COALESCE(SUM(CASE WHEN t.side = 'C' THEN t.amount ELSE 0 END), 0) AS sum_credit
          FROM accounts a
-         LEFT JOIN (${TRANSFER_LEGS}) t ON t.acct = a.id
+         LEFT JOIN (${TRANSACTION_LEGS}) t ON t.acct = a.id
          WHERE a.id IN (${placeholders})
          GROUP BY a.type, a.currency`,
     )
@@ -568,44 +605,44 @@ export function getRollupBalanceFromTransfers(db: Database.Database, rootId: str
 }
 
 /**
- * Transfer-model counterpart of `mergeAccounts`' re-point step. Moves every
- * transfer leg on `fromId` to `toId` across BOTH columns. Because the
- * debit<>credit CHECK forbids a transient self-transfer, rows that would become
+ * Transaction-model counterpart of `mergeAccounts`' re-point step. Moves every
+ * transaction leg on `fromId` to `toId` across BOTH columns. Because the
+ * debit<>credit CHECK forbids a transient self-transaction, rows that would become
  * degenerate (one side is `fromId`, the other already `toId`) are deleted FIRST,
- * then the remainder is re-pointed. Returns legs moved and self-transfers
+ * then the remainder is re-pointed. Returns legs moved and self-transactions
  * deleted. (Does not touch the accounts table — the caller deletes the source.)
  */
-export function repointTransfers(
+export function repointTransactions(
   db: Database.Database,
   fromId: string,
   toId: string,
-): { moved: number; deletedSelfTransfers: number } {
-  if (fromId === toId) throw new Error("Cannot re-point transfers to the same account.");
+): { moved: number; deletedSelfTransactions: number } {
+  if (fromId === toId) throw new Error("Cannot re-point transactions to the same account.");
 
   let moved = 0;
-  let deletedSelfTransfers = 0;
+  let deletedSelfTransactions = 0;
   const tx = db.transaction((): void => {
-    deletedSelfTransfers = db
+    deletedSelfTransactions = db
       .prepare(
-        `DELETE FROM transfers
+        `DELETE FROM transactions
           WHERE (debit_account_id = ? AND credit_account_id = ?)
              OR (credit_account_id = ? AND debit_account_id = ?)`,
       )
       .run(fromId, toId, fromId, toId).changes;
 
     const d = db
-      .prepare(`UPDATE transfers SET debit_account_id = ? WHERE debit_account_id = ?`)
+      .prepare(`UPDATE transactions SET debit_account_id = ? WHERE debit_account_id = ?`)
       .run(toId, fromId).changes;
     const c = db
-      .prepare(`UPDATE transfers SET credit_account_id = ? WHERE credit_account_id = ?`)
+      .prepare(`UPDATE transactions SET credit_account_id = ? WHERE credit_account_id = ?`)
       .run(toId, fromId).changes;
     moved = d + c;
   });
   tx();
-  return { moved, deletedSelfTransfers };
+  return { moved, deletedSelfTransactions };
 }
 
-export interface AdjustViaTransferOpts {
+export interface AdjustViaTransactionOpts {
   accountId: string;
   /** New desired balance in the account's currency, decimal, natural sign. */
   targetAmount: number;
@@ -614,23 +651,23 @@ export interface AdjustViaTransferOpts {
   date?: string;
 }
 
-export interface AdjustViaTransferResult {
-  /** Id of the balancing transfer, or null when already at target (no-op). */
-  transferId: string | null;
+export interface AdjustViaTransactionResult {
+  /** Id of the balancing transaction, or null when already at target (no-op). */
+  transactionId: string | null;
   /** target − current, decimal, natural sign. 0 on no-op. */
   delta: number;
 }
 
 /**
- * Transfer-model counterpart of `adjustAccountBalance`: move an account to
- * `targetAmount` by posting one balancing transfer against `equity:adjustments`.
+ * Transaction-model counterpart of `adjustAccountBalance`: move an account to
+ * `targetAmount` by posting one balancing transaction against `equity:adjustments`.
  * Delta math is done in integer minor units (no float drift); a zero delta is a
  * no-op. Orientation matches the posting-based version.
  */
-export function adjustAccountBalanceViaTransfer(
+export function adjustAccountBalanceViaTransaction(
   db: Database.Database,
-  opts: AdjustViaTransferOpts,
-): AdjustViaTransferResult {
+  opts: AdjustViaTransactionOpts,
+): AdjustViaTransactionResult {
   const account = findAccountById(db, opts.accountId);
   if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
 
@@ -641,10 +678,10 @@ export function adjustAccountBalanceViaTransfer(
 
   const currency = account.currency || "THB";
   const currentMinor =
-    getAccountBalancesFromTransfers(db).find((b) => b.id === account.id)?.balance_minor ?? 0;
+    getAccountBalancesFromTransactions(db).find((b) => b.id === account.id)?.balance_minor ?? 0;
   const targetMinor = toMinorUnits(target, currency);
   const deltaMinor = targetMinor - currentMinor;
-  if (deltaMinor === 0) return { transferId: null, delta: 0 };
+  if (deltaMinor === 0) return { transactionId: null, delta: 0 };
 
   const amount = Math.abs(deltaMinor);
   const debitNormal = account.type === "asset" || account.type === "expense";
@@ -656,12 +693,12 @@ export function adjustAccountBalanceViaTransfer(
     opts.date && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : todayIso();
   const reason = String(opts.reason || "Balance adjustment").trim();
 
-  let transferId = "";
+  let transactionId = "";
   const tx = db.transaction((): void => {
     if (!findAccountById(db, EQUITY_ADJUST_ID)) {
       ensureStructuralAccount(db, "equity:adjustments");
     }
-    transferId = insertTransfer(db, {
+    transactionId = insertTransaction(db, {
       date,
       description: reason,
       debit_account_id: debitAccountId,
@@ -672,5 +709,5 @@ export function adjustAccountBalanceViaTransfer(
   });
   tx();
 
-  return { transferId, delta: fromMinorUnits(deltaMinor, currency) };
+  return { transactionId, delta: fromMinorUnits(deltaMinor, currency) };
 }

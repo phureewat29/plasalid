@@ -1,16 +1,15 @@
 import { randomUUID } from "crypto";
-import { existsSync } from "fs";
 import { resolve } from "path";
 import { Option } from "commander";
 import type { Command } from "commander";
 import type {
-  TransferCommitContext,
-  TransferCommitHooks,
-  TransferSide,
-  RawTransferInput,
-  LinkedTransferHeader,
-  LinkedTransferLeg,
-} from "../../scanner/commit-transfer.js";
+  TransactionCommitContext,
+  TransactionCommitHooks,
+  TransactionSide,
+  RawTransactionInput,
+  LinkedTransactionHeader,
+  LinkedTransactionLeg,
+} from "../../scanner/commit-transaction.js";
 import {
   type Column,
   EXIT,
@@ -29,12 +28,12 @@ import {
  * `ingest` command tree for the deterministic harness.
  * Everything an external scan agent needs to drive the pipeline without the
  * interactive TUI: list candidate files, prepare pages, commit extracted rows
- * as transfers, and mark files done/failed. Heavy db/scanner imports are
+ * as transactions, and mark files done/failed. Heavy db/scanner imports are
  * deferred inside each action so non-db commands don't pay for libsql/mupdf at
  * startup (mirrors the pattern in status.ts).
  */
 
-// --- small shared output helper -------------------------------------------
+// small shared output helper
 
 /** JSON → one NDJSON object; human/plain → tab-separated key/value lines
  *  (ANSI-free, so it stays stable when piped). */
@@ -54,7 +53,7 @@ async function openDb() {
   return getDb();
 }
 
-// --- pages spec parser (pure; unit-tested) ---------------------------------
+// pages spec parser (pure; unit-tested)
 
 /**
  * Parse a `--pages` spec into 0-based page indices for `prepareFile`.
@@ -82,7 +81,7 @@ export function parsePagesSpec(spec: string): number[] | undefined {
   return [...pages].sort((a, b) => a - b);
 }
 
-// --- ingest list -----------------------------------------------------------
+// ingest list
 
 interface ListOpts {
   regex?: string;
@@ -138,7 +137,7 @@ async function ingestList(opts: ListOpts): Promise<void> {
   }
 }
 
-// --- ingest prepare --------------------------------------------------------
+// ingest prepare
 
 interface PrepareOpts {
   passwordStdin?: boolean;
@@ -155,10 +154,11 @@ const DEFAULT_DPI = 150;
 
 async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void> {
   const db = await openDb();
-  const { findScannedFileById } = await import("../../db/queries/files.js");
+  const { resolveEntryPath, prepareFile, PasswordRequiredError } = await import(
+    "../../scanner/ingest.js"
+  );
 
-  const byId = findScannedFileById(db, pathOrId);
-  if (!byId && !existsSync(resolve(pathOrId))) {
+  if (resolveEntryPath(db, pathOrId) === null) {
     fail("NOT_FOUND", `no ingest entry or file at "${pathOrId}"`);
   }
 
@@ -178,7 +178,6 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
   const password = opts.passwordStdin ? await readSecretFromStdin() : undefined;
   const outDir = opts.out ? resolve(opts.out) : undefined;
 
-  const { prepareFile, PasswordRequiredError } = await import("../../scanner/ingest.js");
   let result;
   try {
     result = await prepareFile(db, pathOrId, {
@@ -223,19 +222,18 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
   });
 }
 
-// --- ingest commit (the critical contract) ---------------------------------
+// ingest commit (the critical contract)
 
 interface CommitOpts {
   file?: string;
-  scanId?: string;
   input?: string;
 }
 
 type SideHow = "exact" | "fuzzy_matched" | "placeholder_created" | "uncategorized_fallback";
 
 type CommitEvent =
-  | { kind: "placeholder"; side: TransferSide; accountId: string }
-  | { kind: "fuzzy"; side: TransferSide; originalId: string; matchedId: string }
+  | { kind: "placeholder"; side: TransactionSide; accountId: string }
+  | { kind: "fuzzy"; side: TransactionSide; originalId: string; matchedId: string }
   | { kind: "unknown_merchant"; attemptedId: string }
   | { kind: "dirty"; reason: string }
   | { kind: "currency_mismatch" };
@@ -243,7 +241,7 @@ type CommitEvent =
 /** Wrap the default hooks so every raised question still fires (delegated to
  *  the default), while we also capture a typed event per callback to build the
  *  per-side resolution report afterwards. */
-function makeRecordingHooks(base: TransferCommitHooks, events: CommitEvent[]): TransferCommitHooks {
+function makeRecordingHooks(base: TransactionCommitHooks, events: CommitEvent[]): TransactionCommitHooks {
   return {
     onCommitted: (id) => base.onCommitted(id),
     onDirtyInput: (input, reason) => {
@@ -277,7 +275,7 @@ function makeRecordingHooks(base: TransferCommitHooks, events: CommitEvent[]): T
  */
 function classifySide(
   requested: string,
-  side: TransferSide,
+  side: TransactionSide,
   events: CommitEvent[],
   accountExists: (id: string) => boolean,
 ): { resolved: string; how: SideHow } {
@@ -313,18 +311,17 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
   if (items.length === 0) fail("USAGE", "no transaction data provided");
 
   const db = await openDb();
-  const { commitTransfer, commitLinkedTransfers, defaultTransferCommitHooks } = await import(
-    "../../scanner/commit-transfer.js"
+  const { commitTransaction, commitLinkedTransactions, defaultTransactionCommitHooks } = await import(
+    "../../scanner/commit-transaction.js"
   );
-  const { getTransfer } = await import("../../db/queries/transfers.js");
+  const { getTransaction } = await import("../../db/queries/transactions.js");
   const { findAccountById } = await import("../../db/queries/account-balance.js");
   const { findScannedFileById } = await import("../../db/queries/files.js");
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
 
-  // ALWAYS have a scanId: defaultTransferCommitHooks.raise() early-returns when
-  // scanId is null, which silently drops every question. Minted once per
-  // invocation unless the caller supplied one.
-  const scanId = opts.scanId ?? `sc:${randomUUID()}`;
+  // ALWAYS have a scanId: defaultTransactionCommitHooks.raise() early-returns when
+  // scanId is null, which silently drops every question. Minted once per invocation.
+  const scanId = `sc:${randomUUID()}`;
 
   // Derive the deterministic-id source hash from the scanned_files row (cached).
   const fileHashCache = new Map<string, string | null>();
@@ -345,7 +342,7 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
   for (let index = 0; index < items.length; index++) {
     const item: any = items[index];
     const fileId = (item.source_file_id ?? opts.file) ?? null;
-    const ctx: TransferCommitContext = {
+    const ctx: TransactionCommitContext = {
       scanId,
       fileId,
       fileHash: fileHashFor(fileId),
@@ -353,12 +350,12 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
       progress: null,
     };
     const events: CommitEvent[] = [];
-    const hooks = makeRecordingHooks(defaultTransferCommitHooks(db, ctx), events);
+    const hooks = makeRecordingHooks(defaultTransactionCommitHooks(db, ctx), events);
 
     const isCompound = Array.isArray(item.linked) && item.linked.length > 0;
 
     if (isCompound) {
-      const header: LinkedTransferHeader = {
+      const header: LinkedTransactionHeader = {
         date: item.date,
         description: item.description,
         raw_descriptor: item.raw_descriptor ?? null,
@@ -369,7 +366,7 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
         group_id: item.group_id ?? null,
         row_index: item.row_index ?? null,
       };
-      const legs: LinkedTransferLeg[] = item.linked.map((l: any) => ({
+      const legs: LinkedTransactionLeg[] = item.linked.map((l: any) => ({
         debit_account_id: l.debit_account ?? l.debit_account_id,
         credit_account_id: l.credit_account ?? l.credit_account_id,
         amount: l.amount,
@@ -378,7 +375,7 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
         code: l.code ?? null,
       }));
 
-      const outcome = commitLinkedTransfers(db, ctx, header, legs, hooks);
+      const outcome = commitLinkedTransactions(db, ctx, header, legs, hooks);
       raisedTotal += outcome.raisedQuestions;
 
       if (!outcome.ok) {
@@ -403,18 +400,18 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
         index,
         ok: true,
         group_id: outcome.group_id,
-        legs: outcome.results.map((r) => ({ transfer_id: r.id, duplicate: r.duplicate })),
+        legs: outcome.results.map((r) => ({ transaction_id: r.id, duplicate: r.duplicate })),
         duplicate: allDuplicate,
         raised_questions: outcome.raisedQuestions,
         merchant: classifyMerchant(item, events, () =>
-          getTransfer(db, outcome.results[0]?.id)?.merchant_id,
+          getTransaction(db, outcome.results[0]?.id)?.merchant_id,
         ),
       });
       continue;
     }
 
-    // Standalone transfer.
-    const raw: RawTransferInput = {
+    // Standalone transaction.
+    const raw: RawTransactionInput = {
       id: item.id ?? undefined,
       date: item.date,
       description: item.description,
@@ -431,7 +428,7 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
       code: item.code ?? null,
     };
 
-    const outcome = commitTransfer(db, ctx, raw, hooks);
+    const outcome = commitTransaction(db, ctx, raw, hooks);
     raisedTotal += outcome.raisedQuestions;
 
     if (!outcome.ok) {
@@ -454,10 +451,10 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
       type: "result",
       index,
       ok: true,
-      transfer_id: outcome.transferId,
+      transaction_id: outcome.transactionId,
       duplicate: outcome.duplicate,
       raised_questions: outcome.raisedQuestions,
-      merchant: classifyMerchant(item, events, () => getTransfer(db, outcome.transferId)?.merchant_id),
+      merchant: classifyMerchant(item, events, () => getTransaction(db, outcome.transactionId)?.merchant_id),
       sides: [
         {
           side: "debit",
@@ -488,11 +485,10 @@ async function ingestCommit(opts: CommitOpts): Promise<void> {
   if (failed > 0) process.exitCode = EXIT.PARTIAL;
 }
 
-// --- ingest done / fail ----------------------------------------------------
+// ingest done / fail
 
 interface DoneOpts {
   agent?: string;
-  note?: string;
 }
 
 async function ingestDone(id: string, opts: DoneOpts): Promise<void> {
@@ -503,10 +499,7 @@ async function ingestDone(id: string, opts: DoneOpts): Promise<void> {
 
   const { cleanCache } = await import("../../scanner/ingest.js");
   const { removed } = cleanCache(id);
-  const out: Record<string, unknown> = { file_id: id, status: "scanned", cache_removed: removed };
-  // --note is informational only; echoed back but not persisted.
-  if (opts.note !== undefined) out.note = opts.note;
-  emitObject(out);
+  emitObject({ file_id: id, status: "scanned", cache_removed: removed });
 }
 
 interface FailOpts {
@@ -526,8 +519,6 @@ async function ingestFail(id: string, opts: FailOpts): Promise<void> {
   const { removed } = cleanCache(id);
   emitObject({ file_id: id, status: "failed", cache_removed: removed });
 }
-
-// --- registration ----------------------------------------------------------
 
 export function registerIngest(program: Command): void {
   const ingest = program.command("ingest").description("Ingest pipeline");
@@ -553,9 +544,8 @@ export function registerIngest(program: Command): void {
 
   ingest
     .command("commit")
-    .description("Commit extracted transfers (NDJSON/JSON array via --input file or stdin) into the ledger")
+    .description("Commit extracted transactions (NDJSON/JSON array via --input file or stdin) into the ledger")
     .option("--file <id>", "default source file id for committed rows")
-    .option("--scan-id <id>", "scan id to attach questions to (minted when omitted)")
     .option("--input <path>", "read the batch from an NDJSON/JSON file instead of stdin")
     .action(runAction(ingestCommit));
 
@@ -563,7 +553,6 @@ export function registerIngest(program: Command): void {
     .command("done <id>")
     .description("Mark an ingest item as done")
     .option("--agent <name>", "name of the completing agent")
-    .option("--note <text>", "completion note")
     .action(runAction(ingestDone));
 
   ingest

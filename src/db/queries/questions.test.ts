@@ -52,33 +52,6 @@ describe("questions table", () => {
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
   });
 
-  it("listQuestions filters by kind when supplied", () => {
-    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "duplicate", prompt: "b" });
-    expect(listQuestions(db, { kind: "uncategorized" }).map(r => r.prompt)).toEqual(["a"]);
-    expect(listQuestions(db, { kind: "duplicate" }).map(r => r.prompt)).toEqual(["b"]);
-    expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b"]);
-  });
-
-  it("listQuestions filters by fileId when supplied", () => {
-    insertFile(db, "sf:a");
-    insertFile(db, "sf:b");
-    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: "sf:b", account_id: "expense:food", kind: "uncategorized", prompt: "b" });
-    recordQuestion(db, { file_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
-    expect(listQuestions(db, { fileId: "sf:a" }).map(r => r.prompt)).toEqual(["a"]);
-    expect(listQuestions(db, { fileId: "sf:b" }).map(r => r.prompt)).toEqual(["b"]);
-  });
-
-  it("listQuestions combines kind + fileId filters", () => {
-    insertFile(db, "sf:a");
-    insertFile(db, "sf:b");
-    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "uncategorized", prompt: "match" });
-    recordQuestion(db, { file_id: "sf:a", account_id: "expense:food", kind: "duplicate", prompt: "wrong-kind" });
-    recordQuestion(db, { file_id: "sf:b", account_id: "expense:food", kind: "uncategorized", prompt: "wrong-file" });
-    expect(listQuestions(db, { kind: "uncategorized", fileId: "sf:a" }).map(r => r.prompt)).toEqual(["match"]);
-  });
-
   it("countQuestions already supports kind and file_id scoping (pre-existing)", () => {
     insertFile(db, "sf:a");
     insertFile(db, "sf:b");

@@ -1,26 +1,17 @@
 import type { Command } from "commander";
 import type {
-  DuplicateTransferRow,
-  CorrelatedTransferPair,
-} from "../../db/queries/transfers.js";
+  DuplicateTransactionRow,
+  CorrelatedTransactionPair,
+} from "../../db/queries/transactions.js";
 import { fromMinorUnits } from "../../currency.js";
-import { emitList, emitSummary, fail, runAction, type Column } from "../output.js";
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function parseNumberOpt(raw: string | undefined, name: string, fallback: number): number {
-  if (raw === undefined) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) fail("USAGE", `${name} must be a number, got "${raw}"`);
-  return n;
-}
+import { emitList, emitSummary, runAction, type Column } from "../output.js";
 
 function accountsLabel(debitName: string | null, debitId: string, creditName: string | null, creditId: string): string {
   return `${debitName ?? debitId} -> ${creditName ?? creditId}`;
 }
 
 // Presentation rows: minor-unit amounts converted to decimals at the CLI boundary.
-interface DuplicateRow extends Omit<DuplicateTransferRow, "amount"> {
+interface DuplicateRow extends Omit<DuplicateTransactionRow, "amount"> {
   amount: number;
   group: number;
 }
@@ -37,7 +28,7 @@ const DUPLICATE_COLUMNS: Column<DuplicateRow>[] = [
   { header: "merchant_id", value: (r) => r.merchant_id ?? "" },
 ];
 
-interface CorrelationRow extends Omit<CorrelatedTransferPair, "amount"> {
+interface CorrelationRow extends Omit<CorrelatedTransactionPair, "amount"> {
   amount: number;
 }
 
@@ -60,33 +51,23 @@ export function registerAnalyze(program: Command): void {
 
   analyze
     .command("duplicates")
-    .description("Find likely duplicate transfers")
-    .option("--tolerance-days <n>", "date tolerance in days")
-    .option("--account <id>", "filter by account id")
-    .option("--min-amount <n>", "minimum amount to consider")
+    .description("Find likely duplicate transactions")
     .option("--auto-merge", "automatically merge detected duplicates")
     .action(
       runAction(async (opts: any) => {
-        const toleranceDays = parseNumberOpt(opts.toleranceDays, "--tolerance-days", 2);
-        const minAmount = parseNumberOpt(opts.minAmount, "--min-amount", 0);
-
         const { getDb } = await import("../../db/connection.js");
-        const { findDuplicateTransfers } = await import("../../db/queries/transfers.js");
+        const { findDuplicateTransactions } = await import("../../db/queries/transactions.js");
         const db = getDb();
 
         let autoMerged: number | undefined;
         if (opts.autoMerge) {
-          const { autoMergeStrictDuplicateTransfers } = await import(
-            "../../scanner/dedup-transfers.js"
+          const { autoMergeStrictDuplicateTransactions } = await import(
+            "../../scanner/dedup-transactions.js"
           );
-          autoMerged = autoMergeStrictDuplicateTransfers(db).merged;
+          autoMerged = autoMergeStrictDuplicateTransactions(db).merged;
         }
 
-        const groups = findDuplicateTransfers(db, {
-          toleranceDays,
-          accountId: opts.account,
-          minAmount,
-        });
+        const groups = findDuplicateTransactions(db);
         const rows: DuplicateRow[] = groups.flatMap((group, i) =>
           group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
         );
@@ -101,31 +82,13 @@ export function registerAnalyze(program: Command): void {
 
   analyze
     .command("correlations")
-    .description("Find correlated transfers across accounts")
-    .option("--from <date>", "start date")
-    .option("--to <date>", "end date")
-    .option("--tolerance-days <n>", "date tolerance in days")
-    .option("--min-amount <n>", "minimum amount to consider")
+    .description("Find correlated transactions across accounts")
     .action(
-      runAction(async (opts: any) => {
-        if (opts.from && !ISO_DATE_RE.test(opts.from)) {
-          fail("USAGE", `--from must be an ISO date (YYYY-MM-DD), got "${opts.from}"`);
-        }
-        if (opts.to && !ISO_DATE_RE.test(opts.to)) {
-          fail("USAGE", `--to must be an ISO date (YYYY-MM-DD), got "${opts.to}"`);
-        }
-        const toleranceDays = parseNumberOpt(opts.toleranceDays, "--tolerance-days", 3);
-        const minAmount = parseNumberOpt(opts.minAmount, "--min-amount", 0);
-
+      runAction(async () => {
         const { getDb } = await import("../../db/connection.js");
-        const { findCorrelatedTransfers } = await import("../../db/queries/transfers.js");
+        const { findCorrelatedTransactions } = await import("../../db/queries/transactions.js");
         const db = getDb();
-        const pairs = findCorrelatedTransfers(db, {
-          from: opts.from,
-          to: opts.to,
-          toleranceDays,
-          minAmount,
-        });
+        const pairs = findCorrelatedTransactions(db);
         const rows: CorrelationRow[] = pairs.map((p) => ({
           ...p,
           amount: fromMinorUnits(p.amount, p.currency),

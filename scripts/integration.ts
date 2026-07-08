@@ -13,7 +13,7 @@
  * STAGE 2 drives a full write-path lifecycle in its own isolated environment
  * (same HOME/DATA_DIR/CACHE_DIR convention, freshly minted): vault-unlock an
  * encrypted statement, ingest/commit transactions, answer questions, edit and
- * delete records, adjust/merge/delete accounts, drop a file, install the
+ * delete transactions, adjust/merge/delete accounts, drop a file, install the
  * agent skill pack, and update config — each a reported case, asserting on
  * the actual NDJSON shape at every step.
  *
@@ -49,9 +49,7 @@ function printTable(results: Result[]): void {
   }
 }
 
-// ============================================================================
-// STAGE 1 — read-surface sweep over an empty ledger
-// ============================================================================
+// Stage 1: read-surface sweep over an empty ledger
 
 interface Case {
   label: string;
@@ -63,7 +61,6 @@ const READ_CASES: Case[] = [
   { label: "status", args: ["status"] },
   { label: "doctor", args: ["doctor"] },
   { label: "config show", args: ["config", "show"] },
-  { label: "config path", args: ["config", "path"] },
   { label: "ingest list", args: ["ingest", "list"] },
   { label: "files list", args: ["files", "list"] },
   { label: "vault list", args: ["vault", "list"] },
@@ -82,13 +79,13 @@ const READ_CASES: Case[] = [
   { label: "notes list", args: ["notes", "list"] },
   { label: "context show", args: ["context", "show"] },
   {
-    label: "ledger show tf:nonexistent",
-    args: ["ledger", "show", "tf:nonexistent"],
+    label: "ledger show tx:nonexistent",
+    args: ["ledger", "show", "tx:nonexistent"],
     expectExit: 5,
   },
   {
-    label: "record delete tf:nonexistent",
-    args: ["record", "delete", "tf:nonexistent", "--yes"],
+    label: "transactions delete tx:nonexistent",
+    args: ["transactions", "delete", "tx:nonexistent", "--yes"],
     expectExit: 5,
   },
 ];
@@ -168,9 +165,7 @@ function runCase(c: Case, env: NodeJS.ProcessEnv, cwd: string): Result {
   return { label: c.label, pass: problems.length === 0, detail: problems.join("; ") };
 }
 
-// ============================================================================
-// STAGE 2 — full write-path lifecycle
-// ============================================================================
+// Stage 2: full write-path lifecycle
 
 interface Ctx {
   env: NodeJS.ProcessEnv;
@@ -270,9 +265,9 @@ function lifecycleItems(): Record<string, unknown>[] {
   ];
 }
 
-function stepSetup(ctx: Ctx): void {
+function stepConfigInit(ctx: Ctx): void {
   const res = shOk(ctx, [
-    "setup",
+    "config",
     "--data-dir",
     ctx.dataDir,
     "--db",
@@ -364,9 +359,9 @@ function stepIngestCommit(ctx: Ctx): void {
   assert(summary.failed === 0, `expected failed:0, got ${summary.failed}`);
   assert(summary.raised_questions > 0, `expected raised_questions > 0, got ${summary.raised_questions}`);
 
-  ctx.salaryId = salary.transfer_id;
-  ctx.dogfoodId = dogfood.transfer_id;
-  ctx.groomingId = grooming.transfer_id;
+  ctx.salaryId = salary.transaction_id;
+  ctx.dogfoodId = dogfood.transaction_id;
+  ctx.groomingId = grooming.transaction_id;
 }
 
 function stepIngestReCommitDuplicate(ctx: Ctx): void {
@@ -387,7 +382,7 @@ function stepIngestReCommitDuplicate(ctx: Ctx): void {
   );
 
   const status = parseOne(shOk(ctx, ["status"]).stdout);
-  assert(status.counts.transfers === 3, `expected 3 transfers after the no-op re-pipe, got ${status.counts.transfers}`);
+  assert(status.counts.transactions === 3, `expected 3 transactions after the no-op re-pipe, got ${status.counts.transactions}`);
 }
 
 function stepQuestions(ctx: Ctx): void {
@@ -420,10 +415,10 @@ function stepIngestDone(ctx: Ctx): void {
   assert(rows.length === 1, `expected 1 scanned file, got ${rows.length}`);
 }
 
-function stepRecordUpdateLedgerShow(ctx: Ctx): void {
-  const res = shOk(ctx, ["record", "update", ctx.groomingId, "--description", "updated by integration"]);
+function stepTransactionsUpdateLedgerShow(ctx: Ctx): void {
+  const res = shOk(ctx, ["transactions", "update", ctx.groomingId, "--description", "updated by integration"]);
   const result = parseOne(res.stdout);
-  assert(result.updated === true, `record update did not report updated:true: ${JSON.stringify(result)}`);
+  assert(result.updated === true, `transactions update did not report updated:true: ${JSON.stringify(result)}`);
 
   const show = shOk(ctx, ["ledger", "show", ctx.groomingId]);
   const detail = parseOne(show.stdout);
@@ -434,26 +429,27 @@ function stepRecordUpdateLedgerShow(ctx: Ctx): void {
 }
 
 /**
- * `record` (strict, existing accounts) + `analyze duplicates --auto-merge`.
+ * `transactions add` (strict, existing accounts) + `analyze duplicates --auto-merge`.
  *
- * Adapted from the literal spec: `autoMergeStrictDuplicateTransfers`
- * (src/scanner/dedup-transfers.ts) only merges a duplicate group whose
+ * Adapted from the literal spec: `autoMergeStrictDuplicateTransactions`
+ * (src/scanner/dedup-transactions.ts) only merges a duplicate group whose
  * earliest member carries BOTH a non-null merchant_id AND a non-null
  * source_file_id (`if (!head.merchant_id || !head.source_file_id) return 0;`).
- * A hand-made `record` row has neither field (the CLI never sets
+ * A hand-made `transactions add` row has neither field (the CLI never sets
  * source_file_id, and no --merchant-name is given here), so it can't
  * strict-match the file-sourced dog food row — and two copies of *itself*
  * wouldn't strict-merge either, for the same reason (still no source_file_id
- * on either copy). So the manual record below is still created (to cover the
+ * on either copy). So the manual add below is still created (to cover the
  * literal "strict create with existing accounts" case), but the actual
  * auto-merge assertion instead exercises a *second*, file-sourced posting of
  * the dog food row (same date/amount/accounts/merchant as the original,
- * different row_index so it gets a distinct deterministic transfer id) via
+ * different row_index so it gets a distinct deterministic transaction id) via
  * the same source file — a case the merge logic is actually designed for.
  */
-function stepRecordCreateAutoMerge(ctx: Ctx): void {
+function stepTransactionsAddAutoMerge(ctx: Ctx): void {
   const manual = shOk(ctx, [
-    "record",
+    "transactions",
+    "add",
     "--debit-account",
     "expense:pet:food",
     "--credit-account",
@@ -467,10 +463,10 @@ function stepRecordCreateAutoMerge(ctx: Ctx): void {
   ]);
   const manualResult = parseOne(manual.stdout);
   assert(
-    typeof manualResult.transfer_id === "string" && manualResult.duplicate === false,
-    `manual dup-for-automerge record failed: ${JSON.stringify(manualResult)}`,
+    typeof manualResult.transaction_id === "string" && manualResult.duplicate === false,
+    `manual dup-for-automerge add failed: ${JSON.stringify(manualResult)}`,
   );
-  ctx.manualDupId = manualResult.transfer_id;
+  ctx.manualDupId = manualResult.transaction_id;
 
   const dup = {
     date: "2026-06-02",
@@ -491,17 +487,17 @@ function stepRecordCreateAutoMerge(ctx: Ctx): void {
     `expected the synthetic duplicate to post as a genuinely new row: ${JSON.stringify(dupResult)}`,
   );
 
-  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
+  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
 
   const merge = shOk(ctx, ["analyze", "duplicates", "--auto-merge"]);
   const mergeObjs = parseNdjson(merge.stdout);
   const mergeSummary = mergeObjs.find((o) => o.type === "summary");
   assert(mergeSummary?.auto_merged === 1, `expected exactly 1 auto-merge, got ${JSON.stringify(mergeSummary)}`);
 
-  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
+  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
   assert(
     after === before - 1,
-    `expected transfers to drop by 1 after auto-merge (before ${before}, after ${after})`,
+    `expected transactions to drop by 1 after auto-merge (before ${before}, after ${after})`,
   );
 }
 
@@ -516,7 +512,7 @@ function stepAccountsAdjust(ctx: Ctx): void {
     "statement closing balance",
   ]);
   const result = parseOne(res.stdout);
-  assert(typeof result.transfer_id === "string", `expected a balancing transfer_id: ${JSON.stringify(result)}`);
+  assert(typeof result.transaction_id === "string", `expected a balancing transaction_id: ${JSON.stringify(result)}`);
 
   const show = shOk(ctx, ["accounts", "show", "asset:bank:kasibank"]);
   const account = parseOne(show.stdout);
@@ -545,8 +541,8 @@ function stepAccountsCreateMergeDelete(ctx: Ctx): void {
   const mergeResult = parseOne(merge.stdout);
   assert(typeof mergeResult.moved === "number", `expected a numeric moved count: ${JSON.stringify(mergeResult)}`);
   assert(
-    mergeResult.deleted_self_transfers === 0,
-    `expected no self-transfers from an empty account merge: ${JSON.stringify(mergeResult)}`,
+    mergeResult.deleted_self_transactions === 0,
+    `expected no self-transactions from an empty account merge: ${JSON.stringify(mergeResult)}`,
   );
 
   // expense:pet:treats no longer exists post-merge (mergeAccounts deletes the
@@ -567,47 +563,47 @@ function stepAccountsCreateMergeDelete(ctx: Ctx): void {
   assert(parseOne(del.stdout).deleted === true, "accounts delete did not report deleted:true");
 }
 
-function stepRecordDelete(ctx: Ctx): void {
-  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
+function stepTransactionsDelete(ctx: Ctx): void {
+  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
 
-  const res = shOk(ctx, ["record", "delete", ctx.salaryId, "--yes"]);
-  assert(parseOne(res.stdout).deleted === true, "record delete did not report deleted:true");
+  const res = shOk(ctx, ["transactions", "delete", ctx.salaryId, "--yes"]);
+  assert(parseOne(res.stdout).deleted === true, "transactions delete did not report deleted:true");
 
-  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
-  assert(after === before - 1, `expected transfers to drop by 1 after record delete (before ${before}, after ${after})`);
+  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
+  assert(after === before - 1, `expected transactions to drop by 1 after transactions delete (before ${before}, after ${after})`);
 }
 
 function stepFilesShowDrop(ctx: Ctx): void {
   const show = shOk(ctx, ["files", "show", ctx.fileId]);
   const detail = parseOne(show.stdout);
-  assert(typeof detail.transfer_count === "number", `expected a numeric transfer_count: ${JSON.stringify(detail)}`);
-  const expectedTransferCount = detail.transfer_count;
+  assert(typeof detail.transaction_count === "number", `expected a numeric transaction_count: ${JSON.stringify(detail)}`);
+  const expectedTransactionCount = detail.transaction_count;
 
-  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
+  const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
 
   const drop = shOk(ctx, ["files", "drop", ctx.fileId, "--yes"]);
   const dropResult = parseOne(drop.stdout);
   assert(
-    dropResult.removed_transfers === expectedTransferCount,
-    `removed_transfers ${dropResult.removed_transfers} != transfer_count ${expectedTransferCount}`,
+    dropResult.removed_transactions === expectedTransactionCount,
+    `removed_transactions ${dropResult.removed_transactions} != transaction_count ${expectedTransactionCount}`,
   );
 
-  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transfers;
+  const after = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
   assert(
-    after === before - expectedTransferCount,
-    `expected transfers to drop by ${expectedTransferCount} (before ${before}, after ${after})`,
+    after === before - expectedTransactionCount,
+    `expected transactions to drop by ${expectedTransactionCount} (before ${before}, after ${after})`,
   );
-  // The manual dup-for-automerge record (no source_file_id) must survive the drop.
-  assert(!!ctx.manualDupId, "expected a captured manual transfer id to still be tracked");
+  // The manual dup-for-automerge transaction (no source_file_id) must survive the drop.
+  assert(!!ctx.manualDupId, "expected a captured manual transaction id to still be tracked");
 }
 
-function stepAgentSetup(ctx: Ctx): void {
+function stepSkillSetup(ctx: Ctx): void {
   const skillBase = join(ctx.root, "agent-skill");
-  const res = shOk(ctx, ["agent-setup", "--dir", skillBase]);
+  const res = shOk(ctx, ["setup", "--dir", skillBase]);
   const result = parseOne(res.stdout);
   assert(
     Array.isArray(result.installed) && result.installed.length === 1,
-    `unexpected agent-setup result: ${JSON.stringify(result)}`,
+    `unexpected setup result: ${JSON.stringify(result)}`,
   );
 
   const skillDir = join(skillBase, "skills", "plasalid");
@@ -615,8 +611,8 @@ function stepAgentSetup(ctx: Ctx): void {
   assert(existsSync(join(skillDir, "VERSION")), `missing VERSION under ${skillDir}`);
 }
 
-function stepConfigSetLocale(ctx: Ctx): void {
-  shOk(ctx, ["config", "set", "--locale", "en-US"]);
+function stepConfigLocale(ctx: Ctx): void {
+  shOk(ctx, ["config", "--locale", "en-US"]);
   const show = shOk(ctx, ["config", "show"]);
   const cfg = parseOne(show.stdout);
   assert(cfg.displayLocale === "en-US", `expected displayLocale en-US, got ${cfg.displayLocale}`);
@@ -632,7 +628,7 @@ function stepClosingStatus(ctx: Ctx): void {
 }
 
 const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
-  { label: "lifecycle: setup --generate-key", fn: stepSetup },
+  { label: "lifecycle: config --generate-key", fn: stepConfigInit },
   { label: "lifecycle: config show reflects encryption key", fn: stepConfigShowEncrypted },
   { label: "lifecycle: place encrypted statement fixture", fn: stepPlaceStatement },
   { label: "lifecycle: vault add + ingest list (encrypted)", fn: stepVaultAddIngestList },
@@ -641,14 +637,14 @@ const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
   { label: "lifecycle: ingest re-commit is idempotent", fn: stepIngestReCommitDuplicate },
   { label: "lifecycle: questions list + answer", fn: stepQuestions },
   { label: "lifecycle: ingest done (cache cleanup)", fn: stepIngestDone },
-  { label: "lifecycle: record update + ledger show", fn: stepRecordUpdateLedgerShow },
-  { label: "lifecycle: record create (strict) + analyze --auto-merge", fn: stepRecordCreateAutoMerge },
+  { label: "lifecycle: transactions update + ledger show", fn: stepTransactionsUpdateLedgerShow },
+  { label: "lifecycle: transactions add (strict) + analyze --auto-merge", fn: stepTransactionsAddAutoMerge },
   { label: "lifecycle: accounts adjust (closing balance)", fn: stepAccountsAdjust },
   { label: "lifecycle: accounts create + merge + delete", fn: stepAccountsCreateMergeDelete },
-  { label: "lifecycle: record delete", fn: stepRecordDelete },
+  { label: "lifecycle: transactions delete", fn: stepTransactionsDelete },
   { label: "lifecycle: files show + drop", fn: stepFilesShowDrop },
-  { label: "lifecycle: agent-setup --dir", fn: stepAgentSetup },
-  { label: "lifecycle: config set --locale", fn: stepConfigSetLocale },
+  { label: "lifecycle: setup --dir", fn: stepSkillSetup },
+  { label: "lifecycle: config --locale", fn: stepConfigLocale },
   { label: "lifecycle: closing status sanity", fn: stepClosingStatus },
 ];
 
@@ -656,11 +652,11 @@ const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
  * Stage 2 runs in its OWN freshly-minted isolated environment (same
  * HOME/DATA_DIR/CACHE_DIR convention as stage 1, distinct temp dir) rather
  * than stage 1's — stage 1's read sweep already opens + migrates a plaintext
- * db at its PLASALID_DB_PATH, and `setup --generate-key` cannot re-open an
+ * db at its PLASALID_DB_PATH, and `config --generate-key` cannot re-open an
  * existing plaintext file with an encryption key (db/connection.ts treats
  * that as "wrong encryption key or corrupt database"). All ~30 stage-2
  * subprocess calls below DO share this one env object end to end, so the
- * encryption key written into config.json by `setup` is picked up
+ * encryption key written into config.json by `config` is picked up
  * automatically by every later invocation (PLASALID_DB_ENCRYPTION_KEY stays
  * the blank string set in setUpTempEnv, which loses to the file value).
  */
@@ -707,10 +703,6 @@ function runStage2(): Result[] {
   }
   return results;
 }
-
-// ============================================================================
-// main
-// ============================================================================
 
 function main(): void {
   console.log("integration: building...");

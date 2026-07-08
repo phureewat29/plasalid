@@ -43,14 +43,16 @@ export function formatSignedAmount(amount: number, currency?: string): string {
   return amount < 0 ? `-${body}` : body;
 }
 
-// --- Minor-unit (integer) money helpers -------------------------------------
-//
-// The TigerBeetle-style `transfers` table stores amounts as integers in the
-// currency's smallest indivisible unit ("minor units"): THB satang, USD cents,
-// JPY yen (no minor unit), KWD fils (three places). Storing money as integers
-// removes float drift from balance math. Decimal <-> minor-unit conversion
-// happens at the CLI/pipeline boundary; the DB query layer only ever sees
-// integers.
+/**
+ * Minor-unit (integer) money helpers.
+ *
+ * The TigerBeetle-style `transactions` table stores amounts as integers in the
+ * currency's smallest indivisible unit ("minor units"): THB satang, USD cents,
+ * JPY yen (no minor unit), KWD fils (three places). Storing money as integers
+ * removes float drift from balance math. Decimal <-> minor-unit conversion
+ * happens at the CLI/pipeline boundary; the DB query layer only ever sees
+ * integers.
+ */
 
 const exponentCache = new Map<string, number>();
 

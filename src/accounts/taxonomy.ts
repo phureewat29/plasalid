@@ -61,7 +61,7 @@ const THAI_WALLETS: ThaiInstitution[] = [
 ];
 
 const THAI_PAYMENT_RAILS: ThaiInstitution[] = [
-  { code: "PROMPTPAY", label: "PromptPay", kind: "payment_rail", notes: "National 24/7 interbank rail; appears on transfer slips, not an issuer." },
+  { code: "PROMPTPAY", label: "PromptPay", kind: "payment_rail", notes: "National 24/7 interbank rail; appears on payment slips, not an issuer." },
 ];
 
 const THAI_BROKERS: ThaiInstitution[] = [

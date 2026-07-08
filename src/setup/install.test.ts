@@ -36,7 +36,7 @@ describe("templates", () => {
     expect(fm.version).toBe("1.2.3");
   });
 
-  it("SKILL_MD teaches the transfer model: direction table, row_index, and linked splits", () => {
+  it("SKILL_MD teaches the transaction model: direction table, row_index, and linked splits", () => {
     const skill = SKILL_MD("1.2.3");
     // The direction table header (Debit account / Credit account columns).
     expect(skill).toContain("Debit account");
@@ -44,6 +44,18 @@ describe("templates", () => {
     // Idempotency contract + compound form.
     expect(skill).toContain("row_index");
     expect(skill).toContain("linked");
+  });
+
+  it("SKILL_MD carries the 'When you are blocked' playbook and current command names", () => {
+    const skill = SKILL_MD("1.2.3");
+    // The blocked-environment playbook, keyed off the transcript failures.
+    expect(skill).toContain("When you are blocked");
+    // The salient PDF-rasterizer fallback (F3/F6) must name --dpi.
+    expect(skill).toContain("--dpi");
+    // Manual entry uses the `transactions` noun...
+    expect(skill).toContain("transactions add");
+    // ...and there is no legacy `record` command reference left behind.
+    expect(skill).not.toContain("record ");
   });
 
   it("SCHEMAS_MD documents the currency_mismatch drop and idempotent duplicate result", () => {
@@ -189,9 +201,9 @@ describe("installSkillPack — codex", () => {
   });
 });
 
-// --- CLI integration (subprocess) -----------------------------------------
+// CLI integration (subprocess)
 
-// install.test.ts lives in src/agent-setup/ -> repo root is two levels up.
+// install.test.ts lives in src/setup/ -> repo root is two levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 
 interface CliResult {
@@ -220,11 +232,11 @@ function runCli(args: string[]): Promise<CliResult> {
   });
 }
 
-describe("agent-setup CLI (subprocess)", () => {
+describe("setup CLI (subprocess)", () => {
   it(
     "--print emits raw SKILL.md with parseable frontmatter",
     async () => {
-      const res = await runCli(["agent-setup", "--print"]);
+      const res = await runCli(["setup", "--print"]);
       expect(res.code).toBe(0);
       expect(res.stdout.startsWith("---\n")).toBe(true);
       const fm = parseFrontmatter(res.stdout);
@@ -239,7 +251,7 @@ describe("agent-setup CLI (subprocess)", () => {
     async () => {
       const dir = tmp("plasalid-cli-install-");
       try {
-        const res = await runCli(["agent-setup", "--dir", dir, "--json"]);
+        const res = await runCli(["setup", "--dir", dir, "--json"]);
         expect(res.code).toBe(0);
         const parsed = JSON.parse(res.stdout.trim());
         expect(parsed.installed[0]).toMatchObject({ kind: "claude", path: join(dir, "skills", "plasalid") });

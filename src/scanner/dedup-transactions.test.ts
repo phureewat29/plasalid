@@ -3,8 +3,8 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
-import { insertTransfer, countTransfers, type TransferInput } from "../db/queries/transfers.js";
-import { autoMergeStrictDuplicateTransfers } from "./dedup-transfers.js";
+import { insertTransaction, countTransactions, type TransactionInput } from "../db/queries/transactions.js";
+import { autoMergeStrictDuplicateTransactions } from "./dedup-transactions.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
@@ -20,7 +20,7 @@ function freshDb(): Database.Database {
   return db;
 }
 
-function tf(over: Partial<TransferInput>): TransferInput {
+function tf(over: Partial<TransactionInput>): TransactionInput {
   return {
     date: "2026-05-01",
     description: "Starbucks",
@@ -33,34 +33,34 @@ function tf(over: Partial<TransferInput>): TransferInput {
   };
 }
 
-describe("autoMergeStrictDuplicateTransfers", () => {
+describe("autoMergeStrictDuplicateTransactions", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("merges exact duplicates sharing merchant/file/date/amount", () => {
     const merchant = upsertMerchant(db, { canonical_name: "Starbucks" });
     for (let i = 0; i < 3; i++) {
-      insertTransfer(db, tf({ merchant_id: merchant.id }));
+      insertTransaction(db, tf({ merchant_id: merchant.id }));
     }
-    expect(countTransfers(db)).toBe(3);
-    expect(autoMergeStrictDuplicateTransfers(db)).toEqual({ merged: 2 });
-    expect(countTransfers(db)).toBe(1);
+    expect(countTransactions(db)).toBe(3);
+    expect(autoMergeStrictDuplicateTransactions(db)).toEqual({ merged: 2 });
+    expect(countTransactions(db)).toBe(1);
   });
 
   it("keeps distinct amounts untouched", () => {
     const merchant = upsertMerchant(db, { canonical_name: "Starbucks" });
     for (const amount of [15000, 17500]) {
-      insertTransfer(db, tf({ merchant_id: merchant.id, amount }));
+      insertTransaction(db, tf({ merchant_id: merchant.id, amount }));
     }
-    expect(autoMergeStrictDuplicateTransfers(db)).toEqual({ merged: 0 });
-    expect(countTransfers(db)).toBe(2);
+    expect(autoMergeStrictDuplicateTransactions(db)).toEqual({ merged: 0 });
+    expect(countTransactions(db)).toBe(2);
   });
 
   it("does not merge when the earliest row lacks a merchant or source file", () => {
     for (let i = 0; i < 2; i++) {
-      insertTransfer(db, tf({})); // no merchant_id
+      insertTransaction(db, tf({})); // no merchant_id
     }
-    expect(autoMergeStrictDuplicateTransfers(db)).toEqual({ merged: 0 });
-    expect(countTransfers(db)).toBe(2);
+    expect(autoMergeStrictDuplicateTransactions(db)).toEqual({ merged: 0 });
+    expect(countTransactions(db)).toBe(2);
   });
 });

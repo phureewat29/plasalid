@@ -1,0 +1,23 @@
+{
+  "name": "corgi-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone ink TUI demo: an external claude CLI agent drives the plasalid harness end to end over a real, password-protected credit-card statement.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/demo.tsx"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ink": "^5.0.0",
+    "react": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.0"
+  }
+}

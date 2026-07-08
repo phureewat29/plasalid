@@ -129,7 +129,6 @@ export function findMerchantByAlias(
 }
 
 export interface ListMerchantsOptions {
-  withDefaultOnly?: boolean;
   limit?: number;
 }
 
@@ -137,13 +136,11 @@ export function listMerchants(
   db: Database.Database,
   opts: ListMerchantsOptions = {},
 ): (MerchantRow & { alias_count: number })[] {
-  const where = opts.withDefaultOnly ? `WHERE m.default_account_id IS NOT NULL` : ``;
   const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
   return db.prepare(
     `SELECT m.id, m.canonical_name, m.default_account_id, m.created_at,
             (SELECT COUNT(*) FROM merchant_aliases ma WHERE ma.merchant_id = m.id) AS alias_count
      FROM merchants m
-     ${where}
      ORDER BY m.canonical_name
      LIMIT ?`,
   ).all(limit) as (MerchantRow & { alias_count: number })[];

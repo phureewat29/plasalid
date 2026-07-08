@@ -4,14 +4,14 @@ import { migrate } from "../schema.js";
 import {
   createAccount,
   findAccountById,
-  getAccountBalancesFromTransfers,
-  getNetWorthFromTransfers,
-  getPeriodTotalsFromTransfers,
-  getRollupBalanceFromTransfers,
-  repointTransfers,
-  adjustAccountBalanceViaTransfer,
+  getAccountBalancesFromTransactions,
+  getNetWorthFromTransactions,
+  getPeriodTotalsFromTransactions,
+  getRollupBalanceFromTransactions,
+  repointTransactions,
+  adjustAccountBalanceViaTransaction,
 } from "./account-balance.js";
-import { insertTransfer, getTransfer, type TransferInput } from "./transfers.js";
+import { insertTransaction, getTransaction, type TransactionInput } from "./transactions.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
@@ -29,8 +29,8 @@ function freshDb(): Database.Database {
   return db;
 }
 
-function ins(db: Database.Database, over: Partial<TransferInput> & Pick<TransferInput, "debit_account_id" | "credit_account_id" | "amount">) {
-  insertTransfer(db, {
+function ins(db: Database.Database, over: Partial<TransactionInput> & Pick<TransactionInput, "debit_account_id" | "credit_account_id" | "amount">) {
+  insertTransaction(db, {
     date: "2026-05-01",
     description: "x",
     currency: "THB",
@@ -38,14 +38,14 @@ function ins(db: Database.Database, over: Partial<TransferInput> & Pick<Transfer
   });
 }
 
-describe("getAccountBalancesFromTransfers", () => {
+describe("getAccountBalancesFromTransactions", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("derives minor-unit + decimal balances per the normal-balance rule", () => {
     // 150.00 THB expense funded from cash.
     ins(db, { debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 15000 });
-    const balances = getAccountBalancesFromTransfers(db);
+    const balances = getAccountBalancesFromTransactions(db);
 
     const food = balances.find((b) => b.id === "expense:food")!;
     expect(food.debits_posted).toBe(15000);
@@ -60,83 +60,83 @@ describe("getAccountBalancesFromTransfers", () => {
 
   it("filters by type", () => {
     ins(db, { debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 15000 });
-    const expenses = getAccountBalancesFromTransfers(db, { type: "expense" });
+    const expenses = getAccountBalancesFromTransactions(db, { type: "expense" });
     expect(expenses.every((b) => b.type === "expense")).toBe(true);
     expect(expenses.some((b) => b.id === "asset:cash")).toBe(false);
   });
 });
 
-describe("getNetWorthFromTransfers", () => {
+describe("getNetWorthFromTransactions", () => {
   it("sums assets minus liabilities", () => {
     const db = freshDb();
     // Salary lands in the bank: +1000 THB asset.
     ins(db, { debit_account_id: "asset:bank", credit_account_id: "income:salary", amount: 100000 });
-    const nw = getNetWorthFromTransfers(db);
+    const nw = getNetWorthFromTransactions(db);
     expect(nw.assets).toBe(1000);
     expect(nw.liabilities).toBe(0);
     expect(nw.net_worth).toBe(1000);
   });
 });
 
-describe("getPeriodTotalsFromTransfers", () => {
+describe("getPeriodTotalsFromTransactions", () => {
   it("computes income (C-D) and expenses (D-C) over the range", () => {
     const db = freshDb();
     ins(db, { debit_account_id: "asset:cash", credit_account_id: "income:salary", amount: 100000, date: "2026-05-10" });
     ins(db, { debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 15000, date: "2026-05-11" });
-    // Out-of-range transfer must not count.
+    // Out-of-range transaction must not count.
     ins(db, { debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 99900, date: "2026-07-01" });
 
-    const totals = getPeriodTotalsFromTransfers(db, "2026-05-01", "2026-05-31");
+    const totals = getPeriodTotalsFromTransactions(db, "2026-05-01", "2026-05-31");
     expect(totals.income).toBe(1000);
     expect(totals.expenses).toBe(150);
   });
 });
 
-describe("getRollupBalanceFromTransfers", () => {
+describe("getRollupBalanceFromTransactions", () => {
   it("sums a subtree (root inclusive)", () => {
     const db = freshDb();
     ins(db, { debit_account_id: "expense:food:dining", credit_account_id: "asset:cash", amount: 35000 });
     ins(db, { debit_account_id: "expense:food:groceries", credit_account_id: "asset:cash", amount: 60000 });
-    expect(getRollupBalanceFromTransfers(db, "expense:food")).toBe(950);
-    expect(getRollupBalanceFromTransfers(db, "asset:cash")).toBe(-950);
+    expect(getRollupBalanceFromTransactions(db, "expense:food")).toBe(950);
+    expect(getRollupBalanceFromTransactions(db, "asset:cash")).toBe(-950);
   });
 });
 
-describe("repointTransfers", () => {
-  it("moves both columns and deletes would-be self-transfers", () => {
+describe("repointTransactions", () => {
+  it("moves both columns and deletes would-be self-transactions", () => {
     const db = freshDb();
-    ins(db, { id: "tf:1", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 10000 });
-    ins(db, { id: "tf:2", debit_account_id: "asset:cash", credit_account_id: "expense:food", amount: 10000 });
+    ins(db, { id: "tx:1", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 10000 });
+    ins(db, { id: "tx:2", debit_account_id: "asset:cash", credit_account_id: "expense:food", amount: 10000 });
     // Re-pointing food -> dining would collapse this row (dining on both sides).
-    ins(db, { id: "tf:self", debit_account_id: "expense:food", credit_account_id: "expense:food:dining", amount: 10000 });
+    ins(db, { id: "tx:self", debit_account_id: "expense:food", credit_account_id: "expense:food:dining", amount: 10000 });
 
-    const res = repointTransfers(db, "expense:food", "expense:food:dining");
-    expect(res.deletedSelfTransfers).toBe(1);
+    const res = repointTransactions(db, "expense:food", "expense:food:dining");
+    expect(res.deletedSelfTransactions).toBe(1);
     expect(res.moved).toBe(2);
-    expect(getTransfer(db, "tf:1")?.debit_account_id).toBe("expense:food:dining");
-    expect(getTransfer(db, "tf:2")?.credit_account_id).toBe("expense:food:dining");
-    expect(getTransfer(db, "tf:self")).toBeNull();
+    expect(getTransaction(db, "tx:1")?.debit_account_id).toBe("expense:food:dining");
+    expect(getTransaction(db, "tx:2")?.credit_account_id).toBe("expense:food:dining");
+    expect(getTransaction(db, "tx:self")).toBeNull();
   });
 
   it("refuses re-pointing an account to itself", () => {
     const db = freshDb();
-    expect(() => repointTransfers(db, "expense:food", "expense:food")).toThrow();
+    expect(() => repointTransactions(db, "expense:food", "expense:food")).toThrow();
   });
 });
 
-describe("adjustAccountBalanceViaTransfer", () => {
-  it("posts a balancing transfer against equity:adjustments", () => {
+describe("adjustAccountBalanceViaTransaction", () => {
+  it("posts a balancing transaction against equity:adjustments", () => {
     const db = freshDb();
-    const res = adjustAccountBalanceViaTransfer(db, {
+    const res = adjustAccountBalanceViaTransaction(db, {
       accountId: "asset:cash",
       targetAmount: 1500,
       reason: "set to market value",
     });
     expect(res.delta).toBe(1500);
-    expect(res.transferId).not.toBeNull();
+    expect(res.transactionId).not.toBeNull();
     expect(findAccountById(db, "equity:adjustments")).toBeTruthy();
 
-    const cash = getAccountBalancesFromTransfers(db).find((b) => b.id === "asset:cash")!;
+    const cash = getAccountBalancesFromTransactions(db).find((b) => b.id === "asset:cash")!;
     expect(cash.balance).toBe(1500);
   });
 
@@ -144,18 +144,18 @@ describe("adjustAccountBalanceViaTransfer", () => {
     const db = freshDb();
     ins(db, { debit_account_id: "asset:cash", credit_account_id: "income:salary", amount: 150000 });
     // asset:cash is now +1500.
-    const res = adjustAccountBalanceViaTransfer(db, {
+    const res = adjustAccountBalanceViaTransaction(db, {
       accountId: "asset:cash",
       targetAmount: 1500,
       reason: "already there",
     });
-    expect(res).toEqual({ transferId: null, delta: 0 });
+    expect(res).toEqual({ transactionId: null, delta: 0 });
   });
 
   it("throws for an unknown account", () => {
     const db = freshDb();
     expect(() =>
-      adjustAccountBalanceViaTransfer(db, { accountId: "asset:nope", targetAmount: 10, reason: "x" }),
+      adjustAccountBalanceViaTransaction(db, { accountId: "asset:nope", targetAmount: 10, reason: "x" }),
     ).toThrow(/not found/);
   });
 });

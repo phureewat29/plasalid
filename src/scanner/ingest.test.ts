@@ -17,13 +17,14 @@ import { generateKey } from "../db/encryption.js";
 import { config } from "../config.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
-import { insertTransfer, countTransfersBySourceFile } from "../db/queries/transfers.js";
+import { insertTransaction, countTransactionsBySourceFile } from "../db/queries/transactions.js";
 import { findScannedFileById } from "../db/queries/files.js";
 import { savePassword } from "./pdf.js";
 import {
   discoverFiles,
   registerPendingFile,
   prepareFile,
+  resolveEntryPath,
   cleanCache,
   PasswordRequiredError,
 } from "./ingest.js";
@@ -147,6 +148,64 @@ describe("registerPendingFile", () => {
   });
 });
 
+describe("resolveEntryPath", () => {
+  it("resolves a rel_path (as emitted by `ingest list`) relative to the data dir, regardless of cwd", () => {
+    const db = freshDb();
+    mkdirSync(resolve(dataDir, "sub"), { recursive: true });
+    const path = resolve(dataDir, "sub", "b.pdf");
+    writeFileSync(path, minimalPdf());
+
+    // cwd is somewhere else entirely (an agent's shell rarely sits in the
+    // data dir) — this is the exact failure a live agent session hit.
+    const elsewhere = mkdtempSync(resolve(tmpdir(), "plasalid-ingest-elsewhere-"));
+    const prevCwd = process.cwd();
+    process.chdir(elsewhere);
+    try {
+      expect(resolveEntryPath(db, "sub/b.pdf")).toBe(path);
+    } finally {
+      process.chdir(prevCwd);
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("still resolves an absolute path", () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+    expect(resolveEntryPath(db, path)).toBe(path);
+  });
+
+  it("still resolves a cwd-relative path when it isn't rooted under the data dir", () => {
+    const db = freshDb();
+    const path = resolve(outDir, "c.pdf");
+    writeFileSync(path, minimalPdf());
+    const prevCwd = process.cwd();
+    process.chdir(outDir);
+    try {
+      // Compare against process.cwd() (not the pre-chdir `outDir` string) —
+      // on macOS the tmp dir is itself a symlink, so chdir resolves it to
+      // its real path (`/private/var/...` vs `/var/...`).
+      expect(resolveEntryPath(db, "c.pdf")).toBe(resolve(process.cwd(), "c.pdf"));
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
+  it("still resolves a sf: file id", () => {
+    const db = freshDb();
+    const path = resolve(dataDir, "a.pdf");
+    writeFileSync(path, minimalPdf());
+    const { fileId } = registerPendingFile(db, path);
+    expect(resolveEntryPath(db, fileId)).toBe(path);
+  });
+
+  it("returns null for a path or id that matches nothing", () => {
+    const db = freshDb();
+    expect(resolveEntryPath(db, "sf:does-not-exist")).toBeNull();
+    expect(resolveEntryPath(db, "no/such/file.pdf")).toBeNull();
+  });
+});
+
 describe("prepareFile", () => {
   it("rasterizes requested pages to PNGs (resolving a fileId)", async () => {
     const db = freshDb();
@@ -222,7 +281,7 @@ describe("prepareFile", () => {
     expect(existsSync(result.document!)).toBe(false);
   });
 
-  it("force re-registers and cascades away the prior scan's transfers", async () => {
+  it("force re-registers and cascades away the prior scan's transactions", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
@@ -231,7 +290,7 @@ describe("prepareFile", () => {
 
     const { fileId: oldId } = registerPendingFile(db, path);
     const merchant = upsertMerchant(db, { canonical_name: "Shop" });
-    insertTransfer(db, {
+    insertTransaction(db, {
       date: "2026-05-01",
       description: "Shop",
       merchant_id: merchant.id,
@@ -241,12 +300,12 @@ describe("prepareFile", () => {
       amount: 1000,
       currency: "THB",
     });
-    expect(countTransfersBySourceFile(db, oldId)).toBe(1);
+    expect(countTransactionsBySourceFile(db, oldId)).toBe(1);
 
     const result = await prepareFile(db, path, { force: true, dpi: 72, outDir });
     expect(result.fileId).not.toBe(oldId);
     expect(findScannedFileById(db, oldId)).toBeNull();
-    expect(countTransfersBySourceFile(db, oldId)).toBe(0);
+    expect(countTransactionsBySourceFile(db, oldId)).toBe(0);
   });
 
   it("throws password_required for an encrypted PDF with no password", async () => {

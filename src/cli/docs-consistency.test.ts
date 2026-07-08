@@ -4,12 +4,12 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram, COMMANDS } from "./program.js";
-import { COMMANDS_REFERENCE_MD } from "../agent-setup/templates.js";
+import { COMMANDS_REFERENCE_MD } from "../setup/templates.js";
 
 /**
  * Drift-prevention test: no subprocesses, pure import + string parsing. Keeps
  * the program's real command tree, README.md's "## Commands" overview, the
- * agent-setup skill pack's COMMANDS_REFERENCE_MD, and the root help screen's
+ * setup skill pack's COMMANDS_REFERENCE_MD, and the root help screen's
  * COMMANDS array from silently diverging as commands/flags are added, renamed,
  * or removed.
  *

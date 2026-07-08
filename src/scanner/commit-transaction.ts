@@ -8,22 +8,22 @@ import {
   type ProgressEmitter,
 } from "./resolve.js";
 import {
-  insertTransfer,
-  insertLinkedTransfers,
-  validateTransfer,
-  deriveTransferId,
+  insertTransaction,
+  insertLinkedTransactions,
+  validateTransaction,
+  deriveTransactionId,
   deriveGroupId,
-  type TransferInput,
-} from "../db/queries/transfers.js";
+  type TransactionInput,
+} from "../db/queries/transactions.js";
 import { toMinorUnits } from "../currency.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import type { MerchantUpsertInput } from "../db/queries/merchants.js";
 
 /**
- * Commit context for the transfer pipeline. `fileHash` enables idempotent
- * transfer id derivation; `chunkId`/`progress` are unused and always null.
+ * Commit context for the transaction pipeline. `fileHash` enables idempotent
+ * transaction id derivation; `chunkId`/`progress` are unused and always null.
  */
-export interface TransferCommitContext {
+export interface TransactionCommitContext {
   readonly scanId: string | null;
   readonly fileId: string | null;
   readonly fileHash?: string | null;
@@ -32,10 +32,10 @@ export interface TransferCommitContext {
 }
 
 /**
- * Raw transfer as the scanner/LLM produces it: a DECIMAL amount (converted to
+ * Raw transaction as the scanner/LLM produces it: a DECIMAL amount (converted to
  * minor units here) and optional source coordinates for deterministic ids.
  */
-export interface RawTransferInput {
+export interface RawTransactionInput {
   id?: string;
   group_id?: string | null;
   date: string;
@@ -58,24 +58,24 @@ export interface RawTransferInput {
   leg_index?: number | null;
 }
 
-export type TransferDropReason = "dirty_input" | "currency_mismatch";
+export type TransactionDropReason = "dirty_input" | "currency_mismatch";
 
-export type TransferCommitOutcome =
+export type TransactionCommitOutcome =
   | {
       ok: true;
-      transferId: string;
+      transactionId: string;
       duplicate: boolean;
       raisedQuestions: number;
       currencyOverridden: boolean;
     }
   | {
       ok: false;
-      reason: TransferDropReason;
+      reason: TransactionDropReason;
       message: string;
       raisedQuestions: number;
     };
 
-export type LinkedTransfersOutcome =
+export type LinkedTransactionsOutcome =
   | {
       ok: true;
       group_id: string;
@@ -84,26 +84,26 @@ export type LinkedTransfersOutcome =
     }
   | {
       ok: false;
-      reason: TransferDropReason;
+      reason: TransactionDropReason;
       message: string;
       raisedQuestions: number;
     };
 
-export type TransferSide = "debit" | "credit";
+export type TransactionSide = "debit" | "credit";
 
-export interface TransferCommitHooks {
-  onCommitted(transferId: string): void;
-  onDirtyInput(input: RawTransferInput, reason: string): void;
-  onUnknownMerchant(input: RawTransferInput, transferId: string, attemptedId: string): void;
-  onPlaceholderAccount(side: TransferSide, accountId: string, transferId: string): void;
+export interface TransactionCommitHooks {
+  onCommitted(transactionId: string): void;
+  onDirtyInput(input: RawTransactionInput, reason: string): void;
+  onUnknownMerchant(input: RawTransactionInput, transactionId: string, attemptedId: string): void;
+  onPlaceholderAccount(side: TransactionSide, accountId: string, transactionId: string): void;
   onSimilarAccount(
-    side: TransferSide,
+    side: TransactionSide,
     originalId: string,
     matchedId: string,
-    transferId: string,
+    transactionId: string,
   ): void;
   onCurrencyMismatch(
-    input: RawTransferInput,
+    input: RawTransactionInput,
     debit: { id: string; currency: string },
     credit: { id: string; currency: string },
   ): void;
@@ -127,13 +127,13 @@ function accountPairKey(a: string, b: string): string {
 
 /**
  * Default hooks: turn pipeline events into `questions` rows, attaching each to
- * its `transfer_id` (or none, for pre-insert failures). Every raise() no-ops
+ * its `transaction_id` (or none, for pre-insert failures). Every raise() no-ops
  * when `ctx.scanId` is null.
  */
-export function defaultTransferCommitHooks(
+export function defaultTransactionCommitHooks(
   db: Database.Database,
-  ctx: TransferCommitContext,
-): TransferCommitHooks {
+  ctx: TransactionCommitContext,
+): TransactionCommitHooks {
   const tick = (kind: "tx" | "question"): void => {
     if (ctx.progress && ctx.chunkId) ctx.progress.emit({ chunkId: ctx.chunkId, kind });
   };
@@ -150,19 +150,19 @@ export function defaultTransferCommitHooks(
 
     onDirtyInput: (input, reason) =>
       raise({
-        transfer_id: null,
+        transaction_id: null,
         account_id: null,
         kind: "dirty_input",
         prompt:
-          `The scanner returned a transfer that couldn't be validated: ${reason}. ` +
+          `The scanner returned a transaction that couldn't be validated: ${reason}. ` +
           `Raw description: "${input.description}" on ${input.date}.`,
         context: { description: input.description, date: input.date, reason },
       }),
 
-    onUnknownMerchant: (input, transferId, attemptedId) => {
+    onUnknownMerchant: (input, transactionId, attemptedId) => {
       const descriptor = input.raw_descriptor || input.description;
       raise({
-        transfer_id: transferId,
+        transaction_id: transactionId,
         account_id: null,
         kind: "unknown_merchant",
         prompt:
@@ -172,9 +172,9 @@ export function defaultTransferCommitHooks(
       });
     },
 
-    onPlaceholderAccount: (side, accountId, transferId) =>
+    onPlaceholderAccount: (side, accountId, transactionId) =>
       raise({
-        transfer_id: transferId,
+        transaction_id: transactionId,
         account_id: accountId,
         kind: "uncategorized",
         prompt:
@@ -183,9 +183,9 @@ export function defaultTransferCommitHooks(
         context: { rule_key: accountIdKey(accountId), placeholder_id: accountId, side },
       }),
 
-    onSimilarAccount: (side, originalId, matchedId, transferId) =>
+    onSimilarAccount: (side, originalId, matchedId, transactionId) =>
       raise({
-        transfer_id: transferId,
+        transaction_id: transactionId,
         account_id: matchedId,
         kind: "similar_accounts",
         prompt:
@@ -201,30 +201,30 @@ export function defaultTransferCommitHooks(
 
     onCurrencyMismatch: (input, debit, credit) =>
       raise({
-        transfer_id: null,
+        transaction_id: null,
         account_id: null,
         kind: "currency_mismatch",
         prompt:
-          `Transfer "${input.description}" on ${input.date} moves money between ` +
+          `Transaction "${input.description}" on ${input.date} moves money between ` +
           `${debit.id} (${debit.currency}) and ${credit.id} (${credit.currency}), which use ` +
-          `different currencies. A single transfer can't cross currencies — record it as a ` +
-          `linked conversion pair (one transfer out of ${debit.currency}, one into ` +
+          `different currencies. A single transaction can't cross currencies — record it as a ` +
+          `linked conversion pair (one transaction out of ${debit.currency}, one into ` +
           `${credit.currency}, sharing a group) so the FX conversion is explicit.`,
         context: { debit, credit, date: input.date, description: input.description },
       }),
   };
 }
 
-interface PreparedTransfer {
-  input: TransferInput;
-  hints: { side: TransferSide; hint: AccountHint }[];
+interface PreparedTransaction {
+  input: TransactionInput;
+  hints: { side: TransactionSide; hint: AccountHint }[];
   merchant: ResolvedMerchant;
   currencyOverridden: boolean;
-  raw: RawTransferInput;
+  raw: RawTransactionInput;
 }
 
 type PrepareResult =
-  | { ok: true; prepared: PreparedTransfer }
+  | { ok: true; prepared: PreparedTransaction }
   | { ok: false; reason: "dirty_input"; message: string }
   | {
       ok: false;
@@ -234,7 +234,7 @@ type PrepareResult =
       credit: { id: string; currency: string };
     };
 
-function validateRawTransfer(input: RawTransferInput): { ok: true } | { ok: false; reason: string } {
+function validateRawTransaction(input: RawTransactionInput): { ok: true } | { ok: false; reason: string } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) {
     return { ok: false, reason: "date must be an ISO date (YYYY-MM-DD)." };
   }
@@ -264,32 +264,54 @@ function accountCurrency(db: Database.Database, id: string): string {
 }
 
 /**
- * Run the transfer stages (validate -> resolve both account sides -> derive
+ * Run the transaction stages (validate -> resolve both account sides -> derive
  * currency -> convert amount to minor units -> resolve merchant -> compute id),
- * WITHOUT touching the transfers table. Returns a ready-to-insert TransferInput
+ * WITHOUT touching the transactions table. Returns a ready-to-insert TransactionInput
  * plus the events to raise, or a drop reason. Resolving accounts may create
  * placeholder accounts as a side effect; on a currency mismatch those side
- * effects remain but no transfer is inserted.
+ * effects remain but no transaction is inserted.
  */
-function prepareTransfer(
+function prepareTransaction(
   db: Database.Database,
-  ctx: TransferCommitContext,
-  input: RawTransferInput,
+  ctx: TransactionCommitContext,
+  input: RawTransactionInput,
 ): PrepareResult {
-  const raw = validateRawTransfer(input);
+  const raw = validateRawTransaction(input);
   if (!raw.ok) return { ok: false, reason: "dirty_input", message: raw.reason };
 
   // Resolve both sides via the exact same logic the posting pipeline uses.
-  const debitRes = resolveOnePosting(db, { account_id: input.debit_account_id });
-  const creditRes = resolveOnePosting(db, { account_id: input.credit_account_id });
-  const debitId = debitRes.posting.account_id;
-  const creditId = creditRes.posting.account_id;
+  let debitRes = resolveOnePosting(db, { account_id: input.debit_account_id });
+  let creditRes = resolveOnePosting(db, { account_id: input.credit_account_id });
+  let debitId = debitRes.posting.account_id;
+  let creditId = creditRes.posting.account_id;
 
-  const hints: { side: TransferSide; hint: AccountHint }[] = [];
+  // Fuzzy-collapse guard: `debit_account_id` and `credit_account_id` are
+  // guaranteed distinct at this point (validateRawTransaction above), so if they
+  // RESOLVED to the same account, that's the fuzzy matcher over-eagerly
+  // collapsing two different accounts that happen to share a token (e.g. hint
+  // "asset:bank:ttb" fuzzy-matching onto an existing "liability:credit_card:ttb").
+  // That's not genuinely dirty input — re-resolve whichever side(s) went
+  // through fuzzy matching as a placeholder instead (skipping the fuzzy
+  // stage), so the two sides land on distinct accounts again. Only a
+  // collision with NO fuzzy match on either side (both sides landing on the
+  // same fallback/placeholder some other way) is left to the dirty_input
+  // backstop below — that's genuinely invalid input.
+  if (debitId === creditId) {
+    if (debitRes.hint?.type === "similar_matched") {
+      debitRes = resolveOnePosting(db, { account_id: input.debit_account_id }, { skipFuzzy: true });
+      debitId = debitRes.posting.account_id;
+    }
+    if (debitId === creditId && creditRes.hint?.type === "similar_matched") {
+      creditRes = resolveOnePosting(db, { account_id: input.credit_account_id }, { skipFuzzy: true });
+      creditId = creditRes.posting.account_id;
+    }
+  }
+
+  const hints: { side: TransactionSide; hint: AccountHint }[] = [];
   if (debitRes.hint) hints.push({ side: "debit", hint: debitRes.hint });
   if (creditRes.hint) hints.push({ side: "credit", hint: creditRes.hint });
 
-  // Currency is derived from the resolved accounts; a cross-currency transfer is
+  // Currency is derived from the resolved accounts; a cross-currency transaction is
   // dropped for a linked conversion pair instead.
   const debitCur = accountCurrency(db, debitId);
   const creditCur = accountCurrency(db, creditId);
@@ -310,15 +332,15 @@ function prepareTransfer(
 
   const id =
     ctx.fileHash && input.row_index != null
-      ? deriveTransferId(
+      ? deriveTransactionId(
           ctx.fileHash,
           input.source_page ?? 0,
           input.row_index,
           input.leg_index ?? undefined,
         )
-      : input.id ?? `tf:${randomUUID()}`;
+      : input.id ?? `tx:${randomUUID()}`;
 
-  const built: TransferInput = {
+  const built: TransactionInput = {
     id,
     group_id: input.group_id ?? null,
     date: input.date,
@@ -337,28 +359,28 @@ function prepareTransfer(
   };
 
   // Backstop: resolution can collapse two ids onto one account, which
-  // validateTransfer catches as debit == credit.
-  const v = validateTransfer(built);
+  // validateTransaction catches as debit == credit.
+  const v = validateTransaction(built);
   if (!v.ok) return { ok: false, reason: "dirty_input", message: v.reason };
 
   return { ok: true, prepared: { input: built, hints, merchant, currencyOverridden, raw: input } };
 }
 
-function applyTransferHints(
-  hooks: TransferCommitHooks,
-  transferId: string,
-  prepared: PreparedTransfer,
+function applyTransactionHints(
+  hooks: TransactionCommitHooks,
+  transactionId: string,
+  prepared: PreparedTransaction,
 ): number {
   let raised = 0;
   if (prepared.merchant.attemptedUnknownId) {
-    hooks.onUnknownMerchant(prepared.raw, transferId, prepared.merchant.attemptedUnknownId);
+    hooks.onUnknownMerchant(prepared.raw, transactionId, prepared.merchant.attemptedUnknownId);
     raised++;
   }
   for (const { side, hint } of prepared.hints) {
     if (hint.type === "placeholder_created") {
-      hooks.onPlaceholderAccount(side, hint.accountId, transferId);
+      hooks.onPlaceholderAccount(side, hint.accountId, transactionId);
     } else {
-      hooks.onSimilarAccount(side, hint.originalId, hint.matchedId, transferId);
+      hooks.onSimilarAccount(side, hint.originalId, hint.matchedId, transactionId);
     }
     raised++;
   }
@@ -366,18 +388,18 @@ function applyTransferHints(
 }
 
 /**
- * Commit a single transfer. Order (documented in the design): validate ->
+ * Commit a single transaction. Order (documented in the design): validate ->
  * resolve accounts -> derive currency -> convert amount -> resolve merchant ->
  * derive id -> idempotent insert -> raise questions. A duplicate re-commit is a
  * no-op (no questions, no balance change).
  */
-export function commitTransfer(
+export function commitTransaction(
   db: Database.Database,
-  ctx: TransferCommitContext,
-  input: RawTransferInput,
-  hooks: TransferCommitHooks = defaultTransferCommitHooks(db, ctx),
-): TransferCommitOutcome {
-  const prep = prepareTransfer(db, ctx, input);
+  ctx: TransactionCommitContext,
+  input: RawTransactionInput,
+  hooks: TransactionCommitHooks = defaultTransactionCommitHooks(db, ctx),
+): TransactionCommitOutcome {
+  const prep = prepareTransaction(db, ctx, input);
   if (!prep.ok) {
     if (prep.reason === "currency_mismatch") {
       hooks.onCurrencyMismatch(input, prep.debit, prep.credit);
@@ -387,11 +409,11 @@ export function commitTransfer(
     return { ok: false, reason: prep.reason, message: prep.message, raisedQuestions: 1 };
   }
 
-  const { id, duplicate } = insertTransfer(db, prep.prepared.input);
+  const { id, duplicate } = insertTransaction(db, prep.prepared.input);
   if (duplicate) {
     return {
       ok: true,
-      transferId: id,
+      transactionId: id,
       duplicate: true,
       raisedQuestions: 0,
       currencyOverridden: prep.prepared.currencyOverridden,
@@ -399,17 +421,17 @@ export function commitTransfer(
   }
 
   hooks.onCommitted(id);
-  const raised = applyTransferHints(hooks, id, prep.prepared);
+  const raised = applyTransactionHints(hooks, id, prep.prepared);
   return {
     ok: true,
-    transferId: id,
+    transactionId: id,
     duplicate: false,
     raisedQuestions: raised,
     currencyOverridden: prep.prepared.currencyOverridden,
   };
 }
 
-export interface LinkedTransferHeader {
+export interface LinkedTransactionHeader {
   date: string;
   description: string;
   raw_descriptor?: string | null;
@@ -421,7 +443,7 @@ export interface LinkedTransferHeader {
   row_index?: number | null;
 }
 
-export interface LinkedTransferLeg {
+export interface LinkedTransactionLeg {
   debit_account_id: string;
   credit_account_id: string;
   /** DECIMAL amount for this leg. */
@@ -434,11 +456,11 @@ export interface LinkedTransferLeg {
 }
 
 function mergeHeaderLeg(
-  header: LinkedTransferHeader,
-  leg: LinkedTransferLeg,
+  header: LinkedTransactionHeader,
+  leg: LinkedTransactionLeg,
   groupId: string,
   legIndex: number,
-): RawTransferInput {
+): RawTransactionInput {
   return {
     group_id: groupId,
     date: header.date,
@@ -460,21 +482,21 @@ function mergeHeaderLeg(
 }
 
 /**
- * Commit several linked transfers atomically under a shared group_id. All legs
+ * Commit several linked transactions atomically under a shared group_id. All legs
  * are prepared first; if ANY leg fails (dirty input or currency mismatch),
  * nothing is inserted and the failing leg's question is raised. Otherwise every
  * leg is inserted in one transaction, then questions are raised per leg. Models
  * e.g. a salary split into net-pay + tax-withholding + social-security legs.
  */
-export function commitLinkedTransfers(
+export function commitLinkedTransactions(
   db: Database.Database,
-  ctx: TransferCommitContext,
-  header: LinkedTransferHeader,
-  legs: LinkedTransferLeg[],
-  hooks: TransferCommitHooks = defaultTransferCommitHooks(db, ctx),
-): LinkedTransfersOutcome {
+  ctx: TransactionCommitContext,
+  header: LinkedTransactionHeader,
+  legs: LinkedTransactionLeg[],
+  hooks: TransactionCommitHooks = defaultTransactionCommitHooks(db, ctx),
+): LinkedTransactionsOutcome {
   if (legs.length === 0) {
-    return { ok: false, reason: "dirty_input", message: "linked transfer has no legs.", raisedQuestions: 0 };
+    return { ok: false, reason: "dirty_input", message: "linked transaction has no legs.", raisedQuestions: 0 };
   }
 
   const groupId =
@@ -483,10 +505,10 @@ export function commitLinkedTransfers(
       ? deriveGroupId(ctx.fileHash, header.source_page ?? 0, header.row_index)
       : `tg:${randomUUID()}`);
 
-  const preps: PreparedTransfer[] = [];
+  const preps: PreparedTransaction[] = [];
   for (let i = 0; i < legs.length; i++) {
     const raw = mergeHeaderLeg(header, legs[i], groupId, i);
-    const prep = prepareTransfer(db, ctx, raw);
+    const prep = prepareTransaction(db, ctx, raw);
     if (!prep.ok) {
       if (prep.reason === "currency_mismatch") {
         hooks.onCurrencyMismatch(raw, prep.debit, prep.credit);
@@ -498,7 +520,7 @@ export function commitLinkedTransfers(
     preps.push(prep.prepared);
   }
 
-  const { results, group_id } = insertLinkedTransfers(
+  const { results, group_id } = insertLinkedTransactions(
     db,
     preps.map((p) => p.input),
     { group_id: groupId },
@@ -509,7 +531,7 @@ export function commitLinkedTransfers(
     const r = results[i];
     if (r.duplicate) continue;
     hooks.onCommitted(r.id);
-    raised += applyTransferHints(hooks, r.id, preps[i]);
+    raised += applyTransactionHints(hooks, r.id, preps[i]);
   }
   return { ok: true, group_id, results, raisedQuestions: raised };
 }

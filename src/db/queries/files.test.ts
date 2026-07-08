@@ -10,7 +10,7 @@ import {
   markFileFailed,
 } from "./files.js";
 import { createAccount } from "./account-balance.js";
-import { insertTransfer } from "./transfers.js";
+import { insertTransaction } from "./transactions.js";
 import { recordQuestion } from "./questions.js";
 
 function freshDb(): Database.Database {
@@ -80,7 +80,7 @@ describe("deleteScannedFile", () => {
     const db = freshDb();
     seedChartOfAccounts(db);
     insertFile(db, "a", "scanned");
-    const { id: transferId } = insertTransfer(db, {
+    const { id: transactionId } = insertTransaction(db, {
       date: "2026-05-19",
       description: "Coffee",
       source_file_id: "a",
@@ -91,7 +91,7 @@ describe("deleteScannedFile", () => {
     });
     recordQuestion(db, {
       file_id: "a",
-      transfer_id: transferId,
+      transaction_id: transactionId,
       account_id: null,
       kind: "uncategorized",
       prompt: "Categorize this",
@@ -100,16 +100,16 @@ describe("deleteScannedFile", () => {
     const result = deleteScannedFile(db, "a");
 
     expect(result.removed?.id).toBe("a");
-    expect(result.removedTransfers).toBe(1);
+    expect(result.removedTransactions).toBe(1);
     expect(result.removedQuestions).toBe(1);
     expect(findScannedFileById(db, "a")).toBeNull();
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transfers`).get()).toMatchObject({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS n FROM questions`).get()).toMatchObject({ n: 0 });
   });
 
   it("returns null counts and no error when the id is unknown", () => {
     const result = deleteScannedFile(freshDb(), "nope");
-    expect(result).toEqual({ removed: null, removedTransfers: 0, removedQuestions: 0 });
+    expect(result).toEqual({ removed: null, removedTransactions: 0, removedQuestions: 0 });
   });
 });
 

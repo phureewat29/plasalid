@@ -2,12 +2,15 @@ import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
   // Backward compatibility is not supported. If any legacy schema shape is
-  // present — the conversation_history/hints tables, the transactions/postings
-  // tables, provider/model columns on scanned_files, or a transaction_id
-  // column on questions — all tables are dropped and rebuilt (data loss
-  // intended; the user gets a fresh, empty ledger). Fresh and already-migrated
-  // DBs are NOT legacy, so they skip the wipe and every CREATE ... IF NOT
-  // EXISTS is a no-op, making a second migrate() call idempotent.
+  // present — the conversation_history/hints tables, the old `postings` table,
+  // the now-legacy `transfers` table (renamed to `transactions` this release),
+  // provider/model columns on scanned_files, or a transfer_id column on
+  // questions — all tables are dropped and rebuilt (data loss intended; the
+  // user gets a fresh, empty ledger). The current shape (a `transactions`
+  // table with a debit_account_id column and questions carrying
+  // transaction_id) is NOT legacy. Fresh and already-migrated DBs are NOT
+  // legacy, so they skip the wipe and every CREATE ... IF NOT EXISTS is a
+  // no-op, making a second migrate() call idempotent.
   if (isLegacySchema(db)) {
     dropAllTables(db);
   }
@@ -63,7 +66,7 @@ export function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS transfers (
+    CREATE TABLE IF NOT EXISTS transactions (
       id                TEXT PRIMARY KEY,
       group_id          TEXT,
       date              TEXT NOT NULL,
@@ -84,18 +87,18 @@ export function migrate(db: Database.Database): void {
       CHECK (debit_account_id <> credit_account_id)
     );
 
-    CREATE INDEX IF NOT EXISTS transfers_date_idx ON transfers(date);
-    CREATE INDEX IF NOT EXISTS transfers_debit_account_idx ON transfers(debit_account_id);
-    CREATE INDEX IF NOT EXISTS transfers_credit_account_idx ON transfers(credit_account_id);
-    CREATE INDEX IF NOT EXISTS transfers_source_file_idx ON transfers(source_file_id);
-    CREATE INDEX IF NOT EXISTS transfers_group_idx ON transfers(group_id);
-    CREATE INDEX IF NOT EXISTS transfers_merchant_idx ON transfers(merchant_id);
+    CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
+    CREATE INDEX IF NOT EXISTS transactions_debit_account_idx ON transactions(debit_account_id);
+    CREATE INDEX IF NOT EXISTS transactions_credit_account_idx ON transactions(credit_account_id);
+    CREATE INDEX IF NOT EXISTS transactions_source_file_idx ON transactions(source_file_id);
+    CREATE INDEX IF NOT EXISTS transactions_group_idx ON transactions(group_id);
+    CREATE INDEX IF NOT EXISTS transactions_merchant_idx ON transactions(merchant_id);
 
     CREATE TABLE IF NOT EXISTS questions (
       id TEXT PRIMARY KEY,
       scan_id TEXT,
       file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
-      transfer_id TEXT REFERENCES transfers(id) ON DELETE CASCADE,
+      transaction_id TEXT REFERENCES transactions(id) ON DELETE CASCADE,
       account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
       kind TEXT,
       prompt TEXT NOT NULL,
@@ -137,18 +140,24 @@ export function migrate(db: Database.Database): void {
  * Detects whether any legacy schema shape is present. Any of these signals is
  * conclusive:
  *   - the `conversation_history` / `hints` tables exist, or
- *   - the `transactions` / `postings` two-table ledger exists, or
+ *   - the `postings` table exists (the old two-table ledger), or
+ *   - the `transfers` table exists (the v0.12 single-table name, renamed to
+ *     `transactions` this release), or
  *   - `scanned_files` still carries `provider` / `model` columns, or
- *   - `questions` still carries a `transaction_id` column.
- * A fresh (empty) DB and an already-migrated clean DB both return false, so the
- * caller only wipes genuinely-legacy databases. Nuke-and-recreate is intended:
- * data loss on a legacy DB is accepted (the user gets a fresh, empty ledger).
+ *   - `questions` still carries a `transfer_id` column.
+ * The current shape — a `transactions` table (with a `debit_account_id`
+ * column) and `questions` carrying `transaction_id` — is deliberately NOT a
+ * signal, so the renamed ledger is never mistaken for the old two-table
+ * `transactions` header. A fresh (empty) DB and an already-migrated clean DB
+ * both return false, so the caller only wipes genuinely-legacy databases.
+ * Nuke-and-recreate is intended: data loss on a legacy DB is accepted (the
+ * user gets a fresh, empty ledger).
  */
 function isLegacySchema(db: Database.Database): boolean {
   const legacyTable = db
     .prepare(
       `SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'transactions', 'postings')
+        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'postings', 'transfers')
         LIMIT 1`,
     )
     .get();
@@ -162,7 +171,7 @@ function isLegacySchema(db: Database.Database): boolean {
   const questionCols = db
     .prepare(`PRAGMA table_info(questions)`)
     .all() as { name: string }[];
-  return questionCols.some(c => c.name === "transaction_id");
+  return questionCols.some(c => c.name === "transfer_id");
 }
 
 /**

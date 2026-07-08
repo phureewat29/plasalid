@@ -79,7 +79,7 @@ function parseOne(stdout: string): any {
 
 describe("ledger CLI integration (subprocess)", () => {
   it(
-    "accounts create -> list -> tree round-trip includes rollup math with one recorded transfer",
+    "accounts create -> list -> tree round-trip includes rollup math with one recorded transaction",
     async () => {
       const bank = await runCli([
         "accounts",
@@ -117,7 +117,8 @@ describe("ledger CLI integration (subprocess)", () => {
       });
 
       const rec = await runCli([
-        "record",
+        "transactions",
+        "add",
         "--date",
         "2026-01-01",
         "--description",
@@ -132,7 +133,7 @@ describe("ledger CLI integration (subprocess)", () => {
       ]);
       expect(rec.code).toBe(0);
       const recResult = parseOne(rec.stdout);
-      expect(recResult.transfer_id).toMatch(/^tf:/);
+      expect(recResult.transaction_id).toMatch(/^tx:/);
 
       const list = await runCli(["accounts", "list", "--json"]);
       expect(list.code).toBe(0);
@@ -160,10 +161,11 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "record strict mode: missing account fails NOT_FOUND (exit 5)",
+    "transactions add strict mode: missing account fails NOT_FOUND (exit 5)",
     async () => {
       const result = await runCli([
-        "record",
+        "transactions",
+        "add",
         "--date",
         "2026-01-02",
         "--description",
@@ -185,10 +187,11 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "record --resolve creates a placeholder account and raises a question",
+    "transactions add --resolve creates a placeholder account and raises a question",
     async () => {
       const result = await runCli([
-        "record",
+        "transactions",
+        "add",
         "--resolve",
         "--date",
         "2026-01-03",
@@ -204,7 +207,7 @@ describe("ledger CLI integration (subprocess)", () => {
       ]);
       expect(result.code).toBe(0);
       const parsed = parseOne(result.stdout);
-      expect(parsed.transfer_id).toMatch(/^tf:/);
+      expect(parsed.transaction_id).toMatch(/^tx:/);
       expect(parsed.raised_questions).toBe(1);
 
       const raw = new Database(dbPath);
@@ -226,7 +229,7 @@ describe("ledger CLI integration (subprocess)", () => {
   );
 
   it(
-    "record recategorize round-trip re-points matching transfers",
+    "transactions recategorize round-trip re-points matching transactions",
     async () => {
       const food = await runCli([
         "accounts",
@@ -244,7 +247,7 @@ describe("ledger CLI integration (subprocess)", () => {
       expect(food.code).toBe(0);
 
       const result = await runCli([
-        "record",
+        "transactions",
         "recategorize",
         "--filter-account",
         "expense:groceries",
@@ -255,10 +258,10 @@ describe("ledger CLI integration (subprocess)", () => {
       expect(result.code).toBe(0);
       const parsed = parseOne(result.stdout);
       expect(parsed.affected).toBe(1);
-      expect(parsed.skipped_self_transfer).toBe(0);
-      expect(parsed.sample_transfer_ids).toHaveLength(1);
+      expect(parsed.skipped_self_transaction).toBe(0);
+      expect(parsed.sample_transaction_ids).toHaveLength(1);
 
-      // The transfer now touches expense:food, no longer expense:groceries.
+      // The transaction now touches expense:food, no longer expense:groceries.
       const ledger = await runCli(["ledger", "--account", "expense:food", "--json"]);
       expect(ledger.code).toBe(0);
       const rows = parseNdjson(ledger.stdout) as any[];
@@ -445,5 +448,95 @@ describe("ledger CLI integration (subprocess)", () => {
       expect(JSON.parse(none.stderr.trim()).error.code).toBe("E_USAGE");
     },
     45000,
+  );
+
+  it(
+    "accounts create with a 3-deep id and no --parent auto-creates missing ancestors",
+    async () => {
+      // "liability" is untouched by every earlier test in this file, so this
+      // is a genuinely empty chain: the root and the middle category both
+      // need to be created as a side effect of the leaf create.
+      const result = await runCli([
+        "accounts",
+        "create",
+        "--id",
+        "liability:credit_card:ttb",
+        "--name",
+        "TTB Credit Card",
+        "--type",
+        "liability",
+        "--json",
+      ]);
+      expect(result.code).toBe(0);
+      expect(parseOne(result.stdout)).toMatchObject({
+        id: "liability:credit_card:ttb",
+        created: true,
+        created_parents: ["liability", "liability:credit_card"],
+      });
+
+      const list = await runCli(["accounts", "list", "--json"]);
+      const rows = parseNdjson(list.stdout) as any[];
+      expect(rows.find((r) => r.id === "liability")).toMatchObject({ type: "liability" });
+      expect(rows.find((r) => r.id === "liability:credit_card")).toMatchObject({
+        type: "liability",
+        parent_id: "liability",
+      });
+      expect(rows.find((r) => r.id === "liability:credit_card:ttb")).toMatchObject({
+        name: "TTB Credit Card",
+        parent_id: "liability:credit_card",
+      });
+    },
+    30000,
+  );
+
+  it(
+    "accounts create under an already-existing ancestor chain creates only the leaf",
+    async () => {
+      // "liability:credit_card" already exists from the previous test.
+      const result = await runCli([
+        "accounts",
+        "create",
+        "--id",
+        "liability:credit_card:kbank",
+        "--name",
+        "KBank Credit Card",
+        "--type",
+        "liability",
+        "--json",
+      ]);
+      expect(result.code).toBe(0);
+      expect(parseOne(result.stdout)).toMatchObject({
+        id: "liability:credit_card:kbank",
+        created: true,
+        created_parents: [],
+      });
+    },
+    30000,
+  );
+
+  it(
+    "accounts create with a type mismatch against an existing ancestor still fails INVALID",
+    async () => {
+      // "liability:credit_card" exists with type "liability"; requesting a
+      // leaf under it with a mismatched --type must still fail cleanly, even
+      // though the ancestor-walk itself doesn't need to create anything (it
+      // already exists, so the walk silently skips it) — the mismatch is
+      // caught by createAccount's own parent/type check on the leaf insert.
+      const result = await runCli([
+        "accounts",
+        "create",
+        "--id",
+        "liability:credit_card:mismatch",
+        "--name",
+        "Mismatch",
+        "--type",
+        "asset",
+        "--json",
+      ]);
+      expect(result.code).toBe(6); // EXIT.INVALID
+      expect(result.stdout.trim()).toBe("");
+      expect(JSON.parse(result.stderr.trim()).error.code).toBe("E_INVALID");
+    },
+    30000,
   );
 });

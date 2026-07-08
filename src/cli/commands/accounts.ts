@@ -2,22 +2,24 @@ import type { Command } from "commander";
 import { getDb } from "../../db/connection.js";
 import { currentMode, emit, emitList, fail, requireYes, runAction, type Column } from "../output.js";
 import {
-  getAccountBalancesFromTransfers,
-  getRollupBalanceFromTransfers,
+  getAccountBalancesFromTransactions,
+  getRollupBalanceFromTransactions,
   createAccount,
   renameAccount,
   mergeAccounts,
   deleteAccount,
-  adjustAccountBalanceViaTransfer,
+  adjustAccountBalanceViaTransaction,
   findAccountsByFuzzyName,
   updateAccountMetadata,
   findAccountById,
+  TOP_LEVEL_TYPES,
   type AccountType,
   type AccountBalanceMinor,
   type CreateAccountInput,
   type UpdateAccountMetadataPatch,
   type FuzzyAccountMatch,
 } from "../../db/queries/account-balance.js";
+import { ensureAccountAncestors } from "../../scanner/resolve.js";
 import { fromMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 
@@ -89,7 +91,7 @@ function buildAccountTree(
   db: ReturnType<typeof getDb>,
   type: AccountType | undefined,
 ): AccountTreeNode[] {
-  const rows = getAccountBalancesFromTransfers(db, type ? { type } : {});
+  const rows = getAccountBalancesFromTransactions(db, type ? { type } : {});
   const byId = new Map(rows.map((r) => [r.id, r]));
   const childrenMap = new Map<string, AccountBalanceMinor[]>();
   const roots: AccountBalanceMinor[] = [];
@@ -107,7 +109,7 @@ function buildAccountTree(
     name: row.name,
     type: row.type,
     balance: row.balance,
-    rollup: getRollupBalanceFromTransfers(db, row.id),
+    rollup: getRollupBalanceFromTransactions(db, row.id),
     children: (childrenMap.get(row.id) ?? []).map(build),
   });
   return roots.map(build);
@@ -150,7 +152,7 @@ export function registerAccounts(program: Command): void {
       runAction((opts: { type?: string; redact?: boolean }) => {
         const db = getDb();
         const rows = applyRedaction(
-          getAccountBalancesFromTransfers(db, opts.type ? { type: opts.type as AccountType } : {}).map(
+          getAccountBalancesFromTransactions(db, opts.type ? { type: opts.type as AccountType } : {}).map(
             present,
           ),
           !!opts.redact,
@@ -189,7 +191,7 @@ export function registerAccounts(program: Command): void {
         const db = getDb();
         const account = findAccountById(db, id);
         if (!account) fail("NOT_FOUND", `account "${id}" not found`);
-        const balances = getAccountBalancesFromTransfers(db);
+        const balances = getAccountBalancesFromTransactions(db);
         const self = balances.find((b) => b.id === id);
         const children = balances
           .filter((b) => b.parent_id === id)
@@ -199,7 +201,7 @@ export function registerAccounts(program: Command): void {
           balance: self?.balance ?? 0,
           debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
           credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
-          rollup: getRollupBalanceFromTransfers(db, id),
+          rollup: getRollupBalanceFromTransactions(db, id),
           children,
         });
       }),
@@ -252,25 +254,42 @@ export function registerAccounts(program: Command): void {
           const statementDay = parseOptionalNumber(opts.statementDay, "--statement-day");
 
           const db = getDb();
-          const input: CreateAccountInput = {
-            id: opts.id!,
-            name: opts.name!,
-            type: opts.type as AccountType,
-            parent_id: opts.parent ?? null,
-            subtype: opts.subtype ?? null,
-            bank_name: opts.bank ?? null,
-            account_number_masked: opts.masked ?? null,
-            currency: opts.currency,
-            due_day: dueDay ?? null,
-            statement_day: statementDay ?? null,
-            metadata,
-          };
+          const type = opts.type as AccountType;
+
+          // Auto-create missing intermediate ancestors from the id's colon
+          // segments when the caller didn't pin an explicit --parent (which is
+          // still honored as-is, unchanged). Skipped for an unrecognized type
+          // so the usual createAccount validation reports a clean INVALID
+          // instead of failing deeper inside the ancestor walk.
+          let parentId = opts.parent ?? null;
+          let createdParents: string[] = [];
           try {
+            if (opts.parent === undefined && TOP_LEVEL_TYPES.includes(type)) {
+              const ancestors = ensureAccountAncestors(db, opts.id!, type);
+              if (ancestors.parentId !== null) {
+                parentId = ancestors.parentId;
+                createdParents = ancestors.createdParents;
+              }
+            }
+
+            const input: CreateAccountInput = {
+              id: opts.id!,
+              name: opts.name!,
+              type,
+              parent_id: parentId,
+              subtype: opts.subtype ?? null,
+              bank_name: opts.bank ?? null,
+              account_number_masked: opts.masked ?? null,
+              currency: opts.currency,
+              due_day: dueDay ?? null,
+              statement_day: statementDay ?? null,
+              metadata,
+            };
             createAccount(db, input);
+            emit({ id: input.id, created: true, created_parents: createdParents });
           } catch (err) {
             mapAccountError(err);
           }
-          emit({ id: input.id, created: true });
         },
       ),
     );
@@ -299,7 +318,7 @@ export function registerAccounts(program: Command): void {
           from: opts.from,
           to: opts.to,
           moved: result.moved,
-          deleted_self_transfers: result.deletedSelfTransfers,
+          deleted_self_transactions: result.deletedSelfTransactions,
         });
       }),
     );
@@ -340,7 +359,7 @@ export function registerAccounts(program: Command): void {
         const db = getDb();
         let result;
         try {
-          result = adjustAccountBalanceViaTransfer(db, {
+          result = adjustAccountBalanceViaTransaction(db, {
             accountId: id,
             targetAmount: target,
             reason: opts.reason!,
@@ -349,7 +368,7 @@ export function registerAccounts(program: Command): void {
         } catch (err) {
           mapAccountError(err);
         }
-        emit({ transfer_id: result.transferId, delta: result.delta });
+        emit({ transaction_id: result.transactionId, delta: result.delta });
       }),
     );
 
@@ -357,13 +376,11 @@ export function registerAccounts(program: Command): void {
     .command("match")
     .description("Match accounts against a query")
     .option("--query <text>", "search text")
-    .option("--threshold <n>", "match confidence threshold")
     .action(
-      runAction((opts: { query?: string; threshold?: string }) => {
+      runAction((opts: { query?: string }) => {
         if (!opts.query) fail("USAGE", "--query is required");
-        const threshold = parseOptionalNumber(opts.threshold, "--threshold");
         const db = getDb();
-        const matches = findAccountsByFuzzyName(db, opts.query, threshold);
+        const matches = findAccountsByFuzzyName(db, opts.query);
         emitList(matches, MATCH_COLUMNS);
       }),
     );

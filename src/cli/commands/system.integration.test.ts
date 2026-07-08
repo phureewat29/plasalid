@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../db/queries/account-balance.js";
-import { insertTransfer } from "../../db/queries/transfers.js";
+import { insertTransaction } from "../../db/queries/transactions.js";
 import { recordQuestion } from "../../db/queries/questions.js";
 
 // system.integration.test.ts lives in src/cli/commands/ -> repo root is three
-// levels up. Covers questions, report, notes, config/setup, and doctor via
+// levels up. Covers questions, report, notes, config, and doctor via
 // spawned CLI processes.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
@@ -110,7 +110,7 @@ function parseNdjson(stdout: string): any[] {
 
 describe("system CLI integration (subprocess)", () => {
   it(
-    "setup --generate-key on a fresh env: config show reflects it redacted, never plaintext",
+    "config --generate-key on a fresh env: config show reflects it redacted, never plaintext",
     async () => {
       const isolatedHome = mkdtempSync(join(tmpdir(), "plasalid-system-setup-it-"));
       try {
@@ -120,7 +120,7 @@ describe("system CLI integration (subprocess)", () => {
 
         const setup = await runCli(
           [
-            "setup",
+            "config",
             "--data-dir",
             setupDataDir,
             "--db",
@@ -174,7 +174,7 @@ describe("system CLI integration (subprocess)", () => {
         createAccount(raw, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
         createAccount(raw, { id: "expense:food", name: "Food", type: "expense", parent_id: "expense" });
 
-        insertTransfer(raw, {
+        insertTransaction(raw, {
           date: "2026-01-15",
           description: "Salary deposit",
           debit_account_id: "asset:bank",
@@ -182,7 +182,7 @@ describe("system CLI integration (subprocess)", () => {
           amount: 100000,
           currency: "THB",
         });
-        insertTransfer(raw, {
+        insertTransaction(raw, {
           date: "2026-01-20",
           description: "Grocery run",
           debit_account_id: "expense:food",

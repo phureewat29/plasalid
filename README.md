@@ -42,7 +42,7 @@ Drives Plasalid to your statements, reads the pages, decides what each transacti
 
 * **Every command speaks JSON.** `--json` turns any command into NDJSON — one object per line, a `summary` line to close out a batch, and a single JSON object on stderr on failure. Exit codes are stable and specific (see below), so an agent (or a shell script) can branch on outcome without scraping text.
 * **Open questions instead of silent guesses.** When the pipeline can't confidently resolve an account or a merchant, it raises a question (`plasalid questions list`) instead of guessing. You or your agent resolve it once with `plasalid questions answer`, and that resolution is remembered.
-* **Full manual control when you want it.** Every step of the pipeline — accounts, transfers, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
+* **Full manual control when you want it.** Every step of the pipeline — accounts, transactions, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
 
 ### Local-first, encrypted, and inspectable
 
@@ -61,7 +61,7 @@ Requires Node ≥ 18.
 ## Quick Start
 
 ```bash
-plasalid setup --generate-key
+plasalid config --generate-key
 ```
 
 This creates `~/.plasalid/` (config, encrypted database, data directory) and generates a database encryption key for you.
@@ -79,7 +79,7 @@ From here you have two paths:
 ```bash
 plasalid ingest list                                  # see what's new
 plasalid ingest prepare <path>                         # unlock + get the statement document path
-# read the document yourself, build transfer JSON, then:
+# read the document yourself, build transaction JSON, then:
 plasalid ingest commit < transactions.ndjson
 plasalid questions list                               # resolve anything raised
 ```
@@ -87,25 +87,31 @@ plasalid questions list                               # resolve anything raised
 **Let an agent drive it:**
 
 ```bash
-plasalid agent-setup --claude   # or --codex — installs a skill pack for your agent CLI
+plasalid setup --claude   # or --codex — installs a skill pack for your agent CLI
 ```
 
 Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
 
 ### Try the demo
 
-**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected Thai credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions — all live via `claude -p` in an isolated workspace. Run `./examples/corgi-agent/demo.sh` (requires the `claude` CLI; nothing touches your real `~/.plasalid`).
+**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected Thai credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions — a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
+
+```bash
+cd examples/corgi-agent && npm install && npm start
+```
+
+Requires the `claude` CLI (or run `npm start -- --skip-claude` for a plumbing-only check without it); nothing touches your real `~/.plasalid`.
 
 ## The agent workflow
 
-Every row becomes a *transfer*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (`agent-setup`'s SKILL.md ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
+Every row becomes a *transaction*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (`setup`'s SKILL.md ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
 
-This is the loop `agent-setup`'s skill pack teaches an agent CLI to run:
+This is the loop `setup`'s skill pack teaches an agent CLI to run:
 
 1. **Discover** — `plasalid ingest list --json` to find new/pending files.
 2. **Prepare** — `plasalid ingest prepare <path>` registers the file and returns its readable `document` path, unlocking encrypted PDFs via `plasalid vault`.
 3. **Read** — the agent reads the statement PDF directly (modern agent models read PDFs natively; Plasalid stays deterministic).
-4. **Commit** — the agent pipes the transfers it extracted (one debit account, one credit account, one positive amount per row; splits go as a compound `linked` group), as NDJSON or a JSON array, into `plasalid ingest commit`. The harness posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback, cross-currency row).
+4. **Commit** — the agent pipes the transactions it extracted (one debit account, one credit account, one positive amount per row; splits go as a compound `linked` group), as NDJSON or a JSON array, into `plasalid ingest commit`. The harness posts them into the ledger and raises a question for anything it can't resolve confidently (unknown merchant, fuzzy account match, uncategorized fallback, cross-currency row).
 5. **Resolve** — the agent (or you) works through `plasalid questions list` / `answer` / `defer` for whatever got raised, then closes the file out with `plasalid ingest done <id>`.
 
 ## Commands
@@ -115,22 +121,21 @@ Run `plasalid --help` (or `plasalid <noun> --help`) for the full flag reference.
 ```
 plasalid                # Harness status: config, database, ledger counts, net worth (default)
 plasalid doctor         # Diagnose the harness environment
-plasalid setup          # Initialize the harness non-interactively
-plasalid config         # Show and set harness configuration
-plasalid agent-setup    # Install the skill pack for an agent CLI (--claude | --codex)
+plasalid setup          # Install the skill pack for an agent CLI (--claude | --codex)
+plasalid config         # Configure the harness (converge/init) and show configuration
 
 plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail
 plasalid files          # Browse scanned files (list / show / drop)
 plasalid vault          # Manage file-password patterns for encrypted statements
 
-plasalid record         # Record transfers; recategorize, edit, and delete them
-plasalid ledger         # Browse the transfer ledger (list / show)
+plasalid transactions   # Write transactions: add / update / delete / recategorize
+plasalid ledger         # Browse the transaction ledger (list / show)
 plasalid accounts       # Manage the chart of accounts
 plasalid merchants      # Manage merchants and their default accounts
 plasalid questions      # List, answer, and defer open questions
 
 plasalid report         # Period reports (net worth: plasalid status)
-plasalid analyze        # Find duplicate and correlated transfers
+plasalid analyze        # Find duplicate and correlated transactions
 plasalid notes          # Manage freeform notes
 plasalid context        # Show the harness context bundle / its path
 
@@ -165,7 +170,7 @@ Exit codes are stable across the whole CLI:
 ## Security & Privacy
 
 - All financial data stored locally, encrypted with AES-256 (libsql), default `~/.plasalid/db.sqlite`.
-- Config file (`~/.plasalid/config.json`) written with `0600` permissions; the only secret it holds is the database encryption key, and `config show` only ever surfaces a fingerprint of it, never the plaintext.
+- Config file (`~/.plasalid/config.json`) written with `0600` permissions; the only secret it holds is the database encryption key, and `config`/`status` only ever surface a fingerprint of it, never the plaintext.
 - Encrypted-PDF passwords are stored AES-GCM-encrypted in `db.sqlite` under a filename pattern; never written to disk in plaintext.
 - `--redact` masks PII in free-text fields on read commands before you pipe output anywhere.
 - No telemetry, no analytics, no network calls made by Plasalid itself.
@@ -189,7 +194,7 @@ See `.env.example` for the full, current list. As of this release:
 
 ```bash
 # Passphrase used to encrypt the local SQLite database (AES-256).
-# `plasalid setup` generates one if left blank.
+# `plasalid config --generate-key` generates one if left blank.
 PLASALID_DB_ENCRYPTION_KEY=
 
 # Default: ~/.plasalid/db.sqlite

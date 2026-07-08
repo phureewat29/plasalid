@@ -35,7 +35,7 @@ beforeAll(() => {
   env.PLASALID_CACHE_DIR = join(tmpDir, "cache");
   baseEnv = env;
 
-  // Migrate + seed real accounts so a "clean" transfer's sides resolve exactly
+  // Migrate + seed real accounts so a "clean" transaction's sides resolve exactly
   // (rather than via placeholder creation). Closed before running the CLI so the
   // subprocess owns the writer.
   const db = new Database(dbPath);
@@ -51,13 +51,16 @@ afterAll(() => {
   if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function runCli(args: string[], opts: { stdin?: string } = {}): Promise<CliResult> {
+function runCli(args: string[], opts: { stdin?: string; cwd?: string } = {}): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      ["tsx", "src/cli/index.ts", ...args],
+      // Absolute script path so callers can override `cwd` (e.g. to simulate
+      // an agent shell sitting somewhere other than the data dir) without
+      // breaking tsx's ability to find the entrypoint.
+      ["tsx", resolve(repoRoot, "src", "cli", "index.ts"), ...args],
       {
-        cwd: repoRoot,
+        cwd: opts.cwd ?? repoRoot,
         env: baseEnv,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
@@ -77,6 +80,29 @@ function runCli(args: string[], opts: { stdin?: string } = {}): Promise<CliResul
   });
 }
 
+// A tiny but structurally valid single-page PDF (mirrors the fixture used in
+// src/scanner/ingest.test.ts) — enough for readPdf/countPdfPages to parse it
+// without needing a real statement.
+function minimalPdf(): Buffer {
+  const header = "%PDF-1.4\n";
+  const o1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+  const o2 = "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n";
+  const o3 =
+    "3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\n";
+  const offset1 = header.length;
+  const offset2 = offset1 + o1.length;
+  const offset3 = offset2 + o2.length;
+  const xrefStart = offset3 + o3.length;
+  const xref =
+    `xref\n0 4\n` +
+    `0000000000 65535 f \n` +
+    `${String(offset1).padStart(10, "0")} 00000 n \n` +
+    `${String(offset2).padStart(10, "0")} 00000 n \n` +
+    `${String(offset3).padStart(10, "0")} 00000 n \n`;
+  const trailer = `trailer<</Size 4/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return Buffer.from(header + o1 + o2 + o3 + xref + trailer, "latin1");
+}
+
 function parseNdjson(stdout: string): any[] {
   return stdout
     .trim()
@@ -92,7 +118,7 @@ function readDb(): Database.Database {
 }
 
 describe("ingest commit v2 (subprocess)", () => {
-  it("posts a clean transfer and a placeholder transfer, raises a question, exit 0", async () => {
+  it("posts a clean transaction and a placeholder transaction, raises a question, exit 0", async () => {
     const ndjson = [
       JSON.stringify({
         date: "2026-01-02",
@@ -120,10 +146,10 @@ describe("ingest commit v2 (subprocess)", () => {
 
     const [r0, r1] = results;
 
-    // Clean transfer: both sides resolve exactly, no questions, no merchant.
+    // Clean transaction: both sides resolve exactly, no questions, no merchant.
     expect(r0.ok).toBe(true);
-    expect(typeof r0.transfer_id).toBe("string");
-    expect(r0.transfer_id).toMatch(/^tf:/);
+    expect(typeof r0.transaction_id).toBe("string");
+    expect(r0.transaction_id).toMatch(/^tx:/);
     expect(r0.duplicate).toBe(false);
     expect(r0.raised_questions).toBe(0);
     expect(r0.merchant.how).toBe("none");
@@ -282,10 +308,10 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(secondSummary.duplicates).toBe(1);
     expect(secondSummary.failed).toBe(0);
 
-    // Exactly one transfer for this file survived (idempotent insert).
+    // Exactly one transaction for this file survived (idempotent insert).
     const db2 = readDb();
     const n = (
-      db2.prepare("SELECT COUNT(*) AS n FROM transfers WHERE source_file_id = 'sf:idem'").get() as {
+      db2.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source_file_id = 'sf:idem'").get() as {
         n: number;
       }
     ).n;
@@ -317,16 +343,16 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(r.ok).toBe(true);
     expect(r.group_id).toMatch(/^tg:/);
     expect(r.legs).toHaveLength(2);
-    expect(r.legs.every((l: any) => /^tf:/.test(l.transfer_id))).toBe(true);
+    expect(r.legs.every((l: any) => /^tx:/.test(l.transaction_id))).toBe(true);
     expect(r.duplicate).toBe(false);
 
     const db2 = readDb();
-    const rows = db2.prepare("SELECT id FROM transfers WHERE group_id = ?").all(r.group_id);
+    const rows = db2.prepare("SELECT id FROM transactions WHERE group_id = ?").all(r.group_id);
     db2.close();
     expect(rows).toHaveLength(2);
   }, 30000);
 
-  it("rejects a cross-currency transfer with a currency_mismatch question", async () => {
+  it("rejects a cross-currency transaction with a currency_mismatch question", async () => {
     const db = readDb();
     createAccount(db, {
       id: "asset:usd",
@@ -367,6 +393,35 @@ describe("ingest commit v2 (subprocess)", () => {
     expect(stdout.trim()).toBe("");
     const parsed = JSON.parse(stderr.trim());
     expect(parsed.error.code).toBe("E_USAGE");
+  }, 30000);
+});
+
+describe("ingest prepare (subprocess)", () => {
+  it("resolves the rel_path `ingest list` itself emits, even when invoked from an unrelated cwd", async () => {
+    const dataDir = join(tmpDir, "data");
+    mkdirSync(join(dataDir, "statements"), { recursive: true });
+    writeFileSync(join(dataDir, "statements", "kbank-jan.pdf"), minimalPdf());
+
+    // A real agent session hit E_NOT_FOUND passing `ingest list`'s own
+    // rel_path back into `ingest prepare` because its shell cwd wasn't the
+    // data dir. Reproduce that: run from tmpDir, which is neither the data
+    // dir nor the repo root.
+    const list = await runCli(["ingest", "list", "--regex", "kbank-jan", "--json"], { cwd: tmpDir });
+    expect(list.code).toBe(0);
+    const entry = parseNdjson(list.stdout).find((r) => r.type === "file");
+    expect(entry).toBeTruthy();
+    expect(entry.rel_path).toBe("statements/kbank-jan.pdf");
+
+    const prepare = await runCli(["ingest", "prepare", entry.rel_path, "--json"], { cwd: tmpDir });
+    expect(prepare.code).toBe(0);
+    const obj = JSON.parse(prepare.stdout.trim());
+    expect(obj.document).toBe(join(dataDir, "statements", "kbank-jan.pdf"));
+  }, 30000);
+
+  it("exits NOT_FOUND for a path or id that resolves to nothing", async () => {
+    const { code, stderr } = await runCli(["ingest", "prepare", "no/such/statement.pdf", "--json"]);
+    expect(code).toBe(5); // EXIT.NOT_FOUND
+    expect(JSON.parse(stderr.trim()).error.code).toBe("E_NOT_FOUND");
   }, 30000);
 });
 

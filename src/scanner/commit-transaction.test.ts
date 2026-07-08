@@ -3,21 +3,21 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import {
   createAccount,
-  getAccountBalancesFromTransfers,
+  getAccountBalancesFromTransactions,
 } from "../db/queries/account-balance.js";
 import {
-  countTransfers,
-  getTransfer,
-  deriveTransferId,
+  countTransactions,
+  getTransaction,
+  deriveTransactionId,
   deriveGroupId,
-} from "../db/queries/transfers.js";
+} from "../db/queries/transactions.js";
 import { listQuestions, countQuestions } from "../db/queries/questions.js";
 import {
-  commitTransfer,
-  commitLinkedTransfers,
-  type TransferCommitContext,
-  type RawTransferInput,
-} from "./commit-transfer.js";
+  commitTransaction,
+  commitLinkedTransactions,
+  type TransactionCommitContext,
+  type RawTransactionInput,
+} from "./commit-transaction.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
@@ -39,7 +39,7 @@ function freshDb(): Database.Database {
   return db;
 }
 
-const CTX: TransferCommitContext = {
+const CTX: TransactionCommitContext = {
   scanId: "sc:1",
   fileId: "sf:1",
   fileHash: "hashABC",
@@ -47,7 +47,7 @@ const CTX: TransferCommitContext = {
   progress: null,
 };
 
-function raw(over: Partial<RawTransferInput> = {}): RawTransferInput {
+function raw(over: Partial<RawTransactionInput> = {}): RawTransactionInput {
   return {
     date: "2026-05-01",
     description: "Coffee",
@@ -61,26 +61,26 @@ function raw(over: Partial<RawTransferInput> = {}): RawTransferInput {
   };
 }
 
-describe("commitTransfer", () => {
+describe("commitTransaction", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("happy path: converts decimal to minor units, derives id, raises no questions", () => {
-    const out = commitTransfer(db, CTX, raw());
+    const out = commitTransaction(db, CTX, raw());
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.duplicate).toBe(false);
     expect(out.raisedQuestions).toBe(0);
-    expect(out.transferId).toBe(deriveTransferId("hashABC", 1, 0));
+    expect(out.transactionId).toBe(deriveTransactionId("hashABC", 1, 0));
 
-    const row = getTransfer(db, out.transferId)!;
+    const row = getTransaction(db, out.transactionId)!;
     expect(row.amount).toBe(13500); // 135.00 THB -> minor units
     expect(row.debit_account_id).toBe("expense:food");
     expect(countQuestions(db)).toBe(0);
   });
 
   it("raises a per-side question when an account resolves to a placeholder", () => {
-    const out = commitTransfer(
+    const out = commitTransaction(
       db,
       CTX,
       raw({ debit_account_id: "expense:mystery-thing", row_index: 1 }),
@@ -91,16 +91,16 @@ describe("commitTransfer", () => {
 
     const qs = listQuestions(db);
     expect(qs).toHaveLength(1);
-    expect(qs[0].transfer_id).toBe(out.transferId);
+    expect(qs[0].transaction_id).toBe(out.transactionId);
     expect(qs[0].kind).toBe("uncategorized");
     expect(JSON.parse(qs[0].context_json!).side).toBe("debit");
-    // The transfer still committed against the created placeholder account.
-    expect(countTransfers(db)).toBe(1);
+    // The transaction still committed against the created placeholder account.
+    expect(countTransactions(db)).toBe(1);
   });
 
-  it("drops a cross-currency transfer and raises currency_mismatch (no insert)", () => {
+  it("drops a cross-currency transaction and raises currency_mismatch (no insert)", () => {
     createAccount(db, { id: "asset:usd", name: "USD Wallet", type: "asset", parent_id: "asset", currency: "USD" });
-    const out = commitTransfer(
+    const out = commitTransaction(
       db,
       CTX,
       raw({ debit_account_id: "asset:usd", credit_account_id: "asset:cash", currency: "USD", row_index: 5 }),
@@ -108,41 +108,91 @@ describe("commitTransfer", () => {
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.reason).toBe("currency_mismatch");
-    expect(countTransfers(db)).toBe(0);
+    expect(countTransactions(db)).toBe(0);
 
     const cm = listQuestions(db).find((q) => q.kind === "currency_mismatch")!;
     expect(cm).toBeTruthy();
-    expect(cm.transfer_id).toBeNull();
+    expect(cm.transaction_id).toBeNull();
   });
 
   it("is idempotent: a re-commit is a duplicate with no balance change / questions", () => {
     const input = raw({ row_index: 9 });
-    const a = commitTransfer(db, CTX, input);
-    const b = commitTransfer(db, CTX, input);
+    const a = commitTransaction(db, CTX, input);
+    const b = commitTransaction(db, CTX, input);
     expect(a.ok && !a.duplicate).toBe(true);
     expect(b.ok && b.duplicate).toBe(true);
     if (b.ok) expect(b.raisedQuestions).toBe(0);
-    expect(countTransfers(db)).toBe(1);
+    expect(countTransactions(db)).toBe(1);
   });
 
   it("no-ops every question raise when scanId is null", () => {
-    const out = commitTransfer(
+    const out = commitTransaction(
       db,
       { ...CTX, scanId: null },
       raw({ debit_account_id: "expense:mystery-thing", row_index: 2 }),
     );
     expect(out.ok).toBe(true);
-    // Placeholder still created and transfer committed, but no question persisted.
+    // Placeholder still created and transaction committed, but no question persisted.
     expect(countQuestions(db, { includeDeferred: true })).toBe(0);
+  });
+
+  it("fuzzy-collapse guard: a fuzzy match onto the other side's account creates a placeholder instead of failing", () => {
+    // Existing account whose name shares the "ttb" token with the debit hint below.
+    createAccount(db, { id: "liability", name: "Liabilities", type: "liability", parent_id: null });
+    createAccount(db, { id: "liability:credit_card", name: "Credit Cards", type: "liability", parent_id: "liability" });
+    createAccount(db, {
+      id: "liability:credit_card:ttb",
+      name: "TTB Credit Card",
+      type: "liability",
+      parent_id: "liability:credit_card",
+    });
+
+    const out = commitTransaction(
+      db,
+      CTX,
+      raw({
+        debit_account_id: "asset:bank:ttb",
+        credit_account_id: "liability:credit_card:ttb",
+        row_index: 6,
+      }),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+
+    const row = getTransaction(db, out.transactionId)!;
+    // The debit side was NOT collapsed onto the credit account: it landed on
+    // a freshly created placeholder using the original requested id.
+    expect(row.debit_account_id).toBe("asset:bank:ttb");
+    expect(row.credit_account_id).toBe("liability:credit_card:ttb");
+
+    const qs = listQuestions(db);
+    expect(qs).toHaveLength(1);
+    expect(qs[0].kind).toBe("uncategorized");
+    expect(JSON.parse(qs[0].context_json!)).toMatchObject({ side: "debit", placeholder_id: "asset:bank:ttb" });
+  });
+
+  it("keeps the dirty_input failure when debit and credit collapse with no fuzzy match involved", () => {
+    // "bogus" and "also-bogus" aren't prefixed with a known account type, so
+    // both fall through fuzzy match (no name comes close) straight to the
+    // expense:uncategorized fallback — a genuine collision, not a fuzzy one.
+    const out = commitTransaction(
+      db,
+      CTX,
+      raw({ debit_account_id: "bogus", credit_account_id: "also-bogus", row_index: 7 }),
+    );
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toBe("dirty_input");
+    expect(countTransactions(db)).toBe(0);
   });
 });
 
-describe("commitLinkedTransfers", () => {
+describe("commitLinkedTransactions", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("commits the salary example atomically with a shared group and gross income", () => {
-    const out = commitLinkedTransfers(
+    const out = commitLinkedTransactions(
       db,
       CTX,
       { date: "2026-05-25", description: "May salary", row_index: 0, source_page: 2 },
@@ -156,21 +206,21 @@ describe("commitLinkedTransfers", () => {
     if (!out.ok) return;
     expect(out.results).toHaveLength(3);
     expect(out.group_id).toBe(deriveGroupId("hashABC", 2, 0));
-    expect(countTransfers(db)).toBe(3);
+    expect(countTransactions(db)).toBe(3);
 
     // income:salary is credited by all three legs: 60000 THB gross.
-    const salary = getAccountBalancesFromTransfers(db).find((b) => b.id === "income:salary")!;
+    const salary = getAccountBalancesFromTransactions(db).find((b) => b.id === "income:salary")!;
     expect(salary.credits_posted).toBe(6_000_000); // minor units
     expect(salary.balance).toBe(60000); // decimal, credit-normal
 
     // Every leg shares the group id.
     for (const r of out.results) {
-      expect(getTransfer(db, r.id)?.group_id).toBe(out.group_id);
+      expect(getTransaction(db, r.id)?.group_id).toBe(out.group_id);
     }
   });
 
   it("rolls back all legs when one leg is invalid", () => {
-    const out = commitLinkedTransfers(
+    const out = commitLinkedTransactions(
       db,
       CTX,
       { date: "2026-05-25", description: "bad batch", row_index: 3, source_page: 2 },
@@ -180,6 +230,6 @@ describe("commitLinkedTransfers", () => {
       ],
     );
     expect(out.ok).toBe(false);
-    expect(countTransfers(db)).toBe(0);
+    expect(countTransactions(db)).toBe(0);
   });
 });

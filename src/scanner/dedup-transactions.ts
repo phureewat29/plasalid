@@ -1,27 +1,27 @@
 import type Database from "libsql";
 import {
-  deleteTransfer,
-  findDuplicateTransfers,
-  type DuplicateTransferRow,
-} from "../db/queries/transfers.js";
+  deleteTransaction,
+  findDuplicateTransactions,
+  type DuplicateTransactionRow,
+} from "../db/queries/transactions.js";
 
 /**
- * Deterministic strict-duplicate merge for the transfer model, the counterpart
+ * Deterministic strict-duplicate merge for the transaction model, the counterpart
  * of `dedup.ts`'s `autoMergeStrictDuplicates`. Within each duplicate group,
- * keep the earliest transfer and delete any later member that matches it
+ * keep the earliest transaction and delete any later member that matches it
  * exactly on merchant, source file, date, and amount. Amounts are integer minor
  * units, so equality is a plain `===` (no float rounding). The group finder
  * already excludes intra-group members, so linked legs are never merged away.
  */
-export function autoMergeStrictDuplicateTransfers(db: Database.Database): { merged: number } {
+export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
   let merged = 0;
-  for (const group of findDuplicateTransfers(db)) {
+  for (const group of findDuplicateTransactions(db)) {
     merged += autoMergeStrictGroup(db, group);
   }
   return { merged };
 }
 
-function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransferRow[]): number {
+function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransactionRow[]): number {
   const sorted = [...group].sort((a, b) => {
     const d = a.date.localeCompare(b.date);
     return d !== 0 ? d : a.id.localeCompare(b.id);
@@ -38,7 +38,7 @@ function autoMergeStrictGroup(db: Database.Database, group: DuplicateTransferRow
       cand.date === head.date &&
       cand.amount === head.amount
     ) {
-      deleteTransfer(db, cand.id);
+      deleteTransaction(db, cand.id);
       deleted++;
     }
   }

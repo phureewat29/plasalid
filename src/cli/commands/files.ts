@@ -60,12 +60,12 @@ async function filesShow(id: string): Promise<void> {
   const row = findScannedFileById(db, id);
   if (!row) fail("NOT_FOUND", `no scanned file: ${id}`);
 
-  const { countTransfersBySourceFile } = await import("../../db/queries/transfers.js");
+  const { countTransactionsBySourceFile } = await import("../../db/queries/transactions.js");
   const { countQuestions } = await import("../../db/queries/questions.js");
   emitObject({
     type: "file_detail",
     ...row,
-    transfer_count: countTransfersBySourceFile(db, id),
+    transaction_count: countTransactionsBySourceFile(db, id),
     open_question_count: countQuestions(db, { file_id: id }),
   });
 }
@@ -82,7 +82,7 @@ async function filesDrop(id: string, opts: FilesDropOpts): Promise<void> {
   if (!res.removed) fail("NOT_FOUND", `no scanned file: ${id}`);
   emitObject({
     file_id: id,
-    removed_transfers: res.removedTransfers,
+    removed_transactions: res.removedTransactions,
     removed_questions: res.removedQuestions,
   });
 }
@@ -98,12 +98,12 @@ export function registerFiles(program: Command): void {
 
   files
     .command("show <id>")
-    .description("Show a scanned file with its transfer and open-question counts")
+    .description("Show a scanned file with its transaction and open-question counts")
     .action(runAction(filesShow));
 
   files
     .command("drop <id>")
-    .description("Drop a scanned file and cascade-remove its transfers/questions")
+    .description("Drop a scanned file and cascade-remove its transactions/questions")
     .option("--yes", "skip confirmation")
     .action(runAction(filesDrop));
 }

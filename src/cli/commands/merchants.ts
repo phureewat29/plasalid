@@ -20,26 +20,16 @@ const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
   { header: "Aliases", value: (m) => String(m.alias_count), align: "right" },
 ];
 
-function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n)) fail("USAGE", `${flag} must be a number, got "${value}"`);
-  return n;
-}
-
 export function registerMerchants(program: Command): void {
   const merchants = program.command("merchants").description("Manage merchants");
 
   merchants
     .command("list")
     .description("List merchants")
-    .option("--with-default-only", "only show merchants with a default account")
-    .option("--limit <n>", "maximum number of results")
     .action(
-      runAction((opts: { withDefaultOnly?: boolean; limit?: string }) => {
+      runAction(() => {
         const db = getDb();
-        const limit = parseOptionalNumber(opts.limit, "--limit");
-        const rows = listMerchants(db, { withDefaultOnly: !!opts.withDefaultOnly, limit });
+        const rows = listMerchants(db);
         emitList(rows, MERCHANT_COLUMNS);
       }),
     );

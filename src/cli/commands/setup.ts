@@ -1,73 +1,75 @@
 import type { Command } from "commander";
-import { existsSync, mkdirSync } from "fs";
-import { config as appConfig, getConfigPath, saveConfig, type PlasalidConfig } from "../../config.js";
-import { generateKey } from "../../db/encryption.js";
-import { currentMode, fail, readSecretFromStdin, runAction } from "../output.js";
-import { printConfig, redactConfig } from "./config-cmd.js";
+import { currentMode, emit, fail, runAction } from "../output.js";
+import {
+  installSkillPack,
+  getVersion,
+  SkillPackVersionError,
+  type InstallOptions,
+} from "../../setup/install.js";
+import { SKILL_MD } from "../../setup/templates.js";
+
+interface SetupOptions {
+  claude?: boolean;
+  codex?: boolean;
+  global?: boolean;
+  dir?: string;
+  force?: boolean;
+  print?: boolean;
+}
 
 export function registerSetup(program: Command): void {
   program
     .command("setup")
-    .description("Set up the harness environment")
-    .option("--data-dir <dir>", "data directory")
-    .option("--db <path>", "database path")
-    .option("--generate-key", "generate a new encryption key")
-    .option("--encryption-key-stdin", "read an encryption key from stdin")
-    .option("--locale <locale>", "locale")
-    .option("--currency <code>", "default currency code")
-    .option("--user-name <name>", "user display name")
-    .option("--force", "overwrite existing configuration")
+    .description("Install the skill pack so external agent CLIs can drive the harness")
+    .option("--claude", "install the Claude Code skill (default when no target is given)")
+    .option("--codex", "install/patch the codex AGENTS.md block")
+    .option("--global", "install to the home dir (~/.claude) instead of the cwd (./.claude)")
+    .option("--dir <path>", "override the install base directory")
+    .option("--force", "overwrite an installed skill dir whose version differs")
+    .option("--print", "print SKILL.md to stdout as raw markdown and exit (ignores --json)")
     .action(
-      runAction(async (opts: any) => {
-        if (opts.generateKey && opts.encryptionKeyStdin) {
-          fail("USAGE", "--generate-key and --encryption-key-stdin are mutually exclusive");
+      runAction(async (opts: SetupOptions) => {
+        // --print dumps the raw SKILL.md so a human/agent can inspect it without
+        // touching the filesystem. It is markdown, not NDJSON, even under --json.
+        if (opts.print) {
+          process.stdout.write(SKILL_MD(getVersion()));
+          if (!SKILL_MD(getVersion()).endsWith("\n")) process.stdout.write("\n");
+          return;
         }
 
-        const configPath = getConfigPath();
-        if (existsSync(configPath) && !opts.force) {
-          fail("INVALID", "configuration already exists", {
-            hint: `re-run with --force to overwrite ${configPath}`,
-          });
-        }
-
-        // Resolve values: an explicit flag wins, otherwise fall back to the
-        // already-resolved (env > default) value the config singleton loaded
-        // at process start — there is no config.json yet on a fresh setup, so
-        // that singleton already reflects "env > default".
-        const dataDir: string = opts.dataDir ?? appConfig.dataDir;
-        const dbPath: string = opts.db ?? appConfig.dbPath;
-        const displayLocale: string = opts.locale ?? appConfig.displayLocale;
-        const displayCurrency: string = opts.currency ?? appConfig.displayCurrency;
-        const userName: string = opts.userName ?? appConfig.userName;
-
-        mkdirSync(dataDir, { recursive: true });
-
-        const patch: Partial<PlasalidConfig> = {
-          dataDir,
-          dbPath,
-          displayLocale,
-          displayCurrency,
-          userName,
+        const installOpts: InstallOptions = {
+          claude: opts.claude,
+          codex: opts.codex,
+          global: opts.global,
+          dir: opts.dir,
+          force: opts.force,
         };
-        if (opts.generateKey) {
-          patch.dbEncryptionKey = generateKey();
-        } else if (opts.encryptionKeyStdin) {
-          patch.dbEncryptionKey = await readSecretFromStdin();
+
+        let result;
+        try {
+          result = installSkillPack(installOpts);
+        } catch (err) {
+          if (err instanceof SkillPackVersionError) {
+            fail("INVALID", err.message, {
+              hint: "re-run with --force to overwrite the installed skill pack",
+              details: {
+                installed_version: err.installedVersion,
+                cli_version: err.cliVersion,
+                path: err.path,
+              },
+            });
+          }
+          throw err;
         }
 
-        saveConfig(patch);
-
-        // Open once to run the migration against the freshly-configured db path.
-        const { getDb } = await import("../../db/connection.js");
-        getDb();
-
-        const { createContextTemplate } = await import("../../context.js");
-        createContextTemplate(userName);
-
-        printConfig(currentMode(), {
-          ...redactConfig(appConfig),
-          created: { config: configPath, db: dbPath, data_dir: dataDir },
-        });
+        const mode = currentMode();
+        if (mode.json) {
+          emit({ installed: result.installed });
+        } else {
+          for (const t of result.installed) {
+            process.stdout.write(`${t.kind}\t${t.path}\t${t.version}\n`);
+          }
+        }
       }),
     );
 }

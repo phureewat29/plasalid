@@ -6,6 +6,7 @@ import {
   mkdirSync,
   chmodSync,
 } from "fs";
+import { createHash } from "crypto";
 import { resolve } from "path";
 import { homedir } from "os";
 
@@ -47,6 +48,14 @@ export function getDataDir(): string {
 // Env override keeps it redirectable in tests without touching the real home dir.
 export function getCacheDir(): string {
   return process.env.PLASALID_CACHE_DIR || resolve(PLASALID_DIR, "cache");
+}
+
+/** A short, non-reversible fingerprint of the db encryption key (`sha256:` +
+ *  first 8 hex of its SHA-256). Lets `config`/`status` prove a key is set — and
+ *  which one — without ever printing the passphrase into shells, logs, or bug
+ *  reports. */
+export function keyFingerprint(key: string): string {
+  return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
 }
 
 function loadFileConfig(): Partial<PlasalidConfig> {

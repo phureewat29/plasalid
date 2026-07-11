@@ -19,9 +19,9 @@ surface, the agent:
 5. **Report**s back -- spending by category, refunds, top merchants -- from
    `plasalid status`, `plasalid report`, and `plasalid ledger`.
 
-The agent only has permission to run `plasalid` and read/write files
-(`--allowedTools "Bash(plasalid:*),Read,Write"`) -- everything it does, it
-does through the CLI's documented commands.
+The agent only has permission to run `plasalid`, read/write files, and use
+Claude Code Skills (`--allowedTools "Bash(plasalid:*),Read,Write,Skill"`) --
+everything it does, it does through the CLI's documented commands.
 
 This is its own small project: it has its own `package.json` and
 dependencies (ink + React) and imports nothing from the root plasalid
@@ -41,7 +41,7 @@ npm install
 npm start
 ```
 
-Two flags change the run's behavior (pass them after `--` so npm forwards
+Three flags change the run's behavior (pass them after `--` so npm forwards
 them to the demo):
 
 - `npm start -- --skip-claude` -- skip the live `claude -p` turns and only
@@ -51,15 +51,33 @@ them to the demo):
   the demo itself. Prints `PASS`/`FAIL` and exits 0/1.
 - `npm start -- --keep-workspace` -- don't delete the isolated workspace on
   exit; the run prints its path so you can poke around afterwards.
+- `npm start -- --turn-timeout <seconds>` -- kill a `claude -p` turn
+  (SIGTERM, then SIGKILL 5s later if it's still alive) if it runs longer
+  than this. Defaults to 600s (10 minutes).
 
-Both flags can be combined: `npm start -- --skip-claude --keep-workspace`.
+Flags can be combined: `npm start -- --skip-claude --keep-workspace`.
 
-## What each step shows
+## What to expect
 
 Whether stdout is a terminal or piped, the same information is reported --
 a live ink dashboard on a TTY, and flat sequential lines when piped (e.g.
-`npm start -- --skip-claude | cat`). Steps render as `[....]` while running,
-`[ ok ]` once they pass, and `[fail]` if they don't:
+`npm start -- --skip-claude | cat`). Both renderers drive the identical
+underlying orchestration; only the presentation differs:
+
+- **TTY (ink) mode** -- a live dashboard with tasteful emoji and color
+  accents: a spinner (braille cycle, via `ink-spinner`) plus an `elapsed Ns`
+  counter next to whatever's currently running, `✅`/`❌` once a step or turn
+  finishes, and each turn's answer streams in live (dim/italic) as the agent
+  generates it, before being replaced by the authoritative final answer.
+  Finished turns are pinned to scrollback (via ink's `<Static>`) so the
+  live-updating parts of the screen never repaint history.
+- **Piped/plain mode** -- pure ASCII, one line at a time, no emoji, no
+  spinner, no live-streaming text. Steps render as `[....]` while running,
+  `[ ok ]` once they pass, and `[fail]` if they don't. While a turn is
+  running with no other output, a `... thinking (Ns)` heartbeat line prints
+  at most every 15s so a long silent stretch doesn't look hung.
+
+Steps, in order:
 
 1. **build plasalid** -- `npm run build` at the repo root.
 2. **create workspace** -- a fresh, throwaway temp directory for this run.
@@ -80,11 +98,16 @@ With `--skip-claude`, a final **ingest list plumbing check** step runs
 `plasalid ingest list --json` and asserts at least one newly-discovered file
 is awaiting ingest, then the run prints `PASS`/`FAIL` and exits.
 
-Otherwise, the demo runs a three-turn conversation in ONE continued `claude`
+Otherwise, a **check claude CLI** preflight step runs `claude --version`
+first, so a missing/broken `claude` install fails immediately with a
+friendly message instead of a raw `ENOENT` once the first turn tries to
+spawn it.
+
+The demo then runs a three-turn conversation in ONE continued `claude`
 session (`claude -p`, then `claude -p --continue` twice -- the agent keeps
 its context across turns, exactly like day-to-day usage). Each turn gets its
 own panel showing the tool calls the agent makes (`> plasalid ...`,
-`> Read <path>`, `> Write <path>`) followed by its final answer:
+`> Read <path>`, `> Write <path>`, `> Skill`) followed by its final answer:
 
 1. *"ingest my new statements, then give me a quick summary of what you
    found"*
@@ -93,6 +116,15 @@ own panel showing the tool calls the agent makes (`> plasalid ...`,
    account"*
 3. *"how much did I spend this billed period, what were my top merchants,
    and what should I watch next month?"*
+
+After each turn, the run reports (informational, not an assertion) whether
+the agent loaded the plasalid skill (turn 1 only) and how many `plasalid`
+commands it ran that turn, plus a done/failed summary line with duration and
+cost when the `claude` CLI reports them, e.g.
+`✅ turn 1 done in 84s · 12 plasalid calls · $0.12` in ink mode, or
+`turn 1 done in 84s (12 plasalid calls)` when piped. If a turn otherwise
+succeeds but still wrote to stderr, the last few lines are shown (dimmed in
+ink mode, prefixed `stderr:` when piped) rather than silently discarded.
 
 After the three turns, a **final assertions** step re-checks
 `plasalid status --json` (at least one file scanned, at least one transaction
@@ -114,15 +146,22 @@ vault, which is how the harness unlocks statements without ever prompting.
   before doing anything else -- your real `~/.plasalid` installation (if you
   have one) is never read or written. The workspace is deleted on exit
   (including on Ctrl-C) unless you pass `--keep-workspace`.
+- **Linux auth note**: because the isolation env redirects `HOME` into the
+  throwaway workspace, `claude` can't see `$HOME/.claude` in that workspace
+  -- on Linux, that's where `claude auth login` credentials normally live, so
+  a Linux run of the full demo (not `--skip-claude`) needs `ANTHROPIC_API_KEY`
+  set in the environment instead. macOS is unaffected by this specific issue,
+  since `claude` there reads credentials from the system Keychain rather than
+  a `$HOME`-relative file (an `ANTHROPIC_API_KEY` also works there).
 
 ## How it works (file map)
 
 | File | Purpose |
 | --- | --- |
 | `card-statement-2026-05.pdf` | The password-protected card statement the agent ingests. |
-| `package.json` | This sub-project's own manifest (ink + React dependencies, `npm start`). |
+| `package.json` | This sub-project's own manifest (ink + ink-spinner + React dependencies, `npm start`). |
 | `tsconfig.json` | This sub-project's own TypeScript config. |
-| `src/demo.tsx` | Entry point: CLI args, TTY detection, the demo's step/turn orchestration, and both renderers (ink for a TTY, plain text when piped). |
-| `src/workspace.ts` | Workspace setup/teardown, the isolation env, and the `plasalid` runner (including the `plasalid setup` skill install). |
-| `src/claude-stream.ts` | Spawns `claude -p ... --output-format stream-json` and turns its NDJSON event stream into activity lines and a final answer. |
+| `src/demo.tsx` | Entry point: CLI args (`--skip-claude`, `--keep-workspace`, `--turn-timeout`), TTY detection, the demo's step/turn orchestration, and both renderers (ink for a TTY, plain text when piped). |
+| `src/workspace.ts` | Workspace setup/teardown, the isolation env, the `plasalid` runner (including the `plasalid setup` skill install), and the `claude` CLI preflight check. |
+| `src/claude-stream.ts` | Spawns `claude -p ... --output-format stream-json` (with a per-turn timeout) and turns its NDJSON event stream into activity/skill/plasalid-call events, coalesced live-streaming answer text, and the turn's final answer/duration/cost. |
 | `README.md` | This file. |

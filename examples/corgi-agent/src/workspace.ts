@@ -8,7 +8,7 @@
  * shim is written into the workspace and put on PATH so the demo (and the
  * `claude` CLI it drives) can just run `plasalid ...` like a normal install.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -188,6 +188,14 @@ export function parseNdjson(stdout: string): Record<string, unknown>[] {
     }
   }
   return out;
+}
+
+/** Best-effort check that the `claude` CLI resolves and runs at all (e.g.
+ *  installed and on PATH), so the demo can fail with a friendly message up
+ *  front instead of a raw ENOENT once a turn actually tries to spawn it. */
+export function checkClaudeCli(env: NodeJS.ProcessEnv, timeoutMs = 5000): boolean {
+  const res = spawnSync("claude", ["--version"], { env, timeout: timeoutMs, stdio: "ignore" });
+  return res.error == null && res.status === 0;
 }
 
 /** Remove the workspace directory tree. Safe to call more than once. */

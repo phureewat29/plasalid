@@ -21,6 +21,14 @@
  * accents - not confetti. The piped/plain renderer stays pure ASCII: step
  * states render as "[....]" (running), "[ ok ]" (done), "[fail]" (failed);
  * tool activity lines render as "> ...".
+ *
+ * Render clock: a single interval (TICK_MS, below) drives every
+ * spinner/elapsed/streaming-text update in the ink renderer. Streaming
+ * deltas are never dispatched as they arrive - they're buffered outside
+ * React state (see App's `pendingDeltaRef`) and merged into visible state
+ * only on TICK, which itself is a no-op (same state reference, no
+ * re-render) whenever nothing a viewer would see has actually changed. See
+ * the `uiReducer`'s "TICK" case for the details.
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +62,19 @@ const DIVIDER = "-".repeat(60);
 const SPINNER_TYPE = "dots";
 /** Plain-mode heartbeat cadence while a turn is running with no other output. */
 const HEARTBEAT_MS = 15_000;
+/** Single render-clock cadence (ms) for the ink UI: drives BOTH the
+ *  elapsed-time ticker and the merge of buffered streaming-answer deltas
+ *  into visible state. 250-400ms is fast enough to read as "live" while
+ *  guaranteeing no delta chunk, however small or frequent, can itself
+ *  trigger a re-render. */
+const TICK_MS = 300;
+/** A delta is treated as "still writing" (vs. "thinking") while it's this recent. */
+const WRITING_WINDOW_MS = 2000;
+/** Only the last this-many lines of the live-streaming answer are shown
+ *  (dim), with a "… (+N earlier lines)" head marker above them - bounds the
+ *  dynamic region's height so ink never redraws a growing-without-limit
+ *  area on every merge. */
+const STREAMING_TEXT_MAX_LINES = 6;
 
 const TURN_PROMPTS = [
   "ingest my new statements, then give me a quick summary of what you found",
@@ -107,7 +128,6 @@ function pluralize(n: number, noun: string): string {
 
 interface TurnSummary {
   durationMs?: number;
-  costUsd?: number;
   plasalidCalls: number;
 }
 
@@ -284,7 +304,6 @@ async function runDemo(
     }
     report.turnDone(turn, result.ok, {
       durationMs: result.durationMs,
-      costUsd: result.costUsd,
       plasalidCalls,
     });
     if (!result.ok) return { pass: false, paths: ws };
@@ -338,8 +357,12 @@ function makePlainReporter(): Reporter {
   }
 
   return {
-    stepStart(_id, _label) {
-      // Piped output is a linear log: only completed steps print a line.
+    stepStart(id, _label) {
+      // Piped output is a linear log: only completed steps print a line,
+      // except for a single blank-line separator ahead of the final
+      // assertions step, which otherwise would butt straight up against
+      // the last turn's divider.
+      if (id === "assertions") console.log("");
     },
     stepDone(_id, label, ok, detail) {
       console.log(`${bracket(ok ? "ok" : "fail")} ${label}${detail ? `  ${detail}` : ""}`);
@@ -414,12 +437,15 @@ interface TurnData {
   activity: string[];
   /** Coalesced live-streaming answer text; cleared once the authoritative answer lands. */
   streamingText: string;
+  /** Timestamp of the last TICK that merged non-empty delta text into
+   *  `streamingText`, or null if no delta has arrived yet. Drives the
+   *  "thinking…" vs "writing…" status word below. */
+  lastDeltaAt: number | null;
   answer: string;
   status: "running" | "ok" | "fail";
   startedAt: number;
   plasalidCalls: number;
   durationMs?: number;
-  costUsd?: number;
   stderrTail: string[];
 }
 
@@ -428,7 +454,7 @@ interface UiState {
   activeTurn: TurnData | null;
   turnHistory: TurnData[];
   infoLines: string[];
-  /** Updated once per TICK while anything is running; drives spinner/elapsed rendering. */
+  /** Updated on TICK while anything is running; drives spinner/elapsed rendering. */
   now: number;
   done: boolean;
   pass: boolean;
@@ -449,12 +475,15 @@ type UiAction =
   | { type: "STEP_DONE"; id: string; ok: boolean; detail?: string }
   | { type: "TURN_START"; turn: number; total: number; prompt: string }
   | { type: "TURN_ACTIVITY"; turn: number; line: string }
-  | { type: "TURN_DELTA"; turn: number; text: string }
   | { type: "TURN_ANSWER"; turn: number; text: string }
   | { type: "TURN_STDERR"; turn: number; lines: string[] }
-  | { type: "TURN_DONE"; turn: number; ok: boolean; durationMs?: number; costUsd?: number; plasalidCalls: number }
+  | { type: "TURN_DONE"; turn: number; ok: boolean; durationMs?: number; plasalidCalls: number }
   | { type: "INFO"; line: string }
-  | { type: "TICK" }
+  /** The single render clock. `pendingDelta`/`pendingDeltaTurn` carry any
+   *  streaming-answer text buffered since the last TICK (see App's
+   *  `pendingDeltaRef`) - merged into the matching active turn's
+   *  `streamingText` here, and only here. */
+  | { type: "TICK"; now: number; pendingDelta?: string; pendingDeltaTurn?: number }
   | { type: "FINAL"; pass: boolean };
 
 function uiReducer(state: UiState, action: UiAction): UiState {
@@ -489,6 +518,7 @@ function uiReducer(state: UiState, action: UiAction): UiState {
           prompt: action.prompt,
           activity: [],
           streamingText: "",
+          lastDeltaAt: null,
           answer: "",
           status: "running",
           startedAt: Date.now(),
@@ -499,12 +529,6 @@ function uiReducer(state: UiState, action: UiAction): UiState {
     case "TURN_ACTIVITY":
       if (!state.activeTurn || state.activeTurn.turn !== action.turn) return state;
       return { ...state, activeTurn: { ...state.activeTurn, activity: [...state.activeTurn.activity, action.line] } };
-    case "TURN_DELTA":
-      if (!state.activeTurn || state.activeTurn.turn !== action.turn) return state;
-      return {
-        ...state,
-        activeTurn: { ...state.activeTurn, streamingText: state.activeTurn.streamingText + action.text },
-      };
     case "TURN_ANSWER":
       if (!state.activeTurn || state.activeTurn.turn !== action.turn) return state;
       return { ...state, activeTurn: { ...state.activeTurn, answer: action.text, streamingText: "" } };
@@ -517,15 +541,48 @@ function uiReducer(state: UiState, action: UiAction): UiState {
         ...state.activeTurn,
         status: action.ok ? "ok" : "fail",
         durationMs: action.durationMs,
-        costUsd: action.costUsd,
         plasalidCalls: action.plasalidCalls,
       };
       return { ...state, activeTurn: null, turnHistory: [...state.turnHistory, finished] };
     }
     case "INFO":
       return { ...state, infoLines: [...state.infoLines, action.line] };
-    case "TICK":
-      return { ...state, now: Date.now() };
+    case "TICK": {
+      const hasPendingDelta =
+        typeof action.pendingDelta === "string" &&
+        action.pendingDelta.length > 0 &&
+        state.activeTurn != null &&
+        state.activeTurn.turn === action.pendingDeltaTurn;
+
+      const runningStepsChanged = state.steps.some(
+        (s) =>
+          s.status === "running" &&
+          elapsedSeconds(state.now, s.startedAt) !== elapsedSeconds(action.now, s.startedAt),
+      );
+      const activeTurnSecondsChanged =
+        state.activeTurn != null &&
+        elapsedSeconds(state.now, state.activeTurn.startedAt) !==
+          elapsedSeconds(action.now, state.activeTurn.startedAt);
+
+      if (!hasPendingDelta && !runningStepsChanged && !activeTurnSecondsChanged) {
+        // Nothing a viewer would see has changed - return the SAME
+        // reference so React bails out of re-rendering entirely.
+        return state;
+      }
+
+      return {
+        ...state,
+        now: action.now,
+        activeTurn:
+          state.activeTurn && hasPendingDelta
+            ? {
+                ...state.activeTurn,
+                streamingText: state.activeTurn.streamingText + action.pendingDelta,
+                lastDeltaAt: action.now,
+              }
+            : state.activeTurn,
+      };
+    }
     case "FINAL":
       return { ...state, done: true, pass: action.pass };
     default:
@@ -533,7 +590,10 @@ function uiReducer(state: UiState, action: UiAction): UiState {
   }
 }
 
-function makeInkReporter(dispatch: Dispatch<UiAction>): Reporter {
+function makeInkReporter(
+  dispatch: Dispatch<UiAction>,
+  appendPendingDelta: (turn: number, text: string) => void,
+): Reporter {
   return {
     stepStart(id, label) {
       dispatch({ type: "STEP_START", id, label });
@@ -548,7 +608,11 @@ function makeInkReporter(dispatch: Dispatch<UiAction>): Reporter {
       dispatch({ type: "TURN_ACTIVITY", turn, line });
     },
     turnDelta(turn, text) {
-      dispatch({ type: "TURN_DELTA", turn, text });
+      // Buffered outside React state - see App's pendingDeltaRef and the
+      // render-clock note at the top of this file. Never dispatched
+      // directly, so however fast/often deltas arrive, no re-render fires
+      // until the next TICK merges the buffer in.
+      appendPendingDelta(turn, text);
     },
     turnAnswer(turn, text) {
       dispatch({ type: "TURN_ANSWER", turn, text });
@@ -562,7 +626,6 @@ function makeInkReporter(dispatch: Dispatch<UiAction>): Reporter {
         turn,
         ok,
         durationMs: summary.durationMs,
-        costUsd: summary.costUsd,
         plasalidCalls: summary.plasalidCalls,
       });
     },
@@ -576,15 +639,13 @@ function elapsedSeconds(now: number, startedAt: number): number {
   return Math.max(0, Math.round((now - startedAt) / 1000));
 }
 
-/** e.g. "turn 1 done in 84s · 12 plasalid calls · $0.12" (missing fields omitted). */
+/** e.g. "turn 1 done in 84s · 12 plasalid calls" (missing duration omitted). */
 function turnSummaryText(turn: TurnData): string {
   let head = `turn ${turn.turn} ${turn.status === "ok" ? "done" : "failed"}`;
   if (typeof turn.durationMs === "number") {
     head += ` in ${Math.max(0, Math.round(turn.durationMs / 1000))}s`;
   }
-  const extras = [pluralize(turn.plasalidCalls, "plasalid call")];
-  if (typeof turn.costUsd === "number") extras.push(`$${turn.costUsd.toFixed(2)}`);
-  return `${head} · ${extras.join(" · ")}`;
+  return `${head} · ${pluralize(turn.plasalidCalls, "plasalid call")}`;
 }
 
 function StepRowView({ step, now }: { step: StepRow; now: number }) {
@@ -607,10 +668,28 @@ function StepRowView({ step, now }: { step: StepRow; now: number }) {
   );
 }
 
-function TurnBlock({ turn, now }: { turn: TurnData; now: number }) {
-  const running = turn.status === "running";
+/** Bounded live-streaming answer region - see STREAMING_TEXT_MAX_LINES. */
+function StreamingTextView({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const hiddenCount = Math.max(0, lines.length - STREAMING_TEXT_MAX_LINES);
+  const visibleLines = lines.slice(-STREAMING_TEXT_MAX_LINES);
   return (
     <Box flexDirection="column" marginTop={1}>
+      {hiddenCount > 0 && <Text dimColor>… (+{hiddenCount} earlier lines)</Text>}
+      {visibleLines.map((line, i) => (
+        <Text key={i} dimColor italic>
+          {line.length > 0 ? line : " "}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function TurnBlock({ turn, now }: { turn: TurnData; now: number }) {
+  const running = turn.status === "running";
+  const writing = turn.lastDeltaAt != null && now - turn.lastDeltaAt <= WRITING_WINDOW_MS;
+  return (
+    <Box flexDirection="column" marginY={1}>
       <Text dimColor>{DIVIDER}</Text>
       <Text bold color="cyan">
         🐶 turn {turn.turn}/{turn.total}: {turn.prompt}
@@ -620,29 +699,31 @@ function TurnBlock({ turn, now }: { turn: TurnData; now: number }) {
           {line}
         </Text>
       ))}
-      {running && turn.streamingText.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
-          {turn.streamingText.split("\n").map((line, i) => (
-            <Text key={i} dimColor italic>
-              {line.length > 0 ? line : " "}
-            </Text>
-          ))}
-        </Box>
-      )}
+      {running && turn.streamingText.length > 0 && <StreamingTextView text={turn.streamingText} />}
+      {/* Status row: ALWAYS its own Box (own line, marginTop for visual
+          separation), ALWAYS the last thing in the running turn's dynamic
+          area (right before the answer/summary section, which are empty
+          while running) - never inline with activity or streaming-text
+          lines, never re-ordered relative to its siblings. Three separate
+          Text children (spinner / status word / elapsed) so ink diffs each
+          piece independently instead of repainting one merged string. */}
       {running && (
-        <Text>
+        <Box marginTop={1}>
           <Text color="cyan">
             <Spinner type={SPINNER_TYPE} />
-          </Text>{" "}
-          <Text color="yellow">elapsed {elapsedSeconds(now, turn.startedAt)}s</Text>
-        </Text>
+          </Text>
+          <Text> {writing ? "writing" : "thinking"}… </Text>
+          <Text color="yellow">{elapsedSeconds(now, turn.startedAt)}s</Text>
+        </Box>
       )}
       {turn.answer.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>answer:</Text>
-          {turn.answer.split("\n").map((line, i) => (
-            <Text key={i}>{line.length > 0 ? line : " "}</Text>
-          ))}
+          <Box flexDirection="column" paddingLeft={2}>
+            {turn.answer.split("\n").map((line, i) => (
+              <Text key={i}>{line.length > 0 ? line : " "}</Text>
+            ))}
+          </Box>
         </Box>
       )}
       {turn.stderrTail.length > 0 && (
@@ -667,12 +748,20 @@ function TurnBlock({ turn, now }: { turn: TurnData; now: number }) {
 function App({ opts, onExit }: { opts: DemoOptions; onExit: (code: number) => void }) {
   const [state, dispatch] = useReducer(uiReducer, initialUiState);
   const startedRef = useRef(false);
+  /** Streaming-answer text buffered outside React state since the last
+   *  TICK - see the render-clock note at the top of this file. Appending
+   *  here never dispatches, so however fast/often deltas arrive, no
+   *  re-render is triggered until the next TICK merges the buffer in. */
+  const pendingDeltaRef = useRef<{ turn: number; text: string } | null>(null);
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const reporter = makeInkReporter(dispatch);
+    const reporter = makeInkReporter(dispatch, (turn, text) => {
+      const cur = pendingDeltaRef.current;
+      pendingDeltaRef.current = cur && cur.turn === turn ? { turn, text: cur.text + text } : { turn, text };
+    });
     (async () => {
       const outcome = await runDemo(opts, reporter, (paths) => {
         currentWorkspacePaths = paths;
@@ -687,22 +776,36 @@ function App({ opts, onExit }: { opts: DemoOptions; onExit: (code: number) => vo
     })();
   }, [opts, onExit]);
 
-  // Ticks the spinner/elapsed-time displays every 500ms, but only while
-  // something is actually running - cleared the instant we go idle/done so
-  // a finished run doesn't keep re-rendering.
+  // The single render clock: ticks the spinner/elapsed-time/streaming-text
+  // displays every TICK_MS, but only while something is actually running -
+  // cleared the instant we go idle/done so a finished run doesn't keep
+  // re-rendering. uiReducer's TICK case further bails out (same state
+  // reference, no re-render) on any given tick where nothing visible
+  // actually changed.
   const isRunning = state.activeTurn !== null || state.steps.some((s) => s.status === "running");
   useEffect(() => {
     if (!isRunning) return;
-    const id = setInterval(() => dispatch({ type: "TICK" }), 500);
+    const id = setInterval(() => {
+      const pending = pendingDeltaRef.current;
+      pendingDeltaRef.current = null;
+      dispatch({
+        type: "TICK",
+        now: Date.now(),
+        pendingDelta: pending?.text,
+        pendingDeltaTurn: pending?.turn,
+      });
+    }, TICK_MS);
     return () => clearInterval(id);
   }, [isRunning]);
 
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">
-        🐶 corgi-agent — plasalid x claude -p
-      </Text>
-      <Box flexDirection="column" marginTop={1}>
+      <Box marginBottom={1}>
+        <Text bold color="cyan">
+          🐶 corgi-agent — plasalid x claude -p
+        </Text>
+      </Box>
+      <Box flexDirection="column">
         {state.steps.map((s) => (
           <StepRowView key={s.id} step={s} now={state.now} />
         ))}

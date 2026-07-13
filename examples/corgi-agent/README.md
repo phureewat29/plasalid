@@ -119,9 +119,9 @@ own panel showing the tool calls the agent makes (`> plasalid ...`,
 
 After each turn, the run reports (informational, not an assertion) whether
 the agent loaded the plasalid skill (turn 1 only) and how many `plasalid`
-commands it ran that turn, plus a done/failed summary line with duration and
-cost when the `claude` CLI reports them, e.g.
-`✅ turn 1 done in 84s · 12 plasalid calls · $0.12` in ink mode, or
+commands it ran that turn, plus a done/failed summary line with duration
+when the `claude` CLI reports it, e.g.
+`✅ turn 1 done in 84s · 12 plasalid calls` in ink mode, or
 `turn 1 done in 84s (12 plasalid calls)` when piped. If a turn otherwise
 succeeds but still wrote to stderr, the last few lines are shown (dimmed in
 ink mode, prefixed `stderr:` when piped) rather than silently discarded.
@@ -163,5 +163,5 @@ vault, which is how the harness unlocks statements without ever prompting.
 | `tsconfig.json` | This sub-project's own TypeScript config. |
 | `src/demo.tsx` | Entry point: CLI args (`--skip-claude`, `--keep-workspace`, `--turn-timeout`), TTY detection, the demo's step/turn orchestration, and both renderers (ink for a TTY, plain text when piped). |
 | `src/workspace.ts` | Workspace setup/teardown, the isolation env, the `plasalid` runner (including the `plasalid setup` skill install), and the `claude` CLI preflight check. |
-| `src/claude-stream.ts` | Spawns `claude -p ... --output-format stream-json` (with a per-turn timeout) and turns its NDJSON event stream into activity/skill/plasalid-call events, coalesced live-streaming answer text, and the turn's final answer/duration/cost. |
+| `src/claude-stream.ts` | Spawns `claude -p ... --output-format stream-json` (with a per-turn timeout) and turns its NDJSON event stream into activity/skill/plasalid-call events, coalesced live-streaming answer text, and the turn's final answer/duration. |
 | `README.md` | This file. |

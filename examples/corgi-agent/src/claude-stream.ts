@@ -4,7 +4,7 @@
  * stream into what the demo UI needs: activity lines ("> plasalid ..." /
  * "> Read ..." / "> Write ...") for each tool_use the agent makes, coalesced
  * live-streaming answer text, skill/plasalid-call usage signals, and the
- * turn's final answer/duration/cost.
+ * turn's final answer/duration.
  *
  * Event shapes observed from a real `claude -p ... --output-format
  * stream-json --include-partial-messages --verbose` run (claude_code_version
@@ -32,8 +32,9 @@
  *   {"type":"result","subtype":"success","result":"<final answer text>",
  *      "duration_ms":84213,"total_cost_usd":0.1234,"usage":{...},...}
  *      -- the authoritative final answer for the whole turn (matches what a
- *      plain `claude -p "<prompt>"` would have printed to stdout), plus
- *      informational duration/cost fields.
+ *      plain `claude -p "<prompt>"` would have printed to stdout), plus an
+ *      informational duration field. `total_cost_usd` is present on the real
+ *      event but not surfaced by this demo's UI.
  *
  * Any event type/shape not listed above (and any field access below) is
  * treated defensively: unknown types are ignored, and missing/mistyped
@@ -74,8 +75,6 @@ export interface ClaudeTurnResult {
   answer: string;
   /** From the "result" event's `duration_ms`, when present. */
   durationMs?: number;
-  /** From the "result" event's `total_cost_usd`, when present. */
-  costUsd?: number;
   /** Set when the turn was killed for running past `turnTimeoutSec`. */
   timedOut?: boolean;
   /** Last (up to) 3 non-blank stderr lines, only populated when the turn
@@ -151,7 +150,6 @@ function activityLineForToolUse(name: unknown, input: unknown): string | null {
 export interface StreamParserResult {
   answer: string;
   durationMs?: number;
-  costUsd?: number;
 }
 
 /** Incrementally parses one turn's NDJSON stdout lines into ClaudeStreamEvents.
@@ -171,7 +169,6 @@ export interface StreamParser {
 export function createStreamParser(onEvent: (event: ClaudeStreamEvent) => void): StreamParser {
   let finalAnswer = "";
   let durationMs: number | undefined;
-  let costUsd: number | undefined;
   let deltaBuffer = "";
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -237,7 +234,6 @@ export function createStreamParser(onEvent: (event: ClaudeStreamEvent) => void):
       case "result": {
         if (typeof e.result === "string") finalAnswer = e.result;
         if (typeof e.duration_ms === "number") durationMs = e.duration_ms;
-        if (typeof e.total_cost_usd === "number") costUsd = e.total_cost_usd;
         break;
       }
       default:
@@ -262,7 +258,7 @@ export function createStreamParser(onEvent: (event: ClaudeStreamEvent) => void):
       }
     },
     getResult() {
-      return { answer: finalAnswer, durationMs, costUsd };
+      return { answer: finalAnswer, durationMs };
     },
   };
 }
@@ -327,7 +323,7 @@ export function runClaudeTurn(
       clearTimers();
       parser.flush();
       parser.dispose();
-      const { answer, durationMs, costUsd } = parser.getResult();
+      const { answer, durationMs } = parser.getResult();
 
       if (timedOut) {
         resolvePromise({
@@ -335,7 +331,6 @@ export function runClaudeTurn(
           exitCode: code,
           answer: `turn timed out after ${turnTimeoutSec}s`,
           durationMs,
-          costUsd,
           timedOut: true,
         });
         return;
@@ -343,7 +338,7 @@ export function runClaudeTurn(
 
       const ok = code === 0;
       const stderrTail = ok && stderrBuf.trim() ? lastLines(stderrBuf, 3) : undefined;
-      resolvePromise({ ok, exitCode: code, answer: answer || stderrBuf, durationMs, costUsd, stderrTail });
+      resolvePromise({ ok, exitCode: code, answer: answer || stderrBuf, durationMs, stderrTail });
     });
   });
 }

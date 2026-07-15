@@ -5,7 +5,8 @@
   "description": "Standalone ink TUI demo: an external claude CLI agent drives the plasalid harness end to end over a real, password-protected credit-card statement.",
   "type": "module",
   "scripts": {
-    "start": "tsx src/demo.tsx"
+    "start": "tsx src/demo.tsx",
+    "verify": "tsx src/verify-render-clock.ts"
   },
   "engines": {
     "node": ">=18"

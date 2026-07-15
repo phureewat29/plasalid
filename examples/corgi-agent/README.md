@@ -57,6 +57,10 @@ them to the demo):
 
 Flags can be combined: `npm start -- --skip-claude --keep-workspace`.
 
+For development, `npm run verify` runs a fast offline check that the ink render
+clock coalesces a burst of streaming deltas into TICK-cadence updates (no
+per-delta re-renders); it needs neither `claude` nor the plasalid build.
+
 ## What to expect
 
 Whether stdout is a terminal or piped, the same information is reported --
@@ -159,9 +163,15 @@ vault, which is how the harness unlocks statements without ever prompting.
 | File | Purpose |
 | --- | --- |
 | `card-statement-2026-05.pdf` | The password-protected card statement the agent ingests. |
-| `package.json` | This sub-project's own manifest (ink + ink-spinner + React dependencies, `npm start`). |
+| `package.json` | This sub-project's own manifest (ink + ink-spinner + React dependencies, `npm start`, `npm run verify`). |
 | `tsconfig.json` | This sub-project's own TypeScript config. |
-| `src/demo.tsx` | Entry point: CLI args (`--skip-claude`, `--keep-workspace`, `--turn-timeout`), TTY detection, the demo's step/turn orchestration, and both renderers (ink for a TTY, plain text when piped). |
+| `src/demo.tsx` | Thin entry point: CLI arg handling, TTY detection, picking the renderer, and process-level workspace cleanup. |
+| `src/args.ts` | CLI argument parsing (`--skip-claude`, `--keep-workspace`, `--turn-timeout`) and the usage text. |
+| `src/orchestrate.ts` | The demo's step/turn orchestration (`runDemo`), reported through the `Reporter` contract with no UI knowledge. |
+| `src/reporters.ts` | The `Reporter` contract, the plain (piped) and ink reporters, and the formatting helpers both share. |
+| `src/ui-state.ts` | The ink UI's types, render-clock constants, and the single pure reducer. |
+| `src/ui.tsx` | The ink (TTY) renderer: dashboard components and the App that drives the render clock. |
 | `src/workspace.ts` | Workspace setup/teardown, the isolation env, the `plasalid` runner (including the `plasalid setup` skill install), and the `claude` CLI preflight check. |
 | `src/claude-stream.ts` | Spawns `claude -p ... --output-format stream-json` (with a per-turn timeout) and turns its NDJSON event stream into activity/skill/plasalid-call events, coalesced live-streaming answer text, and the turn's final answer/duration. |
+| `src/verify-render-clock.ts` | Dev check (`npm run verify`) that the render clock bounds visible updates to the TICK cadence. |
 | `README.md` | This file. |

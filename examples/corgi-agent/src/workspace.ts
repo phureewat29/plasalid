@@ -28,20 +28,25 @@ export interface WorkspacePaths {
   cache: string;
   /** PLASALID_DB_PATH - sqlite db file (does not need to pre-exist). */
   dbPath: string;
+  /** Where `plasalid setup` installs the skill pack (.claude under cwd).
+   *  Created by setup, not pre-made by createWorkspace. */
+  skillDir: string;
 }
 
 /** Create a fresh workspace directory tree (mktemp-style). Pure filesystem
  *  setup - no env/PATH side effects (see buildEnv / writeBinShim). */
 export function createWorkspace(): WorkspacePaths {
   const root = mkdtempSync(join(tmpdir(), "corgi-agent-"));
+  const cwd = join(root, "cwd");
   const paths: WorkspacePaths = {
     root,
     home: join(root, "home"),
     data: join(root, "data"),
-    cwd: join(root, "cwd"),
+    cwd,
     bin: join(root, "bin"),
     cache: join(root, "cache"),
     dbPath: join(root, "db.sqlite"),
+    skillDir: join(cwd, ".claude"),
   };
   mkdirSync(paths.home, { recursive: true });
   mkdirSync(paths.data, { recursive: true });
@@ -144,19 +149,12 @@ export function runPlasalid(args: string[], env: NodeJS.ProcessEnv, cwd: string)
   return runCommand("plasalid", args, { cwd, env });
 }
 
-export interface InstallSkillResult extends RunResult {
-  /** Which subcommand actually produced this result. */
-  command: "setup";
-}
-
 /**
- * Install the plasalid skill pack so `claude` can discover the harness. The
- * root CLI's skill-pack installer is `plasalid setup`.
+ * Install the plasalid skill pack so `claude` can discover the harness, into
+ * `paths.skillDir`. The root CLI's skill-pack installer is `plasalid setup`.
  */
-export async function installSkill(paths: WorkspacePaths, env: NodeJS.ProcessEnv): Promise<InstallSkillResult> {
-  const dir = join(paths.cwd, ".claude");
-  const res = await runPlasalid(["setup", "--dir", dir, "--json"], env, paths.cwd);
-  return { ...res, command: "setup" };
+export function installSkill(paths: WorkspacePaths, env: NodeJS.ProcessEnv): Promise<RunResult> {
+  return runPlasalid(["setup", "--dir", paths.skillDir, "--json"], env, paths.cwd);
 }
 
 /** `plasalid vault add <pattern> --password-stdin --json`, piping the

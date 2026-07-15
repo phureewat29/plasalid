@@ -54,8 +54,8 @@ export interface ClaudeTurnOptions {
   /** e.g. "Bash(plasalid:*),Read,Write,Skill" */
   allowedTools: string;
   /** SIGTERM (then SIGKILL after 5s) the turn if it runs past this many
-   *  seconds. Defaults to DEFAULT_TURN_TIMEOUT_SEC. */
-  turnTimeoutSec?: number;
+   *  seconds. Always supplied by the caller (see the demo's --turn-timeout). */
+  turnTimeoutSec: number;
 }
 
 export type ClaudeStreamEvent =
@@ -82,8 +82,6 @@ export interface ClaudeTurnResult {
   stderrTail?: string[];
 }
 
-export const DEFAULT_TURN_TIMEOUT_SEC = 600;
-
 /** How long to buffer text_delta chunks before flushing a coalesced "delta"
  *  event - keeps the live-streaming UI update rate sane without waiting for
  *  the whole answer. */
@@ -105,9 +103,11 @@ function lastLines(s: string, n: number): string[] {
   return lines.slice(-n);
 }
 
-function bashCommand(input: unknown): string {
+/** Read a string-valued field off a tool_use's parsed input, or "" if absent
+ *  or not a string. */
+function stringField(input: unknown, key: string): string {
   if (!input || typeof input !== "object") return "";
-  const v = (input as Record<string, unknown>).command;
+  const v = (input as Record<string, unknown>)[key];
   return typeof v === "string" ? v : "";
 }
 
@@ -124,24 +124,17 @@ function skillNameFromInput(input: unknown): string | null {
   return null;
 }
 
-/** Build the "> ..." activity line for a single tool_use content block.
- *  Defensive: only Bash/Read/Write/Skill are expected (the demo's
- *  --allowedTools never grants anything else), but any other tool name
- *  still gets a bare "> ToolName" line instead of being silently dropped. */
-function activityLineForToolUse(name: unknown, input: unknown): string | null {
-  const params = (input && typeof input === "object" ? (input as Record<string, unknown>) : {}) as Record<
-    string,
-    unknown
-  >;
-  if (name === "Bash") {
-    const command = typeof params.command === "string" ? params.command : "";
-    return `> ${truncate(command, ACTIVITY_LINE_MAX)}`;
-  }
+/** Build the "> ..." activity line for a non-Bash tool_use content block
+ *  (Bash is handled inline so its command string is derived only once - see
+ *  the "assistant" case below). Read/Write/Skill are expected (the demo's
+ *  --allowedTools grants nothing else), but any other tool name still gets a
+ *  bare "> ToolName" line instead of being silently dropped. */
+function activityLineForNonBashToolUse(name: unknown, input: unknown): string | null {
   if (name === "Read") {
-    return `> Read ${String(params.file_path ?? "")}`;
+    return `> Read ${stringField(input, "file_path")}`;
   }
   if (name === "Write") {
-    return `> Write ${String(params.file_path ?? "")}`;
+    return `> Write ${stringField(input, "file_path")}`;
   }
   if (typeof name === "string" && name) return `> ${name}`;
   return null;
@@ -208,12 +201,18 @@ export function createStreamParser(onEvent: (event: ClaudeStreamEvent) => void):
           for (const block of content) {
             if (block && typeof block === "object" && (block as { type?: unknown }).type === "tool_use") {
               const b = block as { name?: unknown; input?: unknown };
-              const activityLine = activityLineForToolUse(b.name, b.input);
+              if (b.name === "Bash") {
+                // Derive the command string once, then feed it to BOTH the
+                // activity line and the plasalid-call signal.
+                const command = stringField(b.input, "command");
+                onEvent({ kind: "activity", line: `> ${truncate(command, ACTIVITY_LINE_MAX)}` });
+                if (command.trim().startsWith("plasalid")) onEvent({ kind: "plasalid-call" });
+                continue;
+              }
+              const activityLine = activityLineForNonBashToolUse(b.name, b.input);
               if (activityLine) onEvent({ kind: "activity", line: activityLine });
               if (b.name === "Skill") {
                 onEvent({ kind: "skill", skillName: skillNameFromInput(b.input) });
-              } else if (b.name === "Bash" && bashCommand(b.input).trim().startsWith("plasalid")) {
-                onEvent({ kind: "plasalid-call" });
               }
             }
           }
@@ -296,7 +295,7 @@ export function runClaudeTurn(
       stderrBuf += String(chunk);
     });
 
-    const turnTimeoutSec = opts.turnTimeoutSec ?? DEFAULT_TURN_TIMEOUT_SEC;
+    const turnTimeoutSec = opts.turnTimeoutSec;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;

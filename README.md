@@ -27,7 +27,7 @@ Your data is locked in bank silos. Tracking your net worth means logging into ha
 
 You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Plasalid gives you the primitives to turn that pile of PDFs into a clean, double-entry ledger: page rasterization, an ingest/commit pipeline, duplicate and correlation detection, and a full chart of accounts — all driven through a scriptable CLI, all stored in an encrypted local database.
 
-Plasalid itself has no built-in AI model, no API key to configure, no chat window. Instead, an agent CLI you already run with [Claude Code](https://claude.com/claude-code), `claude -p`, [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON.
+Plasalid itself has no built-in AI model, no API key to configure, no chat window. Instead, an agent CLI you already run with [Claude Code](https://claude.com/claude-code), [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON.
 
 Drives Plasalid to your statements, reads the pages, decides what each transaction is, and pushes structured rows back in through `plasalid ingest commit`. Plasalid's job is to be the deterministic, auditable ledger underneath.
 
@@ -72,18 +72,6 @@ Then drop some statements in:
 plasalid data          # opens ~/.plasalid/data in Finder/Explorer — drag PDFs in
 ```
 
-From here you have two paths:
-
-**Drive it yourself:**
-
-```bash
-plasalid ingest list                                  # see what's new
-plasalid ingest prepare <path>                         # unlock + get the statement document path
-# read the document yourself, build transaction JSON, then:
-plasalid ingest commit < transactions.ndjson
-plasalid questions list                               # resolve anything raised
-```
-
 **Let an agent drive it:**
 
 ```bash
@@ -92,17 +80,19 @@ plasalid setup --claude   # or --codex — installs a skill pack for your agent 
 
 Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
 
-### Try the demo
+### Example
 
-**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected Thai credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions — a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
+**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
 
 ```bash
-cd examples/corgi-agent && npm install && npm start
+cd examples/corgi-agent
+npm install
+npm start
 ```
 
-Requires the `claude` CLI (or run `npm start -- --skip-claude` for a plumbing-only check without it); nothing touches your real `~/.plasalid`.
+Requires the `claude` CLI (or run `npm start -- --skip-claude` for a plumbing-only check without it); nothing touches your real data.
 
-## The agent workflow
+## The Agent Workflow
 
 Every row becomes a *transaction*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (`setup`'s SKILL.md ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
 

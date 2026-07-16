@@ -1,15 +1,15 @@
 /**
  * Workspace setup/teardown for the corgi-agent demo.
- *
- * Mirrors the isolation pattern used by the root repo's scripts/integration.ts
- *: every run gets a throwaway
- * directory tree with its own HOME, sqlite db path, data dir, and cache dir,
- * so nothing ever touches a real ~/.plasalid installation. A `plasalid` bin
- * shim is written into the workspace and put on PATH so the demo (and the
- * `claude` CLI it drives) can just run `plasalid ...` like a normal install.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,7 +69,10 @@ export function writeBinShim(paths: WorkspacePaths, repoRoot: string): void {
 /** Build the isolation env: HOME/USERPROFILE, PLASALID_* paths, a blank
  *  encryption key (plain db, reproducible), NO_COLOR, and PATH prefixed with
  *  the workspace bin dir so `plasalid` resolves to the shim above. */
-export function buildEnv(paths: WorkspacePaths, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function buildEnv(
+  paths: WorkspacePaths,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   return {
     ...base,
     PATH: `${paths.bin}${base.PATH ? `:${base.PATH}` : ""}`,
@@ -86,7 +89,10 @@ export function buildEnv(paths: WorkspacePaths, base: NodeJS.ProcessEnv = proces
 /** Copy the bundled card statement into the workspace data dir (data/ttb/),
  *  same relative layout `plasalid ingest list` expects to discover. Returns
  *  the destination path. */
-export function placeStatement(paths: WorkspacePaths, sourcePdfPath: string): string {
+export function placeStatement(
+  paths: WorkspacePaths,
+  sourcePdfPath: string,
+): string {
   const destDir = join(paths.data, "ttb");
   mkdirSync(destDir, { recursive: true });
   const dest = join(destDir, "card-statement-2026-05.pdf");
@@ -145,7 +151,11 @@ export function buildPlasalid(repoRoot: string): Promise<RunResult> {
 
 /** Run a `plasalid` subcommand through the workspace bin shim (resolved via
  *  the isolation env's PATH). */
-export function runPlasalid(args: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<RunResult> {
+export function runPlasalid(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+): Promise<RunResult> {
   return runCommand("plasalid", args, { cwd, env });
 }
 
@@ -153,8 +163,15 @@ export function runPlasalid(args: string[], env: NodeJS.ProcessEnv, cwd: string)
  * Install the plasalid skill pack so `claude` can discover the harness, into
  * `paths.skillDir`. The root CLI's skill-pack installer is `plasalid setup`.
  */
-export function installSkill(paths: WorkspacePaths, env: NodeJS.ProcessEnv): Promise<RunResult> {
-  return runPlasalid(["setup", "--dir", paths.skillDir, "--json"], env, paths.cwd);
+export function installSkill(
+  paths: WorkspacePaths,
+  env: NodeJS.ProcessEnv,
+): Promise<RunResult> {
+  return runPlasalid(
+    ["setup", "--dir", paths.skillDir, "--json"],
+    env,
+    paths.cwd,
+  );
 }
 
 /** `plasalid vault add <pattern> --password-stdin --json`, piping the
@@ -165,11 +182,15 @@ export function vaultAddPassword(
   env: NodeJS.ProcessEnv,
   cwd: string,
 ): Promise<RunResult> {
-  return runCommand("plasalid", ["vault", "add", pattern, "--password-stdin", "--json"], {
-    cwd,
-    env,
-    input: password,
-  });
+  return runCommand(
+    "plasalid",
+    ["vault", "add", pattern, "--password-stdin", "--json"],
+    {
+      cwd,
+      env,
+      input: password,
+    },
+  );
 }
 
 /** Parse NDJSON stdout into per-line objects, ignoring blank lines. Invalid
@@ -191,8 +212,15 @@ export function parseNdjson(stdout: string): Record<string, unknown>[] {
 /** Best-effort check that the `claude` CLI resolves and runs at all (e.g.
  *  installed and on PATH), so the demo can fail with a friendly message up
  *  front instead of a raw ENOENT once a turn actually tries to spawn it. */
-export function checkClaudeCli(env: NodeJS.ProcessEnv, timeoutMs = 5000): boolean {
-  const res = spawnSync("claude", ["--version"], { env, timeout: timeoutMs, stdio: "ignore" });
+export function checkClaudeCli(
+  env: NodeJS.ProcessEnv,
+  timeoutMs = 5000,
+): boolean {
+  const res = spawnSync("claude", ["--version"], {
+    env,
+    timeout: timeoutMs,
+    stdio: "ignore",
+  });
   return res.error == null && res.status === 0;
 }
 

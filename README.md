@@ -80,9 +80,9 @@ plasalid setup --claude   # or --codex — installs a skill pack for your agent 
 
 Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
 
-### Example
+# Example Agent with Plasalid
 
-**Corgi Agent** — a personal-finance tracker agent for daily life. The example ships a real, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
+**Corgi Agent** — a demo personal-finance tracker agent for daily life using Plasalid as harness. The example ships a real, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
 
 ```bash
 cd examples/corgi-agent

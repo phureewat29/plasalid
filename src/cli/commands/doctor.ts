@@ -98,7 +98,7 @@ function skillPackCheck(): Check {
     return {
       name: "skill_pack",
       ok: false,
-      detail: `installed ${installed}, cli ${cli} — run plasalid setup --force`,
+      detail: `installed ${installed}, cli ${cli} — refresh the skill (plasalid setup --force) or upgrade the CLI (npm install -g plasalid@latest)`,
     };
   }
   return { name: "skill_pack", ok: true, detail: `installed ${installed}` };

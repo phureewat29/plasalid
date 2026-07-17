@@ -17,15 +17,15 @@ import {
  * and maps thrown errors onto exit codes.
  */
 
-export type InstallKind = "claude" | "codex";
+type InstallKind = "claude" | "codex";
 
-export interface InstalledTarget {
+interface InstalledTarget {
   kind: InstallKind;
   path: string;
   version: string;
 }
 
-export interface InstallResult {
+interface InstallResult {
   installed: InstalledTarget[];
 }
 

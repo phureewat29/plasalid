@@ -50,7 +50,7 @@ beforeAll(() => {
   baseEnv.PLASALID_CACHE_DIR = join(tmpDir, "cache");
 
   // Minimal config.json so `doctor`'s config_exists check is true and
-  // `config show` / `context path` resolve against the redirected HOME.
+  // `config show` resolves against the redirected HOME.
   mkdirSync(join(tmpDir, ".plasalid"), { recursive: true });
   writeFileSync(
     join(tmpDir, ".plasalid", "config.json"),
@@ -162,7 +162,7 @@ describe("system CLI integration (subprocess)", () => {
   );
 
   it(
-    "status net_worth + report period reflect directly-seeded ledger data",
+    "status net_worth + report reflect directly-seeded ledger data",
     async () => {
       const raw = new Database(dbPath);
       raw.pragma("foreign_keys = ON");
@@ -203,7 +203,7 @@ describe("system CLI integration (subprocess)", () => {
         net_worth: 800,
       });
 
-      const period = await runCli(["report", "period", "--from", "2026-01-01", "--to", "2026-01-31", "--json"]);
+      const period = await runCli(["report", "--from", "2026-01-01", "--to", "2026-01-31", "--json"]);
       expect(period.code).toBe(0);
       expect(parseOne(period.stdout)).toMatchObject({
         from: "2026-01-01",

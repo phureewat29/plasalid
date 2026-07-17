@@ -13,7 +13,6 @@ import {
   deleteTransaction,
   bulkRecategorize,
   findDuplicateTransactions,
-  findCorrelatedTransactions,
   countTransactions,
   countTransactionsBySourceFile,
   updateTransactionMeta,
@@ -260,25 +259,6 @@ describe("findDuplicateTransactions", () => {
     const groups = findDuplicateTransactions(db);
     expect(groups).toHaveLength(1);
     expect(groups[0].map((r) => r.id).sort()).toEqual(["tx:dup1", "tx:dup2"]);
-  });
-});
-
-describe("findCorrelatedTransactions", () => {
-  it("pairs same-amount/currency transactions across disjoint account pairs", () => {
-    const db = freshDb();
-    insertTransaction(db, tf({ id: "tx:x", debit_account_id: "asset:cash", credit_account_id: "asset:bank", amount: 10000, date: "2026-06-01" }));
-    insertTransaction(db, tf({ id: "tx:y", debit_account_id: "expense:food", credit_account_id: "expense:transport", amount: 10000, date: "2026-06-02" }));
-    const pairs = findCorrelatedTransactions(db);
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0].day_gap).toBe(1);
-    expect([pairs[0].a.id, pairs[0].b.id].sort()).toEqual(["tx:x", "tx:y"]);
-  });
-
-  it("skips overlapping (shared-account) pairs", () => {
-    const db = freshDb();
-    insertTransaction(db, tf({ id: "tx:x", debit_account_id: "asset:cash", credit_account_id: "asset:bank", amount: 10000, date: "2026-06-01" }));
-    insertTransaction(db, tf({ id: "tx:y", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 10000, date: "2026-06-02" }));
-    expect(findCorrelatedTransactions(db)).toHaveLength(0);
   });
 });
 

@@ -29,7 +29,7 @@ export function AGENTS_MD_BLOCK(version: string): string {
 
 **Clarify:** \`questions list\`; similar_accounts -> \`accounts merge\`; uncategorized -> \`transactions recategorize\` + \`merchants set-default\`; unknown_merchant -> \`merchants upsert\`; currency_mismatch -> re-post as a linked conversion pair; answer with \`questions answer <id> --answer ...\` (\`--also\` for siblings), or \`questions defer\`. Durable prefs/rules: \`notes add --content ... --category preference\` (check \`notes list\` first).
 
-**Report:** net worth via \`plasalid status --json\` (\`net_worth\` block); \`report period --from --to\`, \`accounts tree\`, \`ledger\`, \`analyze duplicates|correlations\`.
+**Report:** net worth via \`plasalid status --json\` (\`net_worth\` block); \`report --from --to\`, \`accounts tree\`, \`transactions list\`, \`transactions dedupe\`.
 
 If a fuller skill is installed at \`.claude/skills/plasalid/\`, prefer its \`references/\` docs for exact flags and schemas.
 ${CODEX_END_MARKER}`;

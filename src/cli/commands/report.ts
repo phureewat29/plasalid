@@ -18,11 +18,9 @@ function printKeyValues(mode: OutputMode, rows: [string, string | number][]): vo
 }
 
 export function registerReport(program: Command): void {
-  const report = program.command("report").description("Generate financial reports");
-
-  report
-    .command("period")
-    .description("Show a report over a date range")
+  program
+    .command("report")
+    .description("Income / expenses / net over a date range (net worth: plasalid status)")
     .option("--from <date>", "start date")
     .option("--to <date>", "end date")
     .action(

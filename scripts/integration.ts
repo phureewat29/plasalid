@@ -64,23 +64,21 @@ const READ_CASES: Case[] = [
   { label: "ingest list", args: ["ingest", "list"] },
   { label: "files list", args: ["files", "list"] },
   { label: "vault list", args: ["vault", "list"] },
-  { label: "ledger", args: ["ledger"] },
-  { label: "ledger --group", args: ["ledger", "--group"] },
+  { label: "transactions list", args: ["transactions", "list"] },
+  { label: "transactions list --group", args: ["transactions", "list", "--group"] },
+  { label: "transactions dedupe", args: ["transactions", "dedupe"] },
   { label: "accounts list", args: ["accounts", "list"] },
   { label: "accounts tree", args: ["accounts", "tree"] },
   { label: "merchants list", args: ["merchants", "list"] },
   { label: "questions list", args: ["questions", "list"] },
   {
-    label: "report period",
-    args: ["report", "period", "--from", "2026-01-01", "--to", "2026-01-31"],
+    label: "report",
+    args: ["report", "--from", "2026-01-01", "--to", "2026-01-31"],
   },
-  { label: "analyze duplicates", args: ["analyze", "duplicates"] },
-  { label: "analyze correlations", args: ["analyze", "correlations"] },
   { label: "notes list", args: ["notes", "list"] },
-  { label: "context show", args: ["context", "show"] },
   {
-    label: "ledger show tx:nonexistent",
-    args: ["ledger", "show", "tx:nonexistent"],
+    label: "transactions show tx:nonexistent",
+    args: ["transactions", "show", "tx:nonexistent"],
     expectExit: 5,
   },
   {
@@ -415,21 +413,21 @@ function stepIngestDone(ctx: Ctx): void {
   assert(rows.length === 1, `expected 1 scanned file, got ${rows.length}`);
 }
 
-function stepTransactionsUpdateLedgerShow(ctx: Ctx): void {
+function stepTransactionsUpdateShow(ctx: Ctx): void {
   const res = shOk(ctx, ["transactions", "update", ctx.groomingId, "--description", "updated by integration"]);
   const result = parseOne(res.stdout);
   assert(result.updated === true, `transactions update did not report updated:true: ${JSON.stringify(result)}`);
 
-  const show = shOk(ctx, ["ledger", "show", ctx.groomingId]);
+  const show = shOk(ctx, ["transactions", "show", ctx.groomingId]);
   const detail = parseOne(show.stdout);
   assert(
     detail.description === "updated by integration",
-    `ledger show did not reflect the update: ${JSON.stringify(detail)}`,
+    `transactions show did not reflect the update: ${JSON.stringify(detail)}`,
   );
 }
 
 /**
- * `transactions add` (strict, existing accounts) + `analyze duplicates --auto-merge`.
+ * `transactions add` (strict, existing accounts) + `transactions dedupe --auto-merge`.
  *
  * Adapted from the literal spec: `autoMergeStrictDuplicateTransactions`
  * (src/scanner/dedup-transactions.ts) only merges a duplicate group whose
@@ -489,7 +487,7 @@ function stepTransactionsAddAutoMerge(ctx: Ctx): void {
 
   const before = parseOne(shOk(ctx, ["status"]).stdout).counts.transactions;
 
-  const merge = shOk(ctx, ["analyze", "duplicates", "--auto-merge"]);
+  const merge = shOk(ctx, ["transactions", "dedupe", "--auto-merge"]);
   const mergeObjs = parseNdjson(merge.stdout);
   const mergeSummary = mergeObjs.find((o) => o.type === "summary");
   assert(mergeSummary?.auto_merged === 1, `expected exactly 1 auto-merge, got ${JSON.stringify(mergeSummary)}`);
@@ -637,8 +635,8 @@ const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
   { label: "lifecycle: ingest re-commit is idempotent", fn: stepIngestReCommitDuplicate },
   { label: "lifecycle: questions list + answer", fn: stepQuestions },
   { label: "lifecycle: ingest done (cache cleanup)", fn: stepIngestDone },
-  { label: "lifecycle: transactions update + ledger show", fn: stepTransactionsUpdateLedgerShow },
-  { label: "lifecycle: transactions add (strict) + analyze --auto-merge", fn: stepTransactionsAddAutoMerge },
+  { label: "lifecycle: transactions update + show", fn: stepTransactionsUpdateShow },
+  { label: "lifecycle: transactions add (strict) + dedupe --auto-merge", fn: stepTransactionsAddAutoMerge },
   { label: "lifecycle: accounts adjust (closing balance)", fn: stepAccountsAdjust },
   { label: "lifecycle: accounts create + merge + delete", fn: stepAccountsCreateMergeDelete },
   { label: "lifecycle: transactions delete", fn: stepTransactionsDelete },

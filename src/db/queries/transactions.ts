@@ -58,11 +58,11 @@ export interface TransactionRow {
 }
 
 /** A queried transaction plus every member of its group (self included). */
-export interface TransactionDetail extends TransactionRow {
+interface TransactionDetail extends TransactionRow {
   group?: TransactionRow[];
 }
 
-export type ValidateTransactionResult = { ok: true } | { ok: false; reason: string };
+type ValidateTransactionResult = { ok: true } | { ok: false; reason: string };
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -165,7 +165,7 @@ export function insertTransaction(
   return { id, duplicate: result.changes === 0 };
 }
 
-export interface InsertLinkedTransactionsResult {
+interface InsertLinkedTransactionsResult {
   results: { id: string; duplicate: boolean }[];
   group_id: string;
 }
@@ -316,11 +316,11 @@ export interface BulkRecategorizeFilter {
   accountId: string;
 }
 
-export interface BulkRecategorizeSet {
+interface BulkRecategorizeSet {
   accountId: string;
 }
 
-export interface BulkRecategorizeResult {
+interface BulkRecategorizeResult {
   affected: number;
   /** Rows skipped because moving them would make debit == credit. */
   skipped_self_transaction: number;
@@ -405,7 +405,7 @@ export interface DuplicateTransactionRow {
   credit_account_name: string | null;
 }
 
-export interface FindDuplicateTransactionsOptions {
+interface FindDuplicateTransactionsOptions {
   /** Day slack when grouping by date. 0 = same-day only. Default 2. */
   toleranceDays?: number;
   /** Skip transactions below this amount (minor units). */
@@ -499,83 +499,6 @@ function proximityComponents(
   return [...comps.values()];
 }
 
-export interface CorrelatedTransactionPeer {
-  id: string;
-  date: string;
-  description: string;
-  debit_account_id: string;
-  credit_account_id: string;
-  debit_account_name: string | null;
-  credit_account_name: string | null;
-}
-
-export interface CorrelatedTransactionPair {
-  amount: number;
-  currency: string;
-  day_gap: number;
-  a: CorrelatedTransactionPeer;
-  b: CorrelatedTransactionPeer;
-}
-
-/**
- * Internal-transaction detector: surface pairs of same amount + currency whose
- * account pairs are DISJOINT (share no account), within a 3-day tolerance —
- * the classic "one money movement landed on two different statements"
- * pattern. Overlapping pairs are duplicates, not correlations, and are skipped.
- */
-export function findCorrelatedTransactions(db: Database.Database): CorrelatedTransactionPair[] {
-  const toleranceDays = 3;
-
-  const rows = db
-    .prepare(
-      `SELECT t.id, t.date, t.description, t.amount, t.currency,
-              t.debit_account_id, t.credit_account_id,
-              da.name AS debit_account_name, ca.name AS credit_account_name
-         FROM transactions t
-         LEFT JOIN accounts da ON da.id = t.debit_account_id
-         LEFT JOIN accounts ca ON ca.id = t.credit_account_id`,
-    )
-    .all() as (CorrelatedTransactionPeer & { amount: number; currency: string })[];
-
-  const buckets = new Map<string, (CorrelatedTransactionPeer & { amount: number; currency: string })[]>();
-  for (const r of rows) {
-    const key = `${r.amount}|${r.currency}`;
-    const arr = buckets.get(key) ?? [];
-    arr.push(r);
-    buckets.set(key, arr);
-  }
-
-  const pairs: CorrelatedTransactionPair[] = [];
-  for (const bucket of buckets.values()) {
-    if (bucket.length < 2) continue;
-    bucket.sort((x, y) => x.date.localeCompare(y.date));
-    for (let i = 0; i < bucket.length; i++) {
-      for (let j = i + 1; j < bucket.length; j++) {
-        const a = bucket[i];
-        const b = bucket[j];
-        const gap = dayDiff(a.date, b.date);
-        if (gap > toleranceDays) break;
-        const aSet = new Set([a.debit_account_id, a.credit_account_id]);
-        if (aSet.has(b.debit_account_id) || aSet.has(b.credit_account_id)) continue;
-        pairs.push({ amount: a.amount, currency: a.currency, day_gap: gap, a: peer(a), b: peer(b) });
-      }
-    }
-  }
-  return pairs;
-}
-
-function peer(r: CorrelatedTransactionPeer): CorrelatedTransactionPeer {
-  return {
-    id: r.id,
-    date: r.date,
-    description: r.description,
-    debit_account_id: r.debit_account_id,
-    credit_account_id: r.credit_account_id,
-    debit_account_name: r.debit_account_name,
-    credit_account_name: r.credit_account_name,
-  };
-}
-
 export function countTransactions(db: Database.Database): number {
   return (db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get() as { n: number }).n;
 }
@@ -632,7 +555,7 @@ function accountExists(db: Database.Database, id: string): boolean {
 }
 
 /** Whole-day distance between two ISO dates; +Infinity on unparseable input. */
-export function dayDiff(a: string, b: string): number {
+function dayDiff(a: string, b: string): number {
   const aDate = Date.parse(a);
   const bDate = Date.parse(b);
   if (Number.isNaN(aDate) || Number.isNaN(bDate)) return Number.POSITIVE_INFINITY;

@@ -47,7 +47,7 @@ Drives Plasalid to your statements, reads the pages, decides what each transacti
 ### Local-first, encrypted, and inspectable
 
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
-* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `ledger`, `ledger show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
@@ -126,16 +126,13 @@ plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail
 plasalid files          # Browse scanned files (list / show / drop)
 plasalid vault          # Manage file-password patterns for encrypted statements
 
-plasalid transactions   # Write transactions: add / update / delete / recategorize
-plasalid ledger         # Browse the transaction ledger (list / show)
+plasalid transactions   # Transactions: list / show / add / update / delete / recategorize / dedupe
 plasalid accounts       # Manage the chart of accounts
 plasalid merchants      # Manage merchants and their default accounts
 plasalid questions      # List, answer, and defer open questions
 
-plasalid report         # Period reports (net worth: plasalid status)
-plasalid analyze        # Find duplicate and correlated transactions
+plasalid report         # Income / expenses / net over a date range (net worth: plasalid status)
 plasalid notes          # Manage freeform notes
-plasalid context        # Show the harness context bundle / its path
 
 plasalid data           # Open the data folder in your OS file explorer (alias: open)
 ```
@@ -180,7 +177,7 @@ Plasalid stores everything in `~/.plasalid/`:
 ```
 ~/.plasalid/
   config.json    # locale, currency, paths, encryption key fingerprint (0600 permissions)
-  context.md     # persistent freeform context an agent can read (plasalid context show)
+  context.md     # persistent freeform context an agent can read (path shown as context_path in plasalid config show)
   db.sqlite      # encrypted SQLite database
   data/          # drop any PDFs here (subfolders allowed)
   cache/         # scratch space for rasterized/decrypted pages handed to an agent

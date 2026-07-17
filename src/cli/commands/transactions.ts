@@ -1,14 +1,31 @@
 import type { Command } from "commander";
 import { randomUUID } from "crypto";
 import { getDb } from "../../db/connection.js";
-import { emit, fail, readStdinToEnd, requireYes, runAction } from "../output.js";
+import {
+  currentMode,
+  emit,
+  emitList,
+  emitSummary,
+  fail,
+  readStdinToEnd,
+  requireYes,
+  runAction,
+  type Column,
+} from "../output.js";
 import {
   insertTransaction,
   deleteTransaction,
   updateTransactionMeta,
   bulkRecategorize,
+  listTransactions,
+  getTransaction,
+  findDuplicateTransactions,
   type BulkRecategorizeFilter,
   type UpdateTransactionMetaFields,
+  type ListTransactionsOptions,
+  type TransactionRow,
+  type TransactionCluster,
+  type DuplicateTransactionRow,
 } from "../../db/queries/transactions.js";
 import { findAccountById } from "../../db/queries/account-balance.js";
 import {
@@ -17,18 +34,172 @@ import {
   type TransactionCommitContext,
   type RawTransactionInput,
 } from "../../scanner/commit-transaction.js";
-import { toMinorUnits } from "../../currency.js";
+import { autoMergeStrictDuplicateTransactions } from "../../scanner/dedup-transactions.js";
+import { fromMinorUnits, toMinorUnits } from "../../currency.js";
+import { applyRedaction } from "../../privacy/redactor.js";
+import { todayIso } from "../../lib/date.js";
 
 /**
- * `transactions` — the write command for the transaction ledger. `transactions add`
- * creates a transaction (strict by default: both accounts must already exist;
- * `--resolve` fuzzy-resolves account/merchant hints and raises questions).
- * Remaining subcommands cover bulk recategorize, metadata edits, and deletion.
+ * `transactions` — the full command surface over the TigerBeetle-style
+ * `transactions` table. Read: `transactions list` (bare list with filters) and
+ * `transactions show <tx:id>` (one transaction with its linked group). Write:
+ * `add` (strict by default; `--resolve` fuzzy-resolves account/merchant hints
+ * and raises questions), `update`, `delete`, `recategorize` (bulk re-point), and
+ * `dedupe` (find, optionally auto-merge, likely duplicates). Amounts are stored
+ * as integer minor units and rendered/emitted as decimals here (the CLI
+ * boundary).
  */
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+// Read view (list / show)
+
+// Free-text fields on a transaction that may carry PII. Ids, amount, currency, and
+// dates are structured data the agent needs verbatim and are left intact.
+const REDACT_FIELDS = [
+  "description",
+  "raw_descriptor",
+  "merchant_name",
+  "debit_account_name",
+  "credit_account_name",
+] as const;
+
+/** A transaction row with its stored minor-unit amount converted to a decimal. */
+type TransactionView = Omit<TransactionRow, "amount"> & { amount: number };
+
+function present(row: TransactionRow): TransactionView {
+  return { ...row, amount: fromMinorUnits(row.amount, row.currency) };
 }
+
+const LIST_COLUMNS: Column<TransactionView>[] = [
+  { header: "ID", value: (t) => t.id },
+  { header: "Date", value: (t) => t.date },
+  { header: "Description", value: (t) => t.description },
+  { header: "Debit", value: (t) => t.debit_account_name ?? t.debit_account_id },
+  { header: "Credit", value: (t) => t.credit_account_name ?? t.credit_account_id },
+  { header: "Amount", value: (t) => t.amount.toFixed(2), align: "right" },
+  { header: "Currency", value: (t) => t.currency },
+];
+
+function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) fail("USAGE", `${flag} must be a number, got "${value}"`);
+  return n;
+}
+
+interface ListOpts {
+  account?: string;
+  from?: string;
+  to?: string;
+  query?: string;
+  limit?: string;
+  group?: boolean;
+  redact?: boolean;
+}
+
+function runList(opts: ListOpts): void {
+  const db = getDb();
+  const listOpts: Omit<ListTransactionsOptions, "group"> = {};
+  if (opts.account) listOpts.account = opts.account;
+  if (opts.from) listOpts.from = opts.from;
+  if (opts.to) listOpts.to = opts.to;
+  if (opts.query) listOpts.query = opts.query;
+  const limit = parseOptionalNumber(opts.limit, "--limit");
+  if (limit !== undefined) listOpts.limit = limit;
+
+  if (opts.group) {
+    const clusters = listTransactions(db, { ...listOpts, group: true });
+    emitClusters(clusters, !!opts.redact);
+    return;
+  }
+
+  const rows = applyRedaction(
+    listTransactions(db, listOpts).map(present),
+    !!opts.redact,
+    REDACT_FIELDS,
+  );
+  emitList(rows, LIST_COLUMNS);
+}
+
+function emitClusters(clusters: TransactionCluster[], redact: boolean): void {
+  const view = clusters.map((c) => ({
+    group_id: c.group_id,
+    transactions: applyRedaction(c.transactions.map(present), redact, REDACT_FIELDS),
+  }));
+  const mode = currentMode();
+  if (mode.json) {
+    for (const c of view) emit(c);
+    return;
+  }
+  for (const c of view) {
+    process.stdout.write(`${c.group_id ?? "(ungrouped)"}\n`);
+    for (const t of c.transactions) {
+      process.stdout.write(
+        `  ${t.id}  ${t.date}  ${t.description}  ${t.debit_account_name ?? t.debit_account_id} -> ${t.credit_account_name ?? t.credit_account_id}  ${t.amount.toFixed(2)} ${t.currency}\n`,
+      );
+    }
+  }
+}
+
+function runShow(id: string, opts: { redact?: boolean }): void {
+  const db = getDb();
+  const detail = getTransaction(db, id);
+  if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
+
+  const view: Record<string, unknown> = present(detail);
+  if (detail.group) view.group = detail.group.map(present);
+  emit(applyRedaction(view, !!opts.redact, REDACT_FIELDS));
+}
+
+// Dedupe (find / auto-merge duplicates)
+
+function accountsLabel(
+  debitName: string | null,
+  debitId: string,
+  creditName: string | null,
+  creditId: string,
+): string {
+  return `${debitName ?? debitId} -> ${creditName ?? creditId}`;
+}
+
+// Presentation rows: minor-unit amounts converted to decimals at the CLI boundary.
+interface DuplicateRow extends Omit<DuplicateTransactionRow, "amount"> {
+  amount: number;
+  group: number;
+}
+
+const DUPLICATE_COLUMNS: Column<DuplicateRow>[] = [
+  { header: "group", value: (r) => String(r.group), align: "right" },
+  { header: "id", value: (r) => r.id },
+  { header: "date", value: (r) => r.date },
+  { header: "amount", value: (r) => r.amount.toFixed(2), align: "right" },
+  { header: "currency", value: (r) => r.currency },
+  { header: "description", value: (r) => r.description },
+  { header: "accounts", value: (r) => accountsLabel(r.debit_account_name, r.debit_account_id, r.credit_account_name, r.credit_account_id) },
+  { header: "source_file_id", value: (r) => r.source_file_id ?? "" },
+  { header: "merchant_id", value: (r) => r.merchant_id ?? "" },
+];
+
+function runDedupe(opts: { autoMerge?: boolean }): void {
+  const db = getDb();
+
+  let autoMerged: number | undefined;
+  if (opts.autoMerge) {
+    autoMerged = autoMergeStrictDuplicateTransactions(db).merged;
+  }
+
+  const groups = findDuplicateTransactions(db);
+  const rows: DuplicateRow[] = groups.flatMap((group, i) =>
+    group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
+  );
+
+  emitList(rows, DUPLICATE_COLUMNS);
+  emitSummary({
+    groups: groups.length,
+    ...(autoMerged !== undefined ? { auto_merged: autoMerged } : {}),
+  });
+}
+
+// Write path (add)
 
 interface AddTransactionOpts {
   resolve?: boolean;
@@ -181,7 +352,25 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
 export function registerTransactions(program: Command): void {
   const transactions = program
     .command("transactions")
-    .description("Write transactions: add / update / delete / recategorize");
+    .description("Transactions: list / show / add / update / delete / recategorize / dedupe");
+
+  transactions
+    .command("list")
+    .description("List transactions with optional filters")
+    .option("--account <id>", "filter by account id (matches either side)")
+    .option("--from <date>", "filter from date")
+    .option("--to <date>", "filter to date")
+    .option("--query <text>", "filter by search text")
+    .option("--limit <n>", "maximum number of results")
+    .option("--group", "fold linked transactions into their group clusters")
+    .option("--redact", "mask PII in free-text fields (descriptions, merchant/account names)")
+    .action(runAction((opts: ListOpts) => runList(opts)));
+
+  transactions
+    .command("show <id>")
+    .description("Show a transaction's details (with its linked group when present)")
+    .option("--redact", "mask PII in free-text fields (description, merchant/account names)")
+    .action(runAction((id: string, opts: { redact?: boolean }) => runShow(id, opts)));
 
   transactions
     .command("add")
@@ -194,36 +383,6 @@ export function registerTransactions(program: Command): void {
     .option("--description <text>", "transaction description")
     .option("--merchant-name <name>", "merchant name to upsert and link")
     .action(runAction((opts: AddTransactionOpts) => addTransaction(opts)));
-
-  transactions
-    .command("recategorize")
-    .description("Bulk re-point one account's transactions onto another")
-    .option("--set-account <id>", "account id to move matching transactions to")
-    .option("--filter-account <id>", "account whose transactions are moved (required)")
-    .action(
-      runAction(
-        (opts: { setAccount?: string; filterAccount?: string }) => {
-          if (!opts.setAccount) fail("USAGE", "--set-account is required");
-          if (!opts.filterAccount) {
-            fail("USAGE", "--filter-account is required (recategorize moves that account's transactions)");
-          }
-          const db = getDb();
-          const filter: BulkRecategorizeFilter = { accountId: opts.filterAccount };
-
-          let result;
-          try {
-            result = bulkRecategorize(db, filter, { accountId: opts.setAccount });
-          } catch (err) {
-            fail("INVALID", (err as Error).message);
-          }
-          emit({
-            affected: result.affected,
-            skipped_self_transaction: result.skipped_self_transaction,
-            sample_transaction_ids: result.sample_transaction_ids,
-          });
-        },
-      ),
-    );
 
   transactions
     .command("update <id>")
@@ -264,4 +423,40 @@ export function registerTransactions(program: Command): void {
         emit({ transaction_id: id, deleted: true });
       }),
     );
+
+  transactions
+    .command("recategorize")
+    .description("Bulk re-point one account's transactions onto another")
+    .option("--set-account <id>", "account id to move matching transactions to")
+    .option("--filter-account <id>", "account whose transactions are moved (required)")
+    .action(
+      runAction(
+        (opts: { setAccount?: string; filterAccount?: string }) => {
+          if (!opts.setAccount) fail("USAGE", "--set-account is required");
+          if (!opts.filterAccount) {
+            fail("USAGE", "--filter-account is required (recategorize moves that account's transactions)");
+          }
+          const db = getDb();
+          const filter: BulkRecategorizeFilter = { accountId: opts.filterAccount };
+
+          let result;
+          try {
+            result = bulkRecategorize(db, filter, { accountId: opts.setAccount });
+          } catch (err) {
+            fail("INVALID", (err as Error).message);
+          }
+          emit({
+            affected: result.affected,
+            skipped_self_transaction: result.skipped_self_transaction,
+            sample_transaction_ids: result.sample_transaction_ids,
+          });
+        },
+      ),
+    );
+
+  transactions
+    .command("dedupe")
+    .description("Find likely duplicate transactions (optionally auto-merge them)")
+    .option("--auto-merge", "automatically merge detected duplicates")
+    .action(runAction((opts: { autoMerge?: boolean }) => runDedupe(opts)));
 }

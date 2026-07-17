@@ -8,6 +8,7 @@ import {
   type PlasalidConfig,
 } from "../../config.js";
 import { generateKey } from "../../db/encryption.js";
+import { getContextPath } from "../../context.js";
 import { currentMode, emit, fail, readSecretFromStdin, runAction, type OutputMode } from "../output.js";
 
 type RedactedConfig = Omit<PlasalidConfig, "dbEncryptionKey"> & {
@@ -17,12 +18,18 @@ type RedactedConfig = Omit<PlasalidConfig, "dbEncryptionKey"> & {
 // The only secret left in the config after the harness cut is dbEncryptionKey
 // (the provider API keys are gone). Surface it as {set, fingerprint} rather than
 // printing the passphrase verbatim into shells, logs, and bug reports.
-export function redactConfig(cfg: PlasalidConfig): RedactedConfig {
+function redactConfig(cfg: PlasalidConfig): RedactedConfig {
   const key = cfg.dbEncryptionKey;
   const dbEncryptionKey = key
     ? { set: true, fingerprint: keyFingerprint(key) }
     : { set: false };
   return { ...cfg, dbEncryptionKey };
+}
+
+/** The `config show` payload: the redacted config plus the resolved context.md
+ *  path (surfaced here since the `context` noun was retired). */
+function showPayload(): Record<string, unknown> {
+  return { ...redactConfig(appConfig), context_path: getContextPath() };
 }
 
 /** Flatten a (possibly one-level-nested) object into label/value rows for human display. */
@@ -40,7 +47,7 @@ function flattenRows(obj: Record<string, unknown>): [string, string][] {
   return rows;
 }
 
-export function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
+function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
   if (mode.json) {
     emit(data);
     return;
@@ -150,7 +157,7 @@ export function registerConfig(program: Command): void {
         if (hasConvergeFlags(opts)) {
           await convergeConfig(opts);
         } else {
-          printConfig(currentMode(), redactConfig(appConfig));
+          printConfig(currentMode(), showPayload());
         }
       }),
     );
@@ -160,7 +167,7 @@ export function registerConfig(program: Command): void {
     .description("Show the current configuration")
     .action(
       runAction(async () => {
-        printConfig(currentMode(), redactConfig(appConfig));
+        printConfig(currentMode(), showPayload());
       }),
     );
 }

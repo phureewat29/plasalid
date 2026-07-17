@@ -18,8 +18,7 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 - \`plasalid status [--redact]\` — config, db, ledger counts, net worth. Also the no-arg default (\`plasalid\`).
 - \`plasalid doctor\` — environment checks; exit 3 when a hard check fails.
 - \`plasalid config [--data-dir <dir>] [--db <path>] [--generate-key | --encryption-key-stdin] [--locale <l>] [--currency <c>] [--user-name <n>]\` — idempotent configure/init (first run initializes, later runs update).
-- \`plasalid config show\` — print the current configuration (bare \`plasalid config\` with no flags also shows).
-- \`plasalid context show\` · \`plasalid context path\`.
+- \`plasalid config show\` — print the current configuration, including \`context_path\` (bare \`plasalid config\` with no flags also shows).
 - \`plasalid setup [--claude] [--codex] [--global] [--dir <path>] [--force] [--print]\` — install/refresh this skill pack for an agent CLI.
 - \`plasalid data\` — open the data folder in the OS file explorer (alias: \`open\`).
 
@@ -36,12 +35,13 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 - \`plasalid files list [--status new|pending|scanned|failed]\` · \`plasalid files show <sf:id>\` · \`plasalid files drop <sf:id> --yes\` (cascades transactions + questions).
 - \`plasalid vault add <pattern> --password-stdin\` · \`plasalid vault list\` · \`plasalid vault rm <patternOrId> --yes\`.
 
-## Transactions & ledger
+## Transactions
 
+- \`plasalid transactions list [--account <id>] [--from <d>] [--to <d>] [--query <t>] [--limit <n>] [--group] [--redact]\` — list transactions (\`--account\` matches either side; \`--group\` folds linked transactions into clusters) · \`plasalid transactions show <tx:id> [--redact]\` — one transaction with its linked group.
 - \`plasalid transactions add [--resolve] --debit-account <id> --credit-account <id> --amount <n> [--date <d>] [--description <t>] [--merchant-name <n>]\` — add one transaction; strict by default (unknown account ids fail with exit 5), \`--resolve\` fuzzy-resolves account/merchant hints and raises questions. \`--description\` defaults to the merchant name or "Manual entry". Also accepts a JSON transaction object on stdin.
-- \`plasalid transactions recategorize --set-account <id> --filter-account <id>\` — bulk re-point matching transactions off \`--filter-account\` onto \`--set-account\` (both required).
 - \`plasalid transactions update <tx:id> [--date <d>] [--description <t>] [--merchant <id>]\` (>= 1 flag required) · \`plasalid transactions delete <tx:id> --yes\`.
-- \`plasalid ledger [--account <id>] [--from <d>] [--to <d>] [--query <t>] [--limit <n>] [--group] [--redact]\` — list transactions (\`--account\` matches either side; \`--group\` folds linked transactions into clusters) · \`plasalid ledger show <tx:id> [--redact]\` — one transaction with its linked group.
+- \`plasalid transactions recategorize --set-account <id> --filter-account <id>\` — bulk re-point matching transactions off \`--filter-account\` onto \`--set-account\` (both required).
+- \`plasalid transactions dedupe [--auto-merge]\` — group likely duplicate transactions (same amount + directional account pair within a few days); \`--auto-merge\` collapses strict file-sourced duplicates.
 
 ## Accounts
 
@@ -58,11 +58,10 @@ Destructive commands additionally require \`--yes\`. Secrets are read from stdin
 - \`plasalid merchants upsert --name <canonical> [--alias <a>] [--default-account <id>]\`.
 - \`plasalid merchants set-default --merchant <id> [--account <id> | --clear]\` — exactly one of \`--account\`/\`--clear\` required; \`--clear\` removes the default.
 
-## Questions, reports, analysis, notes
+## Questions, reports, notes
 
 - \`plasalid questions list [--batch <sc:id>] [--include-deferred] [--redact]\`.
 - \`plasalid questions answer <cn:id> --answer <t> [--also <id,id>]\` · \`plasalid questions defer <cn:id> [--days <n>]\`.
-- Net worth comes from \`plasalid status --json\` (the \`net_worth\` block). \`plasalid report period --from <d> --to <d>\` — income/expenses/net over a range.
-- \`plasalid analyze duplicates [--auto-merge]\` — likely duplicate transactions · \`plasalid analyze correlations\` — internal-transaction pairs.
+- Net worth comes from \`plasalid status --json\` (the \`net_worth\` block). \`plasalid report --from <d> --to <d>\` — income/expenses/net over a range.
 - \`plasalid notes list\` · \`plasalid notes add --content <t> [--category <c>]\` · \`plasalid notes rm <id> --yes\`.
 `;

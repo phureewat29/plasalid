@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
 
-// ledger.integration.test.ts lives in src/cli/commands/ -> repo root is three
-// levels up.
+// transactions.integration.test.ts lives in src/cli/commands/ -> repo root is
+// three levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 interface CliResult {
@@ -77,7 +77,7 @@ function parseOne(stdout: string): any {
   return JSON.parse(lines[0]);
 }
 
-describe("ledger CLI integration (subprocess)", () => {
+describe("transactions CLI integration (subprocess)", () => {
   it(
     "accounts create -> list -> tree round-trip includes rollup math with one recorded transaction",
     async () => {
@@ -262,10 +262,85 @@ describe("ledger CLI integration (subprocess)", () => {
       expect(parsed.sample_transaction_ids).toHaveLength(1);
 
       // The transaction now touches expense:food, no longer expense:groceries.
-      const ledger = await runCli(["ledger", "--account", "expense:food", "--json"]);
-      expect(ledger.code).toBe(0);
-      const rows = parseNdjson(ledger.stdout) as any[];
+      const listed = await runCli(["transactions", "list", "--account", "expense:food", "--json"]);
+      expect(listed.code).toBe(0);
+      const rows = parseNdjson(listed.stdout) as any[];
       expect(rows.some((r) => r.debit_account_id === "expense:food")).toBe(true);
+    },
+    45000,
+  );
+
+  it(
+    "transactions show returns a transaction with amount rendered as a decimal",
+    async () => {
+      await runCli([
+        "accounts", "create", "--id", "expense:coffee", "--name", "Coffee",
+        "--type", "expense", "--parent", "expense", "--json",
+      ]);
+
+      const add = await runCli([
+        "transactions", "add",
+        "--debit-account", "expense:coffee",
+        "--credit-account", "asset:bank",
+        "--amount", "12.50",
+        "--date", "2026-03-01",
+        "--description", "flat white",
+        "--json",
+      ]);
+      expect(add.code).toBe(0);
+      const id = parseOne(add.stdout).transaction_id as string;
+      expect(id).toMatch(/^tx:/);
+
+      const show = await runCli(["transactions", "show", id, "--json"]);
+      expect(show.code).toBe(0);
+      const detail = parseOne(show.stdout);
+      expect(detail).toMatchObject({
+        id,
+        description: "flat white",
+        amount: 12.5,
+        debit_account_id: "expense:coffee",
+        credit_account_id: "asset:bank",
+      });
+
+      const missing = await runCli(["transactions", "show", "tx:nope", "--json"]);
+      expect(missing.code).toBe(5);
+      expect(JSON.parse(missing.stderr.trim()).error.code).toBe("E_NOT_FOUND");
+    },
+    45000,
+  );
+
+  it(
+    "transactions dedupe groups same-amount / same-pair transactions",
+    async () => {
+      await runCli([
+        "accounts", "create", "--id", "expense:tea", "--name", "Tea",
+        "--type", "expense", "--parent", "expense", "--json",
+      ]);
+
+      const captured: string[] = [];
+      for (const date of ["2026-04-01", "2026-04-02"]) {
+        const add = await runCli([
+          "transactions", "add",
+          "--debit-account", "expense:tea",
+          "--credit-account", "asset:bank",
+          "--amount", "77",
+          "--date", date,
+          "--description", "matcha",
+          "--json",
+        ]);
+        expect(add.code).toBe(0);
+        captured.push(parseOne(add.stdout).transaction_id as string);
+      }
+
+      const dedupe = await runCli(["transactions", "dedupe", "--json"]);
+      expect(dedupe.code).toBe(0);
+      const objs = parseNdjson(dedupe.stdout) as any[];
+      const summary = objs.find((o) => o.type === "summary");
+      expect(summary.groups).toBeGreaterThanOrEqual(1);
+      // The two tea rows (77.00, expense:tea -> asset:bank, one day apart) land
+      // in one duplicate group; their ids appear among the emitted rows.
+      const dupIds = objs.filter((o) => o.type !== "summary").map((r) => r.id);
+      for (const id of captured) expect(dupIds).toContain(id);
     },
     45000,
   );

@@ -19,10 +19,11 @@ You drive \`plasalid\`, a deterministic CLI over a local double-entry ledger —
 
 ## Setup: get plasalid running
 
-- **Detect:** run \`plasalid --version\` — if it prints a version, plasalid is installed; skip to Golden rules.
+- **Detect:** run \`plasalid --version\` — if it prints a version, plasalid is installed; skip the Install and First-run steps and go straight to the version check below.
 - **Install:** check \`node --version\` (Node >= 18 required). If Node is missing, STOP and ask the human to install it (nodejs.org, or Homebrew on macOS) — do not attempt OS-level installs yourself. Then \`npm install -g plasalid\`. On a permissions error (EACCES): \`npm install -g --prefix "$HOME/.npm-global" plasalid\` and invoke plasalid via \`$HOME/.npm-global/bin/plasalid\` from then on.
 - **First run:** \`plasalid config --generate-key --json\` (creates ~/.plasalid with the config, encrypted database, and data directory), then \`plasalid doctor --json\` — every check must be ok before continuing.
 - **Statements in:** the data directory path is \`dataDir\` in \`plasalid config show --json\`. On a desktop, \`plasalid data\` opens it in the file manager; in a sandboxed/VM environment ask the human to attach/upload the statement PDF and write it into the data directory yourself.
+- **Version check:** compare \`plasalid --version\` with this skill's own \`version\` (frontmatter above); \`plasalid doctor --json\` also reports skill/CLI drift. **Prefer the newer side; never downgrade.** CLI OLDER than this skill -> upgrade the package (\`npm install -g plasalid@latest\`). CLI NEWER than this skill -> these docs may be stale: trust the CLI as the source of truth (\`plasalid <noun> --help\`), refresh an agent-CLI install with \`plasalid setup --force\`, or ask the human to update a marketplace-installed skill to its latest release.
 
 ## Golden rules
 
@@ -97,7 +98,7 @@ Degrade in this order when your *environment* fights you — never silently brea
 ## Other workflows
 
 - **Manual entry** — a one-off the user dictates ("300 baht lunch, cash"), NOT statement rows: find ids with \`plasalid accounts match --query <name> --json\`, then \`plasalid transactions add --debit-account expense:food --credit-account asset:cash --amount 300 --json\`. Add \`--resolve\` to fuzzy-resolve hint ids and raise questions instead of failing.
-- **Reporting** — net worth: \`plasalid status --json\` (\`net_worth\`). Also \`plasalid report period --from <date> --to <date> --json\`; \`plasalid accounts show|tree --json\` (per-account \`balance\`/\`debits_posted\`/\`credits_posted\`, rollups); \`plasalid ledger --json\` (+ \`ledger show <tx:id>\`); \`plasalid analyze duplicates|correlations --json\`.
+- **Reporting** — net worth: \`plasalid status --json\` (\`net_worth\`). Also \`plasalid report --from <date> --to <date> --json\`; \`plasalid accounts show|tree --json\` (per-account \`balance\`/\`debits_posted\`/\`credits_posted\`, rollups); \`plasalid transactions list --json\` (+ \`transactions show <tx:id>\`); \`plasalid transactions dedupe --json\`.
 
 ## Ingest item
 

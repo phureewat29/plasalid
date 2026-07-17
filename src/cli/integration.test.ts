@@ -112,8 +112,7 @@ describe("cli integration (subprocess)", () => {
     expect(code).toBe(0);
     for (const noun of [
       "status", "doctor", "setup", "config", "ingest", "files", "vault", "transactions",
-      "ledger", "accounts", "merchants", "questions", "report", "analyze",
-      "notes", "context", "data",
+      "accounts", "merchants", "questions", "report", "notes", "data",
     ]) {
       expect(stdout).toContain(noun);
     }

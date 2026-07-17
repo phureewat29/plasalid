@@ -17,7 +17,7 @@ surface, the agent:
    (`plasalid ingest commit` / `done`), with idempotent row ids so a re-run
    never double-posts.
 5. **Report**s back -- spending by category, refunds, top merchants -- from
-   `plasalid status`, `plasalid report`, and `plasalid ledger`.
+   `plasalid status`, `plasalid report`, and `plasalid transactions list`.
 
 The agent only has permission to run `plasalid`, read/write files, and use
 Claude Code Skills (`--allowedTools "Bash(plasalid:*),Read,Write,Skill"`) --
@@ -53,7 +53,7 @@ them to the demo):
   exit; the run prints its path so you can poke around afterwards.
 - `npm start -- --turn-timeout <seconds>` -- kill a `claude -p` turn
   (SIGTERM, then SIGKILL 5s later if it's still alive) if it runs longer
-  than this. Defaults to 600s (10 minutes).
+  than this. Defaults to 900s (15 minutes).
 
 Flags can be combined: `npm start -- --skip-claude --keep-workspace`.
 

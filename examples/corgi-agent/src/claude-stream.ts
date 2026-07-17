@@ -277,10 +277,14 @@ export function runClaudeTurn(
     args.push(opts.prompt, "--allowedTools", opts.allowedTools, "--output-format", "stream-json");
     args.push("--include-partial-messages", "--verbose");
 
+    // detached puts claude in its own process group so a timeout can kill the
+    // whole tree (claude spawns helpers that share our stdout pipe; killing
+    // only the parent leaves them holding the pipe and "close" never fires).
     const child = spawn("claude", args, {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
 
     let stderrBuf = "";
@@ -295,13 +299,28 @@ export function runClaudeTurn(
       stderrBuf += String(chunk);
     });
 
+    /** Signal claude's whole process group; falls back to the single pid when
+     *  the group is already gone. */
+    function killTree(signal: NodeJS.Signals): void {
+      if (child.pid == null) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          // already dead
+        }
+      }
+    }
+
     const turnTimeoutSec = opts.turnTimeoutSec;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killTree("SIGTERM");
       killTimer = setTimeout(() => {
-        if (!closed) child.kill("SIGKILL");
+        if (!closed) killTree("SIGKILL");
       }, 5000);
     }, turnTimeoutSec * 1000);
 

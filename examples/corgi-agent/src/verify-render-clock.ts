@@ -30,7 +30,7 @@ for (let i = 0; i < RAW_DELTAS; i++) {
   lines.push(deltaLine);
   if (i > 0 && i % 50 === 0) lines.push(toolLine("plasalid status --json"));
 }
-lines.push(toolLine("plasalid ledger --json"));
+lines.push(toolLine("plasalid transactions list --json"));
 const TOOL_USES = 4;
 
 let state: UiState = initialUiState;

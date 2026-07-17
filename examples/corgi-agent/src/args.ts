@@ -7,7 +7,7 @@
 /** Default per-turn timeout (seconds) when --turn-timeout isn't passed. Lives
  *  here because it's a CLI default; claude-stream always receives an explicit
  *  value (see runClaudeTurn's required turnTimeoutSec). */
-export const DEFAULT_TURN_TIMEOUT_SEC = 600;
+export const DEFAULT_TURN_TIMEOUT_SEC = 900;
 
 export const USAGE = `usage: npm start -- [--skip-claude] [--keep-workspace] [--turn-timeout <seconds>]
 

@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram, COMMANDS } from "./program.js";
-import { COMMANDS_REFERENCE_MD } from "../setup/templates.js";
+import { COMMANDS_REFERENCE_MD } from "../setup/templates/index.js";
 
 /**
  * Drift-prevention test: no subprocesses, pure import + string parsing. Keeps

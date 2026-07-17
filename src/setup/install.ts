@@ -9,7 +9,7 @@ import {
   renderTaxonomyMd,
   AGENTS_MD_BLOCK,
   CODEX_BLOCK_RE,
-} from "./templates.js";
+} from "./templates/index.js";
 
 /**
  * Installs the skill pack that lets external agent CLIs (Claude Code, codex)

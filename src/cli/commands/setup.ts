@@ -6,7 +6,7 @@ import {
   SkillPackVersionError,
   type InstallOptions,
 } from "../../setup/install.js";
-import { SKILL_MD } from "../../setup/templates.js";
+import { SKILL_MD } from "../../setup/templates/index.js";
 
 interface SetupOptions {
   claude?: boolean;

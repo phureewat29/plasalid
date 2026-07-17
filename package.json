@@ -35,6 +35,7 @@
     "dev": "tsx src/cli/index.ts",
     "release": "tsx scripts/release.ts",
     "integration": "npm run build && tsx scripts/integration.ts",
+    "build:skill": "npm run build && tsx scripts/build-skill.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

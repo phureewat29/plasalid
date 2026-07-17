@@ -9,7 +9,7 @@ import {
   getVersion,
   SkillPackVersionError,
 } from "./install.js";
-import { SKILL_MD, SCHEMAS_MD, renderTaxonomyMd, AGENTS_MD_BLOCK } from "./templates.js";
+import { SKILL_MD, SCHEMAS_MD, renderTaxonomyMd, AGENTS_MD_BLOCK } from "./templates/index.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -56,6 +56,13 @@ describe("templates", () => {
     expect(skill).toContain("transactions add");
     // ...and there is no legacy `record` command reference left behind.
     expect(skill).not.toContain("record ");
+  });
+
+  it("SKILL_MD carries the Setup bootstrap section (install + first-run for a bare environment)", () => {
+    const skill = SKILL_MD("1.2.3");
+    expect(skill).toContain("## Setup");
+    expect(skill).toContain("node --version");
+    expect(skill).toContain("npm install -g plasalid");
   });
 
   it("SCHEMAS_MD documents the currency_mismatch drop and idempotent duplicate result", () => {

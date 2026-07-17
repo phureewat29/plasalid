@@ -5,13 +5,11 @@ import {
   createAccount,
   updateAccountMetadata,
   findAccountById,
-  findAccountsByFuzzyName,
-  accountNumberKey,
-  normalizeMaskedAccountNumber,
   getAccountSubtree,
   ensureStructuralAccount,
   ensureTopLevelRoot,
 } from "./account-balance.js";
+import { findAccountsByFuzzyName, accountNumberKey, normalizeMaskedAccountNumber } from "./account-match.js";
 
 function freshDb() {
   const db = new Database(":memory:");

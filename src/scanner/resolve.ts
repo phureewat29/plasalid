@@ -2,12 +2,12 @@ import type Database from "libsql";
 import {
   createAccount,
   findAccountById,
-  findAccountsByFuzzyName,
   ensureStructuralAccount,
   ensureTopLevelRoot,
   TOP_LEVEL_TYPES,
   type AccountType,
 } from "../db/queries/account-balance.js";
+import { findAccountsByFuzzyName } from "../db/queries/account-match.js";
 
 /**
  * Shared account/merchant resolution used by the commit pipeline
@@ -46,7 +46,7 @@ export function resolveMerchantId(
   return { merchantId: null, attemptedUnknownId: merchantId };
 }
 
-export interface ResolveOnePostingOptions {
+interface ResolveOnePostingOptions {
   /**
    * Skip the fuzzy-match stage and go straight to placeholder creation (or
    * the uncategorized fallback) after an exact match misses. Used by the
@@ -160,7 +160,7 @@ function ensurePlaceholderAccount(db: Database.Database, accountId: string): str
   return accountId;
 }
 
-export interface EnsureAccountAncestorsResult {
+interface EnsureAccountAncestorsResult {
   /** The immediate parent id the leaf should be created under, or null for a
    *  single-segment id (a bare top-level root — nothing to auto-create). */
   parentId: string | null;

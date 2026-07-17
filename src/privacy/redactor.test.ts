@@ -15,9 +15,16 @@ vi.mock("../context.js", () => ({
   ),
 }));
 
-import { redact, applyRedaction } from "./redactor.js";
+import { applyRedaction } from "./redactor.js";
 
-describe("redact", () => {
+// `redact`/`createRedactor` are private to this module; masking behavior is
+// exercised through the public `applyRedaction` API by round-tripping a
+// single allowlisted field.
+function redact(text: string): string {
+  return applyRedaction({ text }, true, ["text"]).text;
+}
+
+describe("applyRedaction (masking patterns)", () => {
   it("redacts user full name", () => {
     expect(redact("Alpaca Beagle sent 1,000 baht")).toBe("[USER] sent 1,000 baht");
   });
@@ -61,7 +68,7 @@ describe("redact", () => {
   });
 });
 
-describe("applyRedaction", () => {
+describe("applyRedaction (field allowlisting)", () => {
   it("is an identity no-op when disabled", () => {
     const data = { memo: "call 0812345678", account_id: "asset:kbank" };
     expect(applyRedaction(data, false, ["memo"])).toBe(data);

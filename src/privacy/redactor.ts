@@ -119,7 +119,7 @@ function buildRedactions(): RedactionEntry[] {
  * over calling `redact()` in a loop: `redact()` rebuilds the rule set on every
  * call, whereas a compiled redactor amortises that work across many values.
  */
-export function createRedactor(): (text: string) => string {
+function createRedactor(): (text: string) => string {
   const redactions = buildRedactions();
   return (text: string): string => {
     let result = text;
@@ -131,10 +131,6 @@ export function createRedactor(): (text: string) => string {
     }
     return result;
   };
-}
-
-export function redact(text: string): string {
-  return createRedactor()(text);
 }
 
 /**

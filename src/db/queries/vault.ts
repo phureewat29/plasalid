@@ -1,6 +1,6 @@
 import type Database from "libsql";
 
-export interface VaultPasswordRow {
+interface VaultPasswordRow {
   id: string;
   pattern: string;
   use_count: number;

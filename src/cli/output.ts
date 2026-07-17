@@ -1,13 +1,13 @@
 import chalk from "chalk";
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
-import { visibleLength } from "./format.js";
+import { visibleLength, ANSI_RE } from "./format.js";
 
 /**
  * Shared output + error layer for the deterministic CLI harness.
  *
  * Output modes (resolved once per action from the global flags + stdout TTY):
- *   --json           → NDJSON. Streaming commands call emitItem() per record and
+ *   --json           → NDJSON. Streaming commands call emit() per record and
  *                      close with emitSummary(); single-result commands call emit()
  *                      exactly once. Errors are one object on stderr.
  *   TTY, no --json   → human tables (chalk, aligned columns).
@@ -17,7 +17,7 @@ import { visibleLength } from "./format.js";
  * The emit and emitList writers read the *current* mode, which runAction() resolves
  * and caches before invoking the wrapped action. Callers that render their own
  * human layout (e.g. status) branch on currentMode() and call emit() only on the
- * --json path; emit/emitItem/emitSummary are no-ops outside --json so a stray
+ * --json path; emit/emitSummary are no-ops outside --json so a stray
  * call never corrupts human output.
  */
 
@@ -32,7 +32,7 @@ export const EXIT = {
   PARTIAL: 7,
 } as const;
 
-export type ExitCode = keyof typeof EXIT;
+type ExitCode = keyof typeof EXIT;
 
 export class CliError extends Error {
   readonly code: ExitCode;
@@ -70,9 +70,6 @@ export interface OutputMode {
   /** apply chalk: TTY && !json && color not suppressed. */
   color: boolean;
 }
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 /**
  * Resolve the mode from a command by OR-ing the boolean flags across the whole
@@ -115,13 +112,8 @@ function writeLine(stream: NodeJS.WriteStream, obj: unknown): void {
   stream.write(JSON.stringify(obj) + "\n");
 }
 
-/** Single-result NDJSON object. No-op outside --json. */
+/** One NDJSON object — a single result, or one record in a streamed list. No-op outside --json. */
 export function emit(obj: unknown): void {
-  if (currentMode().json) writeLine(process.stdout, obj);
-}
-
-/** One record in an NDJSON stream. No-op outside --json. */
-export function emitItem(obj: unknown): void {
   if (currentMode().json) writeLine(process.stdout, obj);
 }
 
@@ -274,7 +266,7 @@ function isNotReadyError(err: unknown): boolean {
 }
 
 /** Normalise any thrown value into a CliError (mapping DB-open failures to NOT_READY). */
-export function toCliError(err: unknown): CliError {
+function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
   if (isNotReadyError(err)) {
     return new CliError("NOT_READY", (err as Error).message, {

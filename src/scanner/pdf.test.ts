@@ -4,23 +4,11 @@ import { migrate } from "../db/schema.js";
 import { generateKey } from "../db/encryption.js";
 import { config } from "../config.js";
 import {
-  suggestPattern,
   findCandidates,
   savePassword,
-  rasterizePage,
   rasterizePageN,
   unlockNonInteractive,
 } from "./pdf.js";
-
-describe("suggestPattern", () => {
-  it("takes the leading alpha prefix before the first separator", () => {
-    expect(suggestPattern("AcctSt_May26.pdf")).toBe("^acctst.*");
-  });
-
-  it("falls back to digit-collapse when the prefix is too short or non-alpha", () => {
-    expect(suggestPattern("1234567890.pdf")).toBe("^\\d+\\.pdf$");
-  });
-});
 
 describe("password store", () => {
   it("round-trips a password through the encrypted column", () => {
@@ -58,16 +46,6 @@ function minimalPdf(): Buffer {
 
   return Buffer.from(header + o1 + o2 + o3 + xref + trailer, "latin1");
 }
-
-describe("rasterizePage", () => {
-  it("renders a one-page PDF to a PNG buffer", async () => {
-    const result = await rasterizePage(minimalPdf(), { dpi: 72 });
-    expect(result.mime).toBe("image/png");
-    expect(result.bytes[0]).toBe(0x89);
-    expect(result.bytes.subarray(1, 4).toString("latin1")).toBe("PNG");
-    expect(result.bytes.length).toBeGreaterThan(100);
-  });
-});
 
 describe("rasterizePageN", () => {
   it("renders a given page index to a raw PNG buffer", async () => {
@@ -153,5 +131,32 @@ describe("unlockNonInteractive", () => {
     const enc = await encryptedPdf("secret");
     const result = await unlockNonInteractive(db, enc, "kbank-may.pdf", {});
     expect(result).toEqual({ ok: false, reason: "password_required" });
+  });
+
+  // suggestPattern() is a private helper of unlockNonInteractive's persist step;
+  // exercised here through its observable effect on findCandidates rather than
+  // imported directly.
+  it("derives a reusable alpha-prefix pattern, matching sibling statements from the same source", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+    const result = await unlockNonInteractive(db, enc, "AcctSt_May26.pdf", {
+      password: "secret",
+    });
+    expect(result.ok).toBe(true);
+
+    expect(findCandidates(db, "AcctSt_Dec26.pdf", config.dbEncryptionKey)).toHaveLength(1);
+    expect(findCandidates(db, "Other_May26.pdf", config.dbEncryptionKey)).toHaveLength(0);
+  });
+
+  it("falls back to a digit-collapsed pattern when the prefix is too short or non-alpha", async () => {
+    const db = freshDb();
+    const enc = await encryptedPdf("secret");
+    const result = await unlockNonInteractive(db, enc, "1234567890.pdf", {
+      password: "secret",
+    });
+    expect(result.ok).toBe(true);
+
+    expect(findCandidates(db, "9876543210.pdf", config.dbEncryptionKey)).toHaveLength(1);
+    expect(findCandidates(db, "abc.pdf", config.dbEncryptionKey)).toHaveLength(0);
   });
 });

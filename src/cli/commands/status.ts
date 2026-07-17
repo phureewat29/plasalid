@@ -3,7 +3,7 @@ import chalk from "chalk";
 import { config, getConfigPath, getDataDir, keyFingerprint } from "../../config.js";
 import { existsSync } from "fs";
 import { formatAmount } from "../../currency.js";
-import { banner, visibleLength } from "../format.js";
+import { banner, visibleLength, ANSI_RE } from "../format.js";
 import { currentMode, emit, runAction } from "../output.js";
 
 interface Counts {
@@ -231,8 +231,7 @@ function renderTty(r: StatusReport, color: boolean): void {
 }
 
 function stripBanner(): string {
-  // eslint-disable-next-line no-control-regex
-  return banner().replace(/\x1b\[[0-9;]*m/g, "");
+  return banner().replace(ANSI_RE, "");
 }
 
 function formatInt(n: number): string {

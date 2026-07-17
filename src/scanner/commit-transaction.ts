@@ -58,9 +58,9 @@ export interface RawTransactionInput {
   leg_index?: number | null;
 }
 
-export type TransactionDropReason = "dirty_input" | "currency_mismatch";
+type TransactionDropReason = "dirty_input" | "currency_mismatch";
 
-export type TransactionCommitOutcome =
+type TransactionCommitOutcome =
   | {
       ok: true;
       transactionId: string;
@@ -75,7 +75,7 @@ export type TransactionCommitOutcome =
       raisedQuestions: number;
     };
 
-export type LinkedTransactionsOutcome =
+type LinkedTransactionsOutcome =
   | {
       ok: true;
       group_id: string;
@@ -111,11 +111,11 @@ export interface TransactionCommitHooks {
 
 const NON_WORD = /[^\p{L}\p{N}]+/gu;
 
-function normalizeDescriptor(raw: string): string {
+function normalizeForKey(raw: string): string {
   return raw.toLowerCase().replace(NON_WORD, " ").replace(/\s+/g, " ").trim();
 }
 function descriptorKey(descriptor: string): string {
-  return `descriptor:${normalizeDescriptor(descriptor)}`;
+  return `descriptor:${normalizeForKey(descriptor)}`;
 }
 function accountIdKey(id: string): string {
   return `account:${id}`;

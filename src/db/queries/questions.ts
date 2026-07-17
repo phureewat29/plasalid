@@ -1,13 +1,13 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
 
-export interface QuestionTarget {
+interface QuestionTarget {
   /** The transaction this question is about, when it targets a specific movement. */
   transaction_id?: string | null;
   account_id: string | null;
 }
 
-export interface RecordQuestionInput extends QuestionTarget {
+interface RecordQuestionInput extends QuestionTarget {
   file_id: string | null;
   scan_id?: string | null;
   kind?: string | null;
@@ -31,7 +31,7 @@ export interface QuestionRow {
   created_at: string;
 }
 
-export interface ClosedQuestion {
+interface ClosedQuestion {
   prompt: string;
   kind: string | null;
   answer: string;
@@ -120,17 +120,6 @@ function extractRuleKey(contextJson: string | null): string | null {
 }
 
 /**
- * Look up the transaction/account a question is attached to. Returns null when
- * the question id doesn't exist.
- */
-export function getQuestionTarget(db: Database.Database, id: string): QuestionTarget | null {
-  const row = db
-    .prepare(`SELECT transaction_id, account_id FROM questions WHERE id = ?`)
-    .get(id) as QuestionTarget | undefined;
-  return row ?? null;
-}
-
-/**
  * Clear `has_question` on the named transaction / account if no other
  * questions still reference it. Safe to call after any resolution; idempotent.
  */
@@ -149,7 +138,7 @@ function maybeClearHasQuestionFlags(db: Database.Database, target: QuestionTarge
   }
 }
 
-export interface CountQuestionsScope {
+interface CountQuestionsScope {
   file_id?: string;
   transaction_id?: string;
   account_id?: string;
@@ -178,7 +167,7 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
   return row.n;
 }
 
-export interface ListQuestionsOptions {
+interface ListQuestionsOptions {
   limit?: number;
   scanId?: string;
   /** When true, include deferred rows in the result (default false). */

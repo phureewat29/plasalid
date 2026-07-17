@@ -11,7 +11,7 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": true
+    "declaration": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]

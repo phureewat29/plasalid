@@ -100,7 +100,7 @@ export function upsertMerchant(
   return merchant;
 }
 
-export interface MerchantWithDefault {
+interface MerchantWithDefault {
   merchant: MerchantRow;
   default_account_id: string | null;
 }
@@ -128,7 +128,7 @@ export function findMerchantByAlias(
   return { merchant: row, default_account_id: row.default_account_id };
 }
 
-export interface ListMerchantsOptions {
+interface ListMerchantsOptions {
   limit?: number;
 }
 

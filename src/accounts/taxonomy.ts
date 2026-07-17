@@ -1,4 +1,6 @@
-export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
+import type { AccountType } from "../db/queries/account-balance.js";
+
+export type { AccountType };
 
 type InstitutionKind =
   | "bank"

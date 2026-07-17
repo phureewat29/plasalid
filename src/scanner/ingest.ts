@@ -21,9 +21,9 @@ import {
 import { deleteScannedFile, findScannedFileById } from "../db/queries/files.js";
 import { tryExecute } from "../lib/result.js";
 
-export type IngestStatus = "new" | "pending" | "scanned" | "failed";
+type IngestStatus = "new" | "pending" | "scanned" | "failed";
 
-export interface IngestEntry {
+interface IngestEntry {
   path: string;
   // Forward-slashed relative path from the data dir.
   relPath: string;
@@ -34,7 +34,7 @@ export interface IngestEntry {
   vaultCandidates: number;
 }
 
-export interface PreparedPage {
+interface PreparedPage {
   page: number;
   path: string;
 }
@@ -157,7 +157,7 @@ export function registerPendingFile(
   return { fileId, alreadyKnown: false };
 }
 
-export interface PrepareOptions {
+interface PrepareOptions {
   password?: string;
   force?: boolean;
   format?: "png" | "pdf";

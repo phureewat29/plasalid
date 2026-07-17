@@ -1,12 +1,12 @@
 import type Database from "libsql";
 
-export interface ScannedFileTotals {
+interface ScannedFileTotals {
   scanned: number;
   pending: number;
   failed: number;
 }
 
-export interface ScannedFileRow {
+interface ScannedFileRow {
   id: string;
   path: string;
   file_hash: string;
@@ -56,7 +56,7 @@ export function findScannedFileById(db: Database.Database, id: string): ScannedF
   return row ?? null;
 }
 
-export interface DeleteScannedFileResult {
+interface DeleteScannedFileResult {
   /** The deleted row, or null when no row matched the id. */
   removed: ScannedFileRow | null;
   /** Count of transaction rows that cascaded out. */
@@ -86,12 +86,12 @@ export function deleteScannedFile(db: Database.Database, id: string): DeleteScan
   return { removed, removedTransactions, removedQuestions };
 }
 
-export interface MarkFileScannedOpts {
+interface MarkFileScannedOpts {
   /** Who scanned the file (e.g. the external agent name). */
   source?: string | null;
 }
 
-export interface MarkFileFailedOpts {
+interface MarkFileFailedOpts {
   /** Who attempted the scan (e.g. the external agent name). */
   source?: string | null;
   error: string;

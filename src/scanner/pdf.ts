@@ -17,7 +17,7 @@ function getMupdf(): Promise<Mupdf> {
 // mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success.
 const MUPDF_AUTH_FAILED = 0;
 
-export interface UnlockResult {
+interface UnlockResult {
   ok: boolean;
   decrypted?: Buffer;
 }
@@ -60,7 +60,7 @@ export async function unlock(
  * Password store: filename-pattern keyed, encrypted-at-rest
  */
 
-export interface StoredPassword {
+interface StoredPassword {
   id: string;
   pattern: string;
   password: string; // decrypted in-memory
@@ -81,7 +81,7 @@ const SEPARATORS = /[_\-\s.]/;
 const MIN_PREFIX_LEN = 3;
 
 // Short or non-alpha prefixes fall back to escaped+digit-collapse to avoid `^a.*`-style false positives.
-export function suggestPattern(filename: string): string {
+function suggestPattern(filename: string): string {
   const name = basename(filename).toLowerCase();
   const prefix = name.split(SEPARATORS)[0];
 
@@ -152,7 +152,7 @@ export function savePassword(
   return id;
 }
 
-export function recordUse(db: Database.Database, id: string): void {
+function recordUse(db: Database.Database, id: string): void {
   db.prepare(
     `UPDATE file_passwords
      SET use_count = use_count + 1, last_used_at = datetime('now')
@@ -164,7 +164,7 @@ export function recordUse(db: Database.Database, id: string): void {
  * Non-interactive unlock for the agent-CLI harness: no prompts, no spinners.
  * Probe → vault candidates → caller-supplied password → typed failure.
  */
-export type UnlockNonInteractiveResult =
+type UnlockNonInteractiveResult =
   | { ok: true; decrypted: Buffer }
   | { ok: false; reason: "password_required" | "wrong_password" };
 
@@ -207,7 +207,7 @@ const MIME_BY_EXT: Record<string, string> = {
 
 const MAX_BYTES = 30 * 1024 * 1024;
 
-export interface LoadedFile {
+interface LoadedFile {
   bytes: Buffer;
   hash: string;
   mime: string;
@@ -269,14 +269,6 @@ export async function rasterizePageN(
   } finally {
     doc.destroy();
   }
-}
-
-export async function rasterizePage(
-  pdfBytes: Buffer,
-  opts: { dpi?: number } = {},
-): Promise<{ bytes: Buffer; mime: "image/png" }> {
-  const bytes = await rasterizePageN(pdfBytes, 0, opts.dpi ?? DEFAULT_DPI);
-  return { bytes, mime: "image/png" };
 }
 
 export async function countPdfPages(bytes: Buffer): Promise<number> {

@@ -38,11 +38,6 @@ export function formatAmount(amount: number, currency?: string): string {
   });
 }
 
-export function formatSignedAmount(amount: number, currency?: string): string {
-  const body = formatAmount(amount, currency);
-  return amount < 0 ? `-${body}` : body;
-}
-
 /**
  * Minor-unit (integer) money helpers.
  *
@@ -90,18 +85,3 @@ export function fromMinorUnits(minor: number, currency: string): number {
   return minor / 10 ** minorUnitExponent(currency);
 }
 
-/**
- * Localised currency string for an integer minor-unit amount, using the
- * currency's own fractional precision. Reuses `formatCurrencyAmount`; a leading
- * "-" is prepended for negative amounts (mirrors `formatSignedAmount`).
- */
-export function formatMinorUnits(minor: number, currency?: string): string {
-  const code = currency || getDisplayCurrency();
-  const exp = minorUnitExponent(code);
-  const body = formatCurrencyAmount(fromMinorUnits(minor, code), {
-    currency: code,
-    minimumFractionDigits: exp,
-    maximumFractionDigits: exp,
-  });
-  return minor < 0 ? `-${body}` : body;
-}

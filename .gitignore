@@ -1,6 +1,5 @@
 node_modules/
 dist/
-dist-skill/
 data/
 .env
 .env.local

@@ -7,9 +7,10 @@ import { fileURLToPath } from "node:url";
 import {
   installSkillPack,
   getVersion,
+  skillMd,
   SkillPackVersionError,
 } from "./install.js";
-import { SKILL_MD, SCHEMAS_MD, renderTaxonomyMd, AGENTS_MD_BLOCK } from "./templates/index.js";
+import { AGENTS_MD_BLOCK } from "./codex.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -28,16 +29,16 @@ function parseFrontmatter(md: string): Record<string, string> {
   return out;
 }
 
-describe("templates", () => {
-  it("SKILL_MD carries name/description/version frontmatter", () => {
-    const fm = parseFrontmatter(SKILL_MD("1.2.3"));
+describe("skillMd (checked-in skills/SKILL.md)", () => {
+  it("carries name/description frontmatter and no version key", () => {
+    const fm = parseFrontmatter(skillMd());
     expect(fm.name).toBe("plasalid");
     expect(fm.description.length).toBeGreaterThan(20);
-    expect(fm.version).toBe("1.2.3");
+    expect(fm.version).toBeUndefined();
   });
 
-  it("SKILL_MD teaches the transaction model: direction table, row_index, and linked splits", () => {
-    const skill = SKILL_MD("1.2.3");
+  it("teaches the transaction model: direction table, row_index, and linked splits", () => {
+    const skill = skillMd();
     // The direction table header (Debit account / Credit account columns).
     expect(skill).toContain("Debit account");
     expect(skill).toContain("Credit account");
@@ -46,8 +47,8 @@ describe("templates", () => {
     expect(skill).toContain("linked");
   });
 
-  it("SKILL_MD carries the 'When you are blocked' playbook and current command names", () => {
-    const skill = SKILL_MD("1.2.3");
+  it("carries the 'When you are blocked' playbook and current command names", () => {
+    const skill = skillMd();
     // The blocked-environment playbook, keyed off the transcript failures.
     expect(skill).toContain("When you are blocked");
     // The salient PDF-rasterizer fallback (F3/F6) must name --dpi.
@@ -58,26 +59,16 @@ describe("templates", () => {
     expect(skill).not.toContain("record ");
   });
 
-  it("SKILL_MD carries the Setup bootstrap section (install + first-run for a bare environment)", () => {
-    const skill = SKILL_MD("1.2.3");
+  it("carries the Setup bootstrap section (install + first-run for a bare environment)", () => {
+    const skill = skillMd();
     expect(skill).toContain("## Setup");
     expect(skill).toContain("node --version");
     expect(skill).toContain("npm install -g plasalid");
   });
+});
 
-  it("SCHEMAS_MD documents the currency_mismatch drop and idempotent duplicate result", () => {
-    expect(SCHEMAS_MD).toContain("currency_mismatch");
-    expect(SCHEMAS_MD).toContain("duplicate");
-  });
-
-  it("renderTaxonomyMd reflects the live registry (a known institution + a root)", () => {
-    const md = renderTaxonomyMd();
-    expect(md).toContain("Kasikornbank");
-    expect(md).toContain("KBANK");
-    expect(md).toContain("asset"); // an account root
-  });
-
-  it("AGENTS_MD_BLOCK is wrapped in versioned begin/end markers", () => {
+describe("AGENTS_MD_BLOCK", () => {
+  it("is wrapped in versioned begin/end markers", () => {
     const block = AGENTS_MD_BLOCK("9.9.9");
     expect(block).toContain("<!-- BEGIN plasalid-skill v9.9.9 -->");
     expect(block.trimEnd().endsWith("<!-- END plasalid-skill -->")).toBe(true);
@@ -85,7 +76,7 @@ describe("templates", () => {
 });
 
 describe("installSkillPack — claude", () => {
-  it("writes SKILL.md, references, and VERSION; result points at the skill dir", () => {
+  it("writes SKILL.md and VERSION; result points at the skill dir", () => {
     const dir = tmp("plasalid-install-claude-");
     try {
       const result = installSkillPack({ claude: true, dir });
@@ -94,21 +85,12 @@ describe("installSkillPack — claude", () => {
       expect(result.installed).toHaveLength(1);
       expect(result.installed[0]).toMatchObject({ kind: "claude", path: skillDir, version: getVersion() });
 
-      for (const rel of [
-        "SKILL.md",
-        "VERSION",
-        "references/commands.md",
-        "references/schemas.md",
-        "references/taxonomy.md",
-      ]) {
-        expect(existsSync(join(skillDir, rel)), `${rel} should exist`).toBe(true);
-      }
+      expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+      expect(existsSync(join(skillDir, "VERSION"))).toBe(true);
 
       expect(readFileSync(join(skillDir, "VERSION"), "utf8").trim()).toBe(getVersion());
       const fm = parseFrontmatter(readFileSync(join(skillDir, "SKILL.md"), "utf8"));
       expect(fm.name).toBe("plasalid");
-      expect(fm.version).toBe(getVersion());
-      expect(readFileSync(join(skillDir, "references/taxonomy.md"), "utf8")).toContain("Kasikornbank");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -248,7 +230,6 @@ describe("setup CLI (subprocess)", () => {
       expect(res.stdout.startsWith("---\n")).toBe(true);
       const fm = parseFrontmatter(res.stdout);
       expect(fm.name).toBe("plasalid");
-      expect(fm.version.length).toBeGreaterThan(0);
     },
     30000,
   );

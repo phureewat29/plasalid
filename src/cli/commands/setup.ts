@@ -2,11 +2,10 @@ import type { Command } from "commander";
 import { currentMode, emit, fail, runAction } from "../output.js";
 import {
   installSkillPack,
-  getVersion,
+  skillMd,
   SkillPackVersionError,
   type InstallOptions,
 } from "../../setup/install.js";
-import { SKILL_MD } from "../../setup/templates/index.js";
 
 interface SetupOptions {
   claude?: boolean;
@@ -29,11 +28,12 @@ export function registerSetup(program: Command): void {
     .option("--print", "print SKILL.md to stdout as raw markdown and exit (ignores --json)")
     .action(
       runAction(async (opts: SetupOptions) => {
-        // --print dumps the raw SKILL.md so a human/agent can inspect it without
-        // touching the filesystem. It is markdown, not NDJSON, even under --json.
+        // --print dumps the checked-in SKILL.md so a human/agent can inspect it
+        // without touching the filesystem. It is markdown, not NDJSON, even under --json.
         if (opts.print) {
-          process.stdout.write(SKILL_MD(getVersion()));
-          if (!SKILL_MD(getVersion()).endsWith("\n")) process.stdout.write("\n");
+          const md = skillMd();
+          process.stdout.write(md);
+          if (!md.endsWith("\n")) process.stdout.write("\n");
           return;
         }
 

@@ -2,19 +2,16 @@ import { createRequire } from "module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
-import {
-  SKILL_MD,
-  COMMANDS_REFERENCE_MD,
-  SCHEMAS_MD,
-  renderTaxonomyMd,
-  AGENTS_MD_BLOCK,
-  CODEX_BLOCK_RE,
-} from "./templates/index.js";
+import { AGENTS_MD_BLOCK, CODEX_BLOCK_RE } from "./codex.js";
 
 /**
  * Installs the skill pack that lets external agent CLIs (Claude Code, codex)
  * drive the plasalid harness. Pure filesystem work — the CLI command wraps this
  * and maps thrown errors onto exit codes.
+ *
+ * The Claude skill is a checked-in file (skills/SKILL.md at the package root),
+ * copied verbatim to the install target — there is no template rendering.
+ * The installed VERSION file records which CLI version wrote that copy.
  */
 
 type InstallKind = "claude" | "codex";
@@ -70,6 +67,11 @@ export function getVersion(): string {
   return version;
 }
 
+/** The canonical checked-in skill document (skills/SKILL.md at the package root). */
+export function skillMd(): string {
+  return readFileSync(new URL("../../skills/SKILL.md", import.meta.url), "utf8");
+}
+
 /** Absolute path to the Claude skill dir for the given options. */
 function claudeSkillDir(opts: InstallOptions): string {
   const base = opts.dir
@@ -105,13 +107,9 @@ function installClaude(opts: InstallOptions, version: string): InstalledTarget {
   }
   // existing === version -> silent idempotent overwrite; different + force -> overwrite.
 
-  const referencesDir = join(skillDir, "references");
-  mkdirSync(referencesDir, { recursive: true });
+  mkdirSync(skillDir, { recursive: true });
 
-  writeFileSync(join(skillDir, "SKILL.md"), SKILL_MD(version));
-  writeFileSync(join(referencesDir, "commands.md"), COMMANDS_REFERENCE_MD);
-  writeFileSync(join(referencesDir, "schemas.md"), SCHEMAS_MD);
-  writeFileSync(join(referencesDir, "taxonomy.md"), renderTaxonomyMd());
+  writeFileSync(join(skillDir, "SKILL.md"), skillMd());
   writeFileSync(join(skillDir, "VERSION"), version + "\n");
 
   return { kind: "claude", path: skillDir, version };

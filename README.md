@@ -23,11 +23,11 @@ In the US and Europe, most financial apps are powered by aggregators like Plaid.
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
-**Plasalid is built to fix this — as a harness for agents, not another app.**
+**Plasalid is built to fix this.**
 
 You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Any agent you already use — a coding agent in your terminal, or an assistant in a chat app that accepts skills — picks up one skill file and takes it from there, keeping your books on a deterministic, auditable, double-entry ledger that lives encrypted on your machine.
 
-Plasalid itself has no built-in AI model, no API key to configure, no chat window. It is the harness underneath: stable commands, strict JSON, exit codes an agent can branch on. Setting an agent up is one step — see [Give it to your agent](#give-it-to-your-agent).
+Plasalid itself has no built-in AI model, no API key to configure, no chat window. It is the harness underneath. Setting an agent up is one step — see [Give it to your agent](#give-it-to-your-agent).
 
 ## Features
 
@@ -36,16 +36,11 @@ Plasalid itself has no built-in AI model, no API key to configure, no chat windo
 * **Drop PDFs, get a pipeline.** `plasalid ingest list` discovers new statements, `plasalid ingest prepare` hands back a readable statement document (unlocking encrypted PDFs via a stored password vault), and `plasalid ingest commit` posts the transactions an agent extracted straight into a double-entry ledger.
 * **No aggregators or per-bank logins.** The big picture builds itself from the documents you already get every month. Zero manual data entry and no fragile bank connectors to maintain.
 
-### A harness, not a black box
+### A local-first, encrypted, and inspectable financial harness
 
-* **Every command speaks JSON.** `--json` turns any command into NDJSON — one object per line, a `summary` line to close out a batch, and a single JSON object on stderr on failure. Exit codes are stable and specific (see below), so an agent (or a shell script) can branch on outcome without scraping text.
-* **Open questions instead of silent guesses.** When the pipeline can't confidently resolve an account or a merchant, it raises a question (`plasalid questions list`) instead of guessing. You or your agent resolve it once with `plasalid questions answer`, and that resolution is remembered.
 * **Full manual control when you want it.** Every step of the pipeline — accounts, transactions, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
-
-### Local-first, encrypted, and inspectable
-
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
-* **Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **PII Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
@@ -139,31 +134,6 @@ plasalid notes          # Manage freeform notes
 
 plasalid data           # Open the data folder in your OS file explorer (alias: open)
 ```
-
-## The `--json` contract
-
-Every command supports three output modes, resolved once per run:
-
-| Mode | Trigger | Shape |
-|---|---|---|
-| NDJSON | `--json` | One JSON object per record on stdout; a `{"type":"summary",...}` line closes out streaming commands; on failure, one JSON object on stderr. Never colored. |
-| Human table | TTY, no `--json` | Aligned, colored (chalk) tables. |
-| Plain | piped, no `--json` | Tab-separated rows, zero ANSI, stable for scripts that don't want JSON. |
-
-Global flags on every command: `--json`, `--no-color`.
-
-Exit codes are stable across the whole CLI:
-
-| Code | Name | Meaning |
-|---|---|---|
-| 0 | OK | success |
-| 1 | GENERIC | unexpected error |
-| 2 | USAGE | bad flags/arguments |
-| 3 | NOT_READY | harness not configured / database not reachable |
-| 4 | INPUT_REQUIRED | needs a password, confirmation, or other input |
-| 5 | NOT_FOUND | referenced id/pattern doesn't exist |
-| 6 | INVALID | input failed validation |
-| 7 | PARTIAL | a batch operation partially succeeded (see `ingest commit`) |
 
 ## Security & Privacy
 

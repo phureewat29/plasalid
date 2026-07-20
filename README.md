@@ -88,7 +88,7 @@ Then ask your agent: *"ingest my new statements."* It will discover, prepare, an
 
 ## Example Agent with Plasalid
 
-**Corgi Agent** — a demo personal-finance tracker agent for daily life using Plasalid as harness. The example ships a real, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
+**Corgi Agent** — a demo personal-finance tracker agent for daily life using Plasalid as harness. The example ships a sample, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
 
 ```bash
 cd examples/corgi-agent

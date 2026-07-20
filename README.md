@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-    A deterministic CLI that turns scattered financial PDFs into a structured, agent-readable ledger.
+    A deterministic CLI harness that lets any agent turn scattered financial PDFs into a structured, auditable ledger.
 </p>
 
 <p align="center">
@@ -23,13 +23,11 @@ In the US and Europe, most financial apps are powered by aggregators like Plaid.
 
 Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
 
-**Plasalid is built to fix this — as a harness, not an app.**
+**Plasalid is built to fix this — as a harness for agents, not another app.**
 
-You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Plasalid gives you the primitives to turn that pile of PDFs into a clean, double-entry ledger: page rasterization, an ingest/commit pipeline, duplicate and correlation detection, and a full chart of accounts — all driven through a scriptable CLI, all stored in an encrypted local database.
+You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Any agent you already use — a coding agent in your terminal, or an assistant in a chat app that accepts skills — picks up one skill file and takes it from there, keeping your books on a deterministic, auditable, double-entry ledger that lives encrypted on your machine.
 
-Plasalid itself has no built-in AI model, no API key to configure, no chat window. Instead, an agent CLI you already run with [Claude Code](https://claude.com/claude-code), [Codex](https://openai.com/codex/), or anything else that can shell out and read JSON.
-
-Drives Plasalid to your statements, reads the pages, decides what each transaction is, and pushes structured rows back in through `plasalid ingest commit`. Plasalid's job is to be the deterministic, auditable ledger underneath.
+Plasalid itself has no built-in AI model, no API key to configure, no chat window. It is the harness underneath: stable commands, strict JSON, exit codes an agent can branch on. Setting an agent up is one step — see [Give it to your agent](#give-it-to-your-agent).
 
 ## Features
 
@@ -72,23 +70,28 @@ Then drop some statements in:
 plasalid data          # opens ~/.plasalid/data in Finder/Explorer — drag PDFs in
 ```
 
-**Let an agent drive it:**
+## Give it to your agent
 
-```bash
-plasalid setup --claude   # or --codex — installs a skill pack for your agent CLI
+The entire skill is one markdown file checked into this repo: [`skills/SKILL.md`](./skills/SKILL.md). There is no build step — what you see at that link is exactly what every agent gets (`plasalid setup --print` prints the same bytes).
+
+**Chat apps with a skill UI** (Claude Desktop, Kimi, and the like): add the skill by URL or file upload:
+
+```
+https://raw.githubusercontent.com/phureewat29/plasalid/main/skills/SKILL.md
 ```
 
-Then just ask your agent: *"ingest my new statements."* It will run `plasalid ingest list`, prepare and read each file's pages, commit the transactions it finds, and walk you through any open questions.
+That link always tracks the latest skill; to pin a release, use a tag URL such as `.../v0.10.2/skills/SKILL.md`. The skill teaches the agent to install the CLI from npm and run first-time setup itself — so end users just ask: *"set up plasalid and ingest my statements."*
 
-**Use from Claude Desktop / claude.ai:**
+**Terminal agent CLIs** (Claude Code, Codex, and the like): install the same file locally:
 
 ```bash
-npm run build:skill   # produces dist-skill/plasalid-skill-<version>.zip
+plasalid setup            # writes ./.claude/skills/plasalid (--global for your home dir)
+plasalid setup --codex    # maintains a plasalid block in AGENTS.md instead
 ```
 
-Upload the zip as a custom skill. End users then just ask their agent to "set up plasalid and ingest my statements" — the skill installs the CLI from npm and walks through first-run setup.
+Then ask your agent: *"ingest my new statements."* It will discover, prepare, and read each file, commit the transactions it finds, and walk you through any open questions.
 
-# Example Agent with Plasalid
+## Example Agent with Plasalid
 
 **Corgi Agent** — a demo personal-finance tracker agent for daily life using Plasalid as harness. The example ships a real, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
 
@@ -102,9 +105,9 @@ Requires the `claude` CLI (or run `npm start -- --skip-claude` for a plumbing-on
 
 ## The Agent Workflow
 
-Every row becomes a *transaction*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (`setup`'s SKILL.md ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
+Every row becomes a *transaction*: it debits one account and credits another by the same positive amount — direction is which account is debit vs credit, never a plus/minus sign. Assets and expenses grow on the debit side; liabilities, income, and equity grow on the credit side. (The skill ships the full debit/credit direction table, plus the compound `linked` form for splits like a payslip and the conversion-pair pattern for cross-currency rows.)
 
-This is the loop `setup`'s skill pack teaches an agent CLI to run:
+This is the loop the skill teaches an agent to run:
 
 1. **Discover** — `plasalid ingest list --json` to find new/pending files.
 2. **Prepare** — `plasalid ingest prepare <path>` registers the file and returns its readable `document` path, unlocking encrypted PDFs via `plasalid vault`.
@@ -119,7 +122,7 @@ Run `plasalid --help` (or `plasalid <noun> --help`) for the full flag reference.
 ```
 plasalid                # Harness status: config, database, ledger counts, net worth (default)
 plasalid doctor         # Diagnose the harness environment
-plasalid setup          # Install the skill pack for an agent CLI (--claude | --codex)
+plasalid setup          # Install the skill for an agent CLI (--claude | --codex)
 plasalid config         # Configure the harness (converge/init) and show configuration
 
 plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail

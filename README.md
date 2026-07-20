@@ -40,7 +40,7 @@ Plasalid itself has no built-in AI model, no API key to configure, no chat windo
 
 * **Full manual control when you want it.** Every step of the pipeline — accounts, transactions, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
 * **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
-* **PII Redaction on tap.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) take a `--redact` flag to mask PII before you pass output to an external agent or paste it anywhere.
+* **PII redaction by default.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) mask PII automatically before output reaches an agent or a paste buffer; pass `--no-redact` for verbatim text.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
 ## Install
@@ -140,7 +140,7 @@ plasalid data           # Open the data folder in your OS file explorer (alias: 
 - All financial data stored locally, encrypted with AES-256 (libsql), default `~/.plasalid/db.sqlite`.
 - Config file (`~/.plasalid/config.json`) written with `0600` permissions; the only secret it holds is the database encryption key, and `config`/`status` only ever surface a fingerprint of it, never the plaintext.
 - Encrypted-PDF passwords are stored AES-GCM-encrypted in `db.sqlite` under a filename pattern; never written to disk in plaintext.
-- `--redact` masks PII in free-text fields on read commands before you pipe output anywhere.
+- Read commands mask PII in free-text fields by default; `--no-redact` returns verbatim text.
 - No telemetry, no analytics, no network calls made by Plasalid itself.
 
 ## Configuration

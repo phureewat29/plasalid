@@ -76,7 +76,7 @@ export function registerQuestions(program: Command): void {
     .description("List questions")
     .option("--batch <id>", "filter by batch id")
     .option("--include-deferred", "include deferred questions")
-    .option("--redact", "mask PII in the question prompt")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(
       runAction(async (opts: any) => {
         const { getDb } = await import("../../db/connection.js");

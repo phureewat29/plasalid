@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -613,5 +613,56 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(JSON.parse(result.stderr.trim()).error.code).toBe("E_INVALID");
     },
     30000,
+  );
+
+  it(
+    "transactions list --json masks PII by default (card number + configured user name); --no-redact returns verbatim",
+    async () => {
+      const userName = "Nutcha Wong";
+      // The redactor sources config.userName from ~/.plasalid/config.json's
+      // userName field (no env var override), same as system.integration.test.ts.
+      mkdirSync(join(tmpDir, ".plasalid"), { recursive: true });
+      writeFileSync(
+        join(tmpDir, ".plasalid", "config.json"),
+        JSON.stringify({ userName }, null, 2) + "\n",
+      );
+
+      await runCli([
+        "accounts", "create", "--id", "expense:travel", "--name", "Travel",
+        "--type", "expense", "--parent", "expense", "--json",
+      ]);
+
+      const description = "Nutcha Wong card 4111 1111 1111 1111 purchase";
+      const add = await runCli([
+        "transactions", "add",
+        "--debit-account", "expense:travel",
+        "--credit-account", "asset:bank",
+        "--amount", "50",
+        "--date", "2026-05-01",
+        "--description", description,
+        "--json",
+      ]);
+      expect(add.code).toBe(0);
+
+      const redacted = await runCli(["transactions", "list", "--account", "expense:travel", "--json"]);
+      expect(redacted.code).toBe(0);
+      const redactedRow = (parseNdjson(redacted.stdout) as any[]).find(
+        (r) => r.debit_account_id === "expense:travel",
+      );
+      expect(redactedRow.description).toContain("[CARD]");
+      expect(redactedRow.description).toContain("[USER]");
+      expect(redactedRow.description).not.toContain("4111 1111 1111 1111");
+      expect(redactedRow.description).not.toContain(userName);
+
+      const verbatim = await runCli([
+        "transactions", "list", "--account", "expense:travel", "--no-redact", "--json",
+      ]);
+      expect(verbatim.code).toBe(0);
+      const verbatimRow = (parseNdjson(verbatim.stdout) as any[]).find(
+        (r) => r.debit_account_id === "expense:travel",
+      );
+      expect(verbatimRow.description).toBe(description);
+    },
+    45000,
   );
 });

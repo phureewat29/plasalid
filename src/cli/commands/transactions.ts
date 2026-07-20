@@ -363,13 +363,13 @@ export function registerTransactions(program: Command): void {
     .option("--query <text>", "filter by search text")
     .option("--limit <n>", "maximum number of results")
     .option("--group", "fold linked transactions into their group clusters")
-    .option("--redact", "mask PII in free-text fields (descriptions, merchant/account names)")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction((opts: ListOpts) => runList(opts)));
 
   transactions
     .command("show <id>")
     .description("Show a transaction's details (with its linked group when present)")
-    .option("--redact", "mask PII in free-text fields (description, merchant/account names)")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction((id: string, opts: { redact?: boolean }) => runShow(id, opts)));
 
   transactions

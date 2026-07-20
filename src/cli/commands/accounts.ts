@@ -391,7 +391,7 @@ export function registerAccounts(program: Command): void {
     .command("list")
     .description("List accounts")
     .option("--type <type>", "filter by account type")
-    .option("--redact", "mask PII in the account name field")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction(listAccounts));
 
   accounts

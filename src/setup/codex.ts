@@ -31,6 +31,8 @@ export function AGENTS_MD_BLOCK(version: string): string {
 
 **Report:** net worth via \`plasalid status --json\` (\`net_worth\` block); \`report --from --to\`, \`accounts tree\`, \`transactions list\`, \`transactions dedupe\`.
 
+**Privacy:** read output is PII-redacted by default; placeholders like \`[USER]\`/\`[CARD]\` are mask placeholders, not literal data — never write them back into the ledger; pass \`--no-redact\` only when the human explicitly asks for verbatim text.
+
 If a fuller skill is installed at \`.claude/skills/plasalid/SKILL.md\`, read it for workflows; exact flags come from \`plasalid <noun> --help\`.
 ${CODEX_END_MARKER}`;
 }

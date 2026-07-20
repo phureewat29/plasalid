@@ -242,6 +242,6 @@ export function registerStatus(program: Command): void {
   program
     .command("status")
     .description("Show harness status: config, database, ledger counts, net worth")
-    .option("--redact", "mask PII (config/data/db paths and error text) in output")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction(async (opts: { redact?: boolean }) => runStatus(opts)));
 }

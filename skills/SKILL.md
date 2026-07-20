@@ -23,6 +23,7 @@ You drive `plasalid`, a deterministic CLI over a local double-entry ledger — n
 - **The harness never prompts.** Destructive commands need `--yes`; passwords go through `--password-stdin` or the vault.
 - **Branch on the exit code:** 0 ok · 1 error · 2 usage · 3 not-ready (see Setup above, or run `plasalid doctor --json`) · 4 input required (password / `--yes` — ask the human, retry) · 5 not-found (wrong id — `list`/`match`) · 6 invalid · 7 partial (batch partly failed — inspect each `result`).
 - **Errors** are one stderr object `{"error":{"code":"E_...","message":...,"hint":...}}`. Always read `hint`.
+- **Read output is PII-redacted by default:** `[USER]`/`[CARD]`/`[ACCT]`… are mask placeholders, not data — never write them back. Verbatim only when the human asks: `plasalid transactions list --no-redact --json`.
 - **Statement rows go through `plasalid ingest commit --file <sf:id> --input <path>`, never `transactions add` per row.** Batch every row into ONE commit: stage the NDJSON to a file, pass `--input`. That links rows to the source file and keeps re-ingest idempotent. `transactions add` is only for one-offs with no source document.
 
 ## When you are blocked
@@ -59,7 +60,7 @@ Degrade in this order when your *environment* fights you — never silently brea
 - **Card rows print two dates (transaction + posted). Use the TRANSACTION date.**
 - **Compound = shared-leg decomposition:** a split line becomes `linked` legs that commit atomically under one `group_id`. Find the ONE shared account; never invent clearing accounts. Payslip legs share `income:salary`; loan-payment legs share the paying `asset:bank:<x>`.
 - **Idempotency (once, everywhere):** put `row_index` (0-based, per page) + `source_page` on every item and pass `--file <sf:id>`. The harness derives a stable id from file hash + page + row, so re-ingest is a `duplicate:true` no-op. Never renumber rows between retries.
-- **Currency:** a transaction's two accounts must share one currency (derived from the accounts, never trusted from input). A cross-currency row is dropped as `currency_mismatch` — post it as two linked legs, one per currency, through `equity:conversion:<ccy>` (see the conversion-pair example under Ingest items). Thai statements print Buddhist-Era years — subtract 543.
+- **Currency:** a transaction's two accounts must share one currency (derived from the accounts, never trusted from input). A cross-currency row is dropped as `currency_mismatch` — post it as two linked legs, one per currency, through `equity:conversion:<ccy>` (see the conversion-pair example under Ingest items).
 - **Corrections:** wrong category -> `plasalid transactions recategorize`; wrong amount/currency -> `plasalid transactions delete` then re-ingest that row. A refund is a forward transaction (see table), never an edit.
 - **Account ids are HINTS:** each side resolves exact -> fuzzy (>= 0.7) -> placeholder -> `expense:uncategorized`, committing and raising a question rather than blocking. Send `raw_descriptor` + `merchant:{canonical_name, alias}` so aliases are learned.
 

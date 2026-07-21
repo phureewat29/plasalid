@@ -3,6 +3,7 @@ import { insertTransaction, accountHasTransactions } from "./transactions.js";
 import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 import { todayIso } from "../../lib/date.js";
 import { normalizeMaskedAccountNumber } from "./account-match.js";
+import { buildPatch, type PatchField } from "../../lib/patch.js";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
@@ -189,6 +190,18 @@ interface UpdateAccountMetadataResult {
   changed: boolean;
 }
 
+const ACCOUNT_PATCH: Record<string, PatchField> = {
+  due_day: {},
+  statement_day: {},
+  points_balance: {},
+  account_number_masked: {
+    transform: (v) => normalizeMaskedAccountNumber(v as string | null),
+  },
+  bank_name: {
+    transform: (v) => (v == null ? null : String(v).toUpperCase()),
+  },
+};
+
 /**
  * Patch metadata fields on an account. Returns before/after snapshots of the
  * touched fields so callers can persist a reversible audit record. `metadata`
@@ -202,39 +215,15 @@ export function updateAccountMetadata(
   const current = findAccountById(db, id);
   if (!current) throw new Error(`Account "${id}" not found.`);
 
-  const sets: string[] = [];
-  const params: any[] = [];
-  const before: Record<string, unknown> = {};
-  const after: Record<string, unknown> = {};
+  const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
 
-  if (patch.due_day !== undefined) {
-    sets.push("due_day = ?"); params.push(patch.due_day);
-    before.due_day = current.due_day; after.due_day = patch.due_day;
-  }
-  if (patch.statement_day !== undefined) {
-    sets.push("statement_day = ?"); params.push(patch.statement_day);
-    before.statement_day = current.statement_day; after.statement_day = patch.statement_day;
-  }
-  if (patch.points_balance !== undefined) {
-    sets.push("points_balance = ?"); params.push(patch.points_balance);
-    before.points_balance = current.points_balance; after.points_balance = patch.points_balance;
-  }
-  if (patch.account_number_masked !== undefined) {
-    const next = normalizeMaskedAccountNumber(patch.account_number_masked);
-    sets.push("account_number_masked = ?"); params.push(next);
-    before.account_number_masked = current.account_number_masked;
-    after.account_number_masked = next;
-  }
-  if (patch.bank_name !== undefined) {
-    const next = patch.bank_name == null ? null : String(patch.bank_name).toUpperCase();
-    sets.push("bank_name = ?"); params.push(next);
-    before.bank_name = current.bank_name; after.bank_name = next;
-  }
-  if (patch.metadata) {
+  if (patch.metadata !== undefined) {
     const existing = current.metadata_json ? JSON.parse(current.metadata_json) : {};
     const merged = { ...existing, ...patch.metadata };
-    sets.push("metadata_json = ?"); params.push(JSON.stringify(merged));
-    before.metadata = existing; after.metadata = merged;
+    sets.push("metadata_json = ?");
+    params.push(JSON.stringify(merged));
+    before.metadata = existing;
+    after.metadata = merged;
   }
 
   if (sets.length === 0) return { before, after, changed: false };

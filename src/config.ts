@@ -19,18 +19,25 @@ export interface PlasalidConfig {
   userName: string;
 }
 
-/** The persisted config keys. Unknown keys are tolerated on read and dropped
- *  on the next write — saveConfig writes ONLY these fields. */
-const CONFIG_KEYS: readonly (keyof PlasalidConfig)[] = [
-  "displayLocale",
-  "displayCurrency",
-  "dbPath",
-  "dbEncryptionKey",
-  "dataDir",
-  "userName",
-];
-
 const PLASALID_DIR = resolve(homedir(), ".plasalid");
+
+/**
+ * One declarative table drives both field resolution and the persisted-key
+ * list. `envVar` (when present) is checked before the file value; `default`
+ * is computed eagerly here, same as the values it replaces. Unknown keys on
+ * disk are tolerated on read and dropped on the next write — saveConfig
+ * writes ONLY the fields listed here.
+ */
+const CONFIG_FIELDS: Record<keyof PlasalidConfig, { envVar?: string; default: string }> = {
+  displayLocale: { default: "th-TH" },
+  displayCurrency: { default: "THB" },
+  dbPath: { envVar: "PLASALID_DB_PATH", default: resolve(PLASALID_DIR, "db.sqlite") },
+  dbEncryptionKey: { envVar: "PLASALID_DB_ENCRYPTION_KEY", default: "" },
+  dataDir: { envVar: "PLASALID_DATA_DIR", default: resolve(PLASALID_DIR, "data") },
+  userName: { default: "User" },
+};
+
+const CONFIG_KEYS = Object.keys(CONFIG_FIELDS) as readonly (keyof PlasalidConfig)[];
 
 export function getPlasalidDir(): string {
   return PLASALID_DIR;
@@ -82,23 +89,16 @@ function pickConfigFields(obj: Record<string, unknown>): Partial<PlasalidConfig>
 
 function buildConfig(): PlasalidConfig {
   const file = loadFileConfig();
+  const out = {} as PlasalidConfig;
   // Precedence: env > file > default. Env is checked first so a shell-exported
-  // override always wins over whatever is in ~/.plasalid/config.json.
-  return {
-    displayLocale: file.displayLocale || "th-TH",
-    displayCurrency: file.displayCurrency || "THB",
-    dbPath:
-      process.env.PLASALID_DB_PATH ||
-      file.dbPath ||
-      resolve(PLASALID_DIR, "db.sqlite"),
-    dbEncryptionKey:
-      process.env.PLASALID_DB_ENCRYPTION_KEY || file.dbEncryptionKey || "",
-    dataDir:
-      process.env.PLASALID_DATA_DIR ||
-      file.dataDir ||
-      resolve(PLASALID_DIR, "data"),
-    userName: file.userName || "User",
-  };
+  // override always wins over whatever is in ~/.plasalid/config.json. `||`
+  // (not `??`) so an empty-string file/env value falls through to the next
+  // source, matching every field's prior hand-written behavior.
+  for (const key of CONFIG_KEYS) {
+    const { envVar, default: fallback } = CONFIG_FIELDS[key];
+    out[key] = (envVar && process.env[envVar]) || file[key] || fallback;
+  }
+  return out;
 }
 
 export const config = buildConfig();

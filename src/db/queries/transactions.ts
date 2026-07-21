@@ -1,6 +1,7 @@
 import type Database from "libsql";
 import { randomUUID, createHash } from "crypto";
 import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
+import { buildPatch, type PatchField } from "../../lib/patch.js";
 
 /**
  * TigerBeetle-style single-row transaction: every movement of money is one row —
@@ -528,6 +529,13 @@ export interface UpdateTransactionMetaFields {
   source_page?: number | null;
 }
 
+const TRANSACTION_META_PATCH: Record<string, PatchField> = {
+  date: {},
+  description: {},
+  merchant_id: {},
+  source_page: {},
+};
+
 /**
  * Edit a transaction's mutable metadata. Amount, currency, and the account columns
  * are intentionally NOT accepted here — moving accounts is `bulkRecategorize`'s
@@ -539,12 +547,7 @@ export function updateTransactionMeta(
   id: string,
   fields: UpdateTransactionMetaFields,
 ): number {
-  const sets: string[] = [];
-  const params: any[] = [];
-  if (fields.date !== undefined)        { sets.push("date = ?");        params.push(fields.date); }
-  if (fields.description !== undefined) { sets.push("description = ?"); params.push(fields.description); }
-  if (fields.merchant_id !== undefined) { sets.push("merchant_id = ?"); params.push(fields.merchant_id); }
-  if (fields.source_page !== undefined) { sets.push("source_page = ?"); params.push(fields.source_page); }
+  const { sets, params } = buildPatch(TRANSACTION_META_PATCH, {}, fields);
   if (sets.length === 0) return 0;
   params.push(id);
   return db.prepare(`UPDATE transactions SET ${sets.join(", ")} WHERE id = ?`).run(...params).changes;

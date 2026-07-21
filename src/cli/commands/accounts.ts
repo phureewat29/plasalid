@@ -15,12 +15,12 @@ import {
   type AccountType,
   type AccountBalanceMinor,
   type CreateAccountInput,
-  type UpdateAccountMetadataPatch,
 } from "../../db/queries/account-balance.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "../../db/queries/account-match.js";
 import { ensureAccountAncestors } from "../../scanner/resolve.js";
 import { fromMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
+import { parseInput, str, num, int, json } from "../../lib/validate.js";
 
 // The account display `name` is the only free-text field; id/parent_id/type/
 // currency and the numeric balances are structured data left verbatim.
@@ -50,13 +50,6 @@ function mapAccountError(err: unknown): never {
   const message = err instanceof Error ? err.message : String(err);
   if (/not found|does not exist/i.test(message)) fail("NOT_FOUND", message);
   fail("INVALID", message);
-}
-
-function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n)) fail("USAGE", `${flag} must be a number, got "${value}"`);
-  return n;
 }
 
 const ACCOUNT_COLUMNS: Column<PresentedAccount>[] = [
@@ -187,51 +180,35 @@ function showAccount(id: string): void {
   });
 }
 
-interface CreateAccountOpts {
-  id?: string;
-  name?: string;
-  type?: string;
-  parent?: string;
-  subtype?: string;
-  bank?: string;
-  masked?: string;
-  currency?: string;
-  dueDay?: string;
-  statementDay?: string;
-  metadata?: string;
-}
+const CREATE_ACCOUNT_SPEC = {
+  id: str().required("--id"),
+  name: str().required("--name"),
+  type: str().required("--type").oneOf(TOP_LEVEL_TYPES),
+  parent_id: str().optional().alias("parent"),
+  subtype: str().optional(),
+  bank_name: str().optional().alias("bank"),
+  account_number_masked: str().optional().alias("masked"),
+  currency: str().optional(),
+  due_day: int().optional(),
+  statement_day: int().optional(),
+  metadata: json<Record<string, unknown>>().optional(),
+};
 
-function createAccountAction(opts: CreateAccountOpts): void {
-  const missing: string[] = [];
-  if (!opts.id) missing.push("--id");
-  if (!opts.name) missing.push("--name");
-  if (!opts.type) missing.push("--type");
-  if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
-
-  let metadata: Record<string, unknown> | null = null;
-  if (opts.metadata !== undefined) {
-    try {
-      metadata = JSON.parse(opts.metadata);
-    } catch (err) {
-      fail("USAGE", `--metadata must be valid JSON: ${(err as Error).message}`);
-    }
-  }
-  const dueDay = parseOptionalNumber(opts.dueDay, "--due-day");
-  const statementDay = parseOptionalNumber(opts.statementDay, "--statement-day");
+function createAccountAction(opts: Record<string, unknown>): void {
+  const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts);
 
   const db = getDb();
-  const type = opts.type as AccountType;
 
   // Auto-create missing intermediate ancestors from the id's colon
   // segments when the caller didn't pin an explicit --parent (which is
   // still honored as-is, unchanged). Skipped for an unrecognized type
   // so the usual createAccount validation reports a clean INVALID
   // instead of failing deeper inside the ancestor walk.
-  let parentId = opts.parent ?? null;
+  let parentId = parsed.parent_id ?? null;
   let createdParents: string[] = [];
   try {
-    if (opts.parent === undefined && TOP_LEVEL_TYPES.includes(type)) {
-      const ancestors = ensureAccountAncestors(db, opts.id!, type);
+    if (parsed.parent_id === undefined && TOP_LEVEL_TYPES.includes(parsed.type)) {
+      const ancestors = ensureAccountAncestors(db, parsed.id, parsed.type);
       if (ancestors.parentId !== null) {
         parentId = ancestors.parentId;
         createdParents = ancestors.createdParents;
@@ -239,17 +216,17 @@ function createAccountAction(opts: CreateAccountOpts): void {
     }
 
     const input: CreateAccountInput = {
-      id: opts.id!,
-      name: opts.name!,
-      type,
+      id: parsed.id,
+      name: parsed.name,
+      type: parsed.type,
       parent_id: parentId,
-      subtype: opts.subtype ?? null,
-      bank_name: opts.bank ?? null,
-      account_number_masked: opts.masked ?? null,
-      currency: opts.currency,
-      due_day: dueDay ?? null,
-      statement_day: statementDay ?? null,
-      metadata,
+      subtype: parsed.subtype ?? null,
+      bank_name: parsed.bank_name ?? null,
+      account_number_masked: parsed.account_number_masked ?? null,
+      currency: parsed.currency,
+      due_day: parsed.due_day ?? null,
+      statement_day: parsed.statement_day ?? null,
+      metadata: parsed.metadata ?? null,
     };
     createAccount(db, input);
     emit({ id: input.id, created: true, created_parents: createdParents });
@@ -258,22 +235,24 @@ function createAccountAction(opts: CreateAccountOpts): void {
   }
 }
 
+const MERGE_ACCOUNTS_SPEC = {
+  from: str().required("--from"),
+  to: str().required("--to"),
+};
+
 function mergeAccountsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
-  const missing: string[] = [];
-  if (!opts.from) missing.push("--from");
-  if (!opts.to) missing.push("--to");
-  if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
+  const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging accounts");
   const db = getDb();
   let result;
   try {
-    result = mergeAccounts(db, opts.from!, opts.to!);
+    result = mergeAccounts(db, parsed.from, parsed.to);
   } catch (err) {
     mapAccountError(err);
   }
   emit({
-    from: opts.from,
-    to: opts.to,
+    from: parsed.from,
+    to: parsed.to,
     moved: result.moved,
     deleted_self_transactions: result.deletedSelfTransactions,
   });
@@ -291,25 +270,26 @@ function deleteAccountAction(id: string, opts: { yes?: boolean }): void {
   emit({ id, deleted: true });
 }
 
+const ADJUST_ACCOUNT_SPEC = {
+  to: num().required("--to"),
+  reason: str().required("--reason"),
+  date: str().optional(),
+};
+
 function adjustAccountAction(
   id: string,
   opts: { to?: string; reason?: string; date?: string },
 ): void {
-  const missing: string[] = [];
-  if (opts.to === undefined) missing.push("--to");
-  if (!opts.reason) missing.push("--reason");
-  if (missing.length) fail("USAGE", `${missing.join(", ")} required`);
-  const target = Number(opts.to);
-  if (!Number.isFinite(target)) fail("USAGE", `--to must be a number, got "${opts.to}"`);
+  const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts as Record<string, unknown>);
 
   const db = getDb();
   let result;
   try {
     result = adjustAccountBalanceViaTransaction(db, {
       accountId: id,
-      targetAmount: target,
-      reason: opts.reason!,
-      date: opts.date,
+      targetAmount: parsed.to,
+      reason: parsed.reason,
+      date: parsed.date,
     });
   } catch (err) {
     mapAccountError(err);
@@ -317,61 +297,45 @@ function adjustAccountAction(
   emit({ transaction_id: result.transactionId, delta: result.delta });
 }
 
+const MATCH_ACCOUNTS_SPEC = {
+  query: str().required("--query"),
+};
+
 function matchAccounts(opts: { query?: string }): void {
-  if (!opts.query) fail("USAGE", "--query is required");
+  const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts as Record<string, unknown>);
   const db = getDb();
-  const matches = findAccountsByFuzzyName(db, opts.query);
+  const matches = findAccountsByFuzzyName(db, parsed.query);
   emitList(matches, MATCH_COLUMNS);
 }
 
-interface UpdateAccountOpts {
-  name?: string;
-  dueDay?: string;
-  statementDay?: string;
-  points?: string;
-  masked?: string;
-  bank?: string;
-  metadata?: string;
-}
+const UPDATE_ACCOUNT_SPEC = {
+  name: str().optional(),
+  due_day: int().optional().nullable(),
+  statement_day: int().optional().nullable(),
+  points_balance: int().optional().nullable().alias("points"),
+  account_number_masked: str().optional().nullable().alias("masked"),
+  bank_name: str().optional().nullable().alias("bank"),
+  metadata: json<Record<string, unknown>>().optional(),
+};
 
-function updateAccountAction(id: string, opts: UpdateAccountOpts): void {
-  const patch: UpdateAccountMetadataPatch = {};
-  const dueDay = parseOptionalNumber(opts.dueDay, "--due-day");
-  if (dueDay !== undefined) patch.due_day = dueDay;
-  const statementDay = parseOptionalNumber(opts.statementDay, "--statement-day");
-  if (statementDay !== undefined) patch.statement_day = statementDay;
-  const points = parseOptionalNumber(opts.points, "--points");
-  if (points !== undefined) patch.points_balance = points;
-  if (opts.masked !== undefined) patch.account_number_masked = opts.masked;
-  if (opts.bank !== undefined) patch.bank_name = opts.bank;
-  if (opts.metadata !== undefined) {
-    try {
-      patch.metadata = JSON.parse(opts.metadata);
-    } catch (err) {
-      fail("USAGE", `--metadata must be valid JSON: ${(err as Error).message}`);
-    }
-  }
-
-  const hasName = opts.name !== undefined;
-  const hasPatch = Object.keys(patch).length > 0;
-  if (!hasName && !hasPatch) {
-    fail(
-      "USAGE",
+function updateAccountAction(id: string, opts: Record<string, unknown>): void {
+  const parsed = parseInput(UPDATE_ACCOUNT_SPEC, opts, {
+    atLeastOne:
       "at least one of --name, --due-day, --statement-day, --points, --masked, --bank, --metadata is required",
-    );
-  }
+  });
+  const { name, ...patch } = parsed;
 
   const db = getDb();
   const result: Record<string, unknown> = { id };
 
-  if (hasName) {
-    const changes = renameAccount(db, id, opts.name!);
+  if (name !== undefined) {
+    const changes = renameAccount(db, id, name);
     if (changes === 0) fail("NOT_FOUND", `account "${id}" not found`);
-    result.name = opts.name;
+    result.name = name;
     result.renamed = true;
   }
 
-  if (hasPatch) {
+  if (Object.keys(patch).length > 0) {
     let metaResult;
     try {
       metaResult = updateAccountMetadata(db, id, patch);

@@ -1,6 +1,6 @@
 {
   "name": "plasalid",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Plasalid — The Harness Layer for Personal Finance",
   "keywords": [
     "finance",
@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --typecheck --typecheck.tsconfig ./tsconfig.typecheck.json",
     "dev": "tsx src/cli/index.ts",
     "release": "tsx scripts/release.ts",
     "integration": "npm run build && tsx scripts/integration.ts",

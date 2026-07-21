@@ -38,6 +38,7 @@ import { autoMergeStrictDuplicateTransactions } from "../../scanner/dedup-transa
 import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
+import { parseInput, str, num } from "../../lib/validate.js";
 
 /**
  * `transactions` — the full command surface over the TigerBeetle-style
@@ -79,32 +80,28 @@ const LIST_COLUMNS: Column<TransactionView>[] = [
   { header: "Currency", value: (t) => t.currency },
 ];
 
-function parseOptionalNumber(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n)) fail("USAGE", `${flag} must be a number, got "${value}"`);
-  return n;
-}
-
 interface ListOpts {
-  account?: string;
-  from?: string;
-  to?: string;
-  query?: string;
-  limit?: string;
   group?: boolean;
   redact?: boolean;
 }
 
+const LIST_TRANSACTIONS_SPEC = {
+  account: str().optional(),
+  from: str().optional(),
+  to: str().optional(),
+  query: str().optional(),
+  limit: num().optional(),
+};
+
 function runList(opts: ListOpts): void {
   const db = getDb();
+  const parsed = parseInput(LIST_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
   const listOpts: Omit<ListTransactionsOptions, "group"> = {};
-  if (opts.account) listOpts.account = opts.account;
-  if (opts.from) listOpts.from = opts.from;
-  if (opts.to) listOpts.to = opts.to;
-  if (opts.query) listOpts.query = opts.query;
-  const limit = parseOptionalNumber(opts.limit, "--limit");
-  if (limit !== undefined) listOpts.limit = limit;
+  if (parsed.account) listOpts.account = parsed.account;
+  if (parsed.from) listOpts.from = parsed.from;
+  if (parsed.to) listOpts.to = parsed.to;
+  if (parsed.query) listOpts.query = parsed.query;
+  if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
 
   if (opts.group) {
     const clusters = listTransactions(db, { ...listOpts, group: true });
@@ -211,6 +208,14 @@ interface AddTransactionOpts {
   merchantName?: string;
 }
 
+const ADD_TRANSACTION_FLAGS_SPEC = {
+  debit_account_id: str().required("--debit-account").alias("debitAccount"),
+  credit_account_id: str().required("--credit-account").alias("creditAccount"),
+  amount: num().required("--amount"),
+  date: str().optional(),
+  description: str().optional(),
+};
+
 /** Build a raw (decimal-amount) transaction from convenience flags or a JSON object
  *  on stdin. Does not validate accounts — the create path does that. */
 async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransactionInput> {
@@ -218,21 +223,14 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
     opts.debitAccount !== undefined || opts.creditAccount !== undefined || opts.amount !== undefined;
 
   if (anyFlag) {
-    const missing: string[] = [];
-    if (!opts.debitAccount) missing.push("--debit-account");
-    if (!opts.creditAccount) missing.push("--credit-account");
-    if (opts.amount === undefined) missing.push("--amount");
-    if (missing.length) fail("USAGE", `transactions add requires ${missing.join(", ")}`);
-
-    const amount = Number(opts.amount);
-    if (!Number.isFinite(amount)) fail("USAGE", `--amount must be a number, got "${opts.amount}"`);
+    const parsed = parseInput(ADD_TRANSACTION_FLAGS_SPEC, opts as Record<string, unknown>);
 
     const raw: RawTransactionInput = {
-      date: opts.date ?? todayIso(),
-      description: opts.description ?? opts.merchantName ?? "Manual entry",
-      debit_account_id: opts.debitAccount!,
-      credit_account_id: opts.creditAccount!,
-      amount,
+      date: parsed.date ?? todayIso(),
+      description: parsed.description ?? opts.merchantName ?? "Manual entry",
+      debit_account_id: parsed.debit_account_id,
+      credit_account_id: parsed.credit_account_id,
+      amount: parsed.amount,
       currency: null,
     };
     if (opts.merchantName) raw.merchant = { canonical_name: opts.merchantName };
@@ -349,6 +347,12 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
   emit({ transaction_id: result.id, duplicate: result.duplicate });
 }
 
+const UPDATE_TRANSACTION_SPEC = {
+  date: str().optional(),
+  description: str().optional(),
+  merchant_id: str().optional().alias("merchant"),
+};
+
 export function registerTransactions(program: Command): void {
   const transactions = program
     .command("transactions")
@@ -391,24 +395,15 @@ export function registerTransactions(program: Command): void {
     .option("--description <text>", "transaction description")
     .option("--merchant <id>", "merchant id to set")
     .action(
-      runAction(
-        (
-          id: string,
-          opts: { date?: string; description?: string; merchant?: string },
-        ) => {
-          const fields: UpdateTransactionMetaFields = {};
-          if (opts.date !== undefined) fields.date = opts.date;
-          if (opts.description !== undefined) fields.description = opts.description;
-          if (opts.merchant !== undefined) fields.merchant_id = opts.merchant;
-          if (Object.keys(fields).length === 0) {
-            fail("USAGE", "at least one of --date, --description, --merchant is required");
-          }
-          const db = getDb();
-          const changes = updateTransactionMeta(db, id, fields);
-          if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
-          emit({ transaction_id: id, updated: true });
-        },
-      ),
+      runAction((id: string, opts: Record<string, unknown>) => {
+        const fields: UpdateTransactionMetaFields = parseInput(UPDATE_TRANSACTION_SPEC, opts, {
+          atLeastOne: "at least one of --date, --description, --merchant is required",
+        });
+        const db = getDb();
+        const changes = updateTransactionMeta(db, id, fields);
+        if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
+        emit({ transaction_id: id, updated: true });
+      }),
     );
 
   transactions

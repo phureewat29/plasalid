@@ -56,11 +56,7 @@ export function renameAccount(db: Database.Database, id: string, name: string): 
   return db.prepare(`UPDATE accounts SET name = ? WHERE id = ?`).run(name, id).changes;
 }
 
-/**
- * Idempotently insert one of the five top-level type roots (id = type name,
- * parent_id = null). Called by `createAccount` when a child's declared parent
- * is a missing top-level root.
- */
+/** Idempotently insert a top-level type root (id = type name, parent_id = null). */
 export function ensureTopLevelRoot(db: Database.Database, type: AccountType): void {
   if (findAccountById(db, type)) return;
   db.prepare(
@@ -105,13 +101,10 @@ export interface CreateAccountInput {
 }
 
 /**
- * Insert a new account row. Enforces the three hierarchy invariants:
- *   1. Top-level roots: parent_id null, id == type, one of TOP_LEVEL_TYPES.
- *   2. Children: parent_id non-null, parent must exist (the top-level root is
- *      auto-bootstrapped if missing; intermediate categories must be created
- *      explicitly), parent.type must equal input.type, input.id must start with
- *      parent.id + ':'.
- *   3. UNIQUE on id (surfaces as code: 'ACCOUNT_EXISTS').
+ * Enforces the hierarchy invariants: top-level roots have parent_id null and
+ * id == type; children need an existing same-type parent (its top-level root
+ * auto-bootstraps, intermediate categories don't) and an id prefixed
+ * `parent.id + ':'`. Duplicate id surfaces as code 'ACCOUNT_EXISTS'.
  */
 export function createAccount(db: Database.Database, input: CreateAccountInput): void {
   const bank = input.bank_name ? String(input.bank_name).toUpperCase() : null;
@@ -203,9 +196,8 @@ const ACCOUNT_PATCH: Record<string, PatchField> = {
 };
 
 /**
- * Patch metadata fields on an account. Returns before/after snapshots of the
- * touched fields so callers can persist a reversible audit record. `metadata`
- * is shallow-merged into the existing metadata_json blob.
+ * Returns before/after snapshots of touched fields for a reversible audit
+ * record. `metadata` is shallow-merged into the existing metadata_json blob.
  */
 export function updateAccountMetadata(
   db: Database.Database,
@@ -240,11 +232,8 @@ interface MergeAccountsResult {
   deletedSelfTransactions: number;
 }
 
-/**
- * Re-point every transaction leg on `fromId` to `toId` (via `repointTransactions`),
- * then delete the source account. Refuses if the source still has children.
- * Returns legs moved and self-transactions deleted.
- */
+/** Re-points every transaction leg on `fromId` to `toId`, then deletes the
+ *  source account. Refuses if the source still has children. */
 export function mergeAccounts(
   db: Database.Database,
   fromId: string,
@@ -284,10 +273,7 @@ export function deleteAccount(db: Database.Database, id: string): void {
 
 const EQUITY_ADJUST_ID = "equity:adjustments";
 
-/**
- * Recursive CTE walk over `accounts.parent_id` returning the root and every
- * descendant. Used by `getRollupBalance` and by hierarchical rendering paths.
- */
+/** Recursive CTE walk over `accounts.parent_id`: root plus every descendant. */
 export function getAccountSubtree(db: Database.Database, rootId: string): AccountRow[] {
   return db.prepare(
     `WITH RECURSIVE subtree AS (
@@ -299,21 +285,15 @@ export function getAccountSubtree(db: Database.Database, rootId: string): Accoun
   ).all(rootId) as AccountRow[];
 }
 
-/**
- * Balance derivations over the single-row `transactions` table (TigerBeetle-core).
- *
- * Every transaction contributes a debit leg and a credit leg via the UNION-ALL
- * subquery, so account balances fall out of the standard normal-balance rule:
- * asset/expense are debit-normal, the rest credit-normal. Amounts are integer
- * minor units in the table; decimal fields are derived per the account's own
- * currency exponent.
- */
+// Balance derivations below share one normal-balance rule: asset/expense are
+// debit-normal, the rest credit-normal. Amounts are integer minor units;
+// decimal fields are derived per the account's own currency exponent.
 
-/** Debit + credit legs of every transaction, one row per leg. Shared by the
- *  transaction-based aggregates below. */
-const TRANSACTION_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS side FROM transactions
+/** Debit + credit legs of every non-void transaction, one row per leg (`void_of`
+ *  rows excluded so a merged mirror never double-counts). */
+const TRANSACTION_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS side FROM transactions WHERE void_of IS NULL
        UNION ALL
-       SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transactions`;
+       SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transactions WHERE void_of IS NULL`;
 
 export interface AccountBalanceMinor extends AccountRow {
   /** Sum of debit legs, minor units. */
@@ -326,10 +306,7 @@ export interface AccountBalanceMinor extends AccountRow {
   balance: number;
 }
 
-/**
- * Per-account balance from the `transactions` table. Normal-balance rule matches
- * `getAccountBalances`: asset/expense are debit-normal, the rest credit-normal.
- */
+/** Per-account balance from the `transactions` table (normal-balance rule above). */
 export function getAccountBalancesFromTransactions(
   db: Database.Database,
   opts: { type?: AccountType } = {},
@@ -381,10 +358,8 @@ export function getNetWorthFromTransactions(db: Database.Database): NetWorth {
 }
 
 /**
- * Income (credits − debits on income accounts) and expenses (debits − credits
- * on expense accounts) over a date range, from `transactions`. Grouped by
- * (type, currency) so each currency's minor units convert with the right
- * exponent before summing.
+ * Income (credits − debits) and expenses (debits − credits) over a date range.
+ * Grouped by (type, currency) so each currency converts with its own exponent.
  */
 export function getPeriodTotalsFromTransactions(
   db: Database.Database,
@@ -411,8 +386,7 @@ export function getPeriodTotalsFromTransactions(
   return { income, expenses };
 }
 
-/** Subtree balance (root inclusive) from `transactions`, same convention as
- *  `getRollupBalance`. Grouped by (type, currency) for correct conversion. */
+/** Subtree balance (root inclusive), grouped by (type, currency) for correct conversion. */
 export function getRollupBalanceFromTransactions(db: Database.Database, rootId: string): number {
   const subtree = getAccountSubtree(db, rootId);
   if (subtree.length === 0) return 0;
@@ -441,12 +415,10 @@ export function getRollupBalanceFromTransactions(db: Database.Database, rootId: 
 }
 
 /**
- * Transaction-model counterpart of `mergeAccounts`' re-point step. Moves every
- * transaction leg on `fromId` to `toId` across BOTH columns. Because the
- * debit<>credit CHECK forbids a transient self-transaction, rows that would become
- * degenerate (one side is `fromId`, the other already `toId`) are deleted FIRST,
- * then the remainder is re-pointed. Returns legs moved and self-transactions
- * deleted. (Does not touch the accounts table — the caller deletes the source.)
+ * Re-point step for `mergeAccounts`. Rows that would become a degenerate
+ * self-transaction (one side `fromId`, the other already `toId`) are deleted
+ * FIRST — the debit<>credit CHECK forbids that state even transiently — then
+ * the remainder is re-pointed. Does not touch the accounts table.
  */
 export function repointTransactions(
   db: Database.Database,
@@ -495,10 +467,9 @@ interface AdjustViaTransactionResult {
 }
 
 /**
- * Transaction-model counterpart of `adjustAccountBalance`: move an account to
- * `targetAmount` by posting one balancing transaction against `equity:adjustments`.
- * Delta math is done in integer minor units (no float drift); a zero delta is a
- * no-op. Orientation matches the posting-based version.
+ * Moves an account to `targetAmount` by posting one balancing transaction
+ * against `equity:adjustments`. Delta math is integer minor units (no float
+ * drift); a zero delta is a no-op.
  */
 export function adjustAccountBalanceViaTransaction(
   db: Database.Database,

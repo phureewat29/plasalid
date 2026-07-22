@@ -258,14 +258,14 @@ describe("accountNumberKey", () => {
   });
 
   it("uses the literal trailing digits after a mask run, without dropping one as a check digit", () => {
-    // Real bug: digits before the mask used to get concatenated with the
-    // trailing digits, and the check-digit heuristic then dropped a real
-    // trailing digit ("470686XXXXXX9483" -> "6948" instead of "9483").
+    /**
+     * Regression: digits before the mask used to get concatenated with the
+     * trailing digits, and the check-digit heuristic dropped a real trailing
+     * digit ("470686XXXXXX9483" -> "6948" instead of "9483").
+     */
     expect(accountNumberKey("470686XXXXXX9483")).toBe("9483");
     expect(accountNumberKey("470686XXXXXX483")).toBe("483");
-    // A pure-digit bank account number (no mask characters at all) keeps the
-    // existing check-digit-drop heuristic exactly (copy of an existing
-    // passing expectation: "••76520" -> "7652" via normalizeMaskedAccountNumber).
+    // A pure-digit number (no mask chars) keeps the check-digit-drop heuristic: "76520" -> "7652".
     expect(accountNumberKey("76520")).toBe("7652");
   });
 });

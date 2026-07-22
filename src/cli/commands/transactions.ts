@@ -18,8 +18,11 @@ import {
   updateTransactionMeta,
   bulkRecategorize,
   listTransactions,
+  countTransactions,
+  clampListLimit,
   getTransaction,
   findDuplicateTransactions,
+  voidTransactionAsMirror,
   type BulkRecategorizeFilter,
   type UpdateTransactionMetaFields,
   type ListTransactionsOptions,
@@ -28,28 +31,21 @@ import {
   type DuplicateTransactionRow,
 } from "../../db/queries/transactions.js";
 import { findAccountById } from "../../db/queries/account-balance.js";
+import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
 import {
   commitTransaction,
   defaultTransactionCommitHooks,
   type TransactionCommitContext,
   type RawTransactionInput,
-} from "../../scanner/commit-transaction.js";
-import { autoMergeStrictDuplicateTransactions } from "../../scanner/dedup-transactions.js";
+} from "../../ingest/commit-transaction.js";
+import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup-transactions.js";
 import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
-import { parseInput, str, num } from "../../lib/validate.js";
+import { parseInput, str, num, json } from "../../lib/validate.js";
 
-/**
- * `transactions` — the full command surface over the TigerBeetle-style
- * `transactions` table. Read: `transactions list` (bare list with filters) and
- * `transactions show <tx:id>` (one transaction with its linked group). Write:
- * `add` (strict by default; `--resolve` fuzzy-resolves account/merchant hints
- * and raises questions), `update`, `delete`, `recategorize` (bulk re-point), and
- * `dedupe` (find, optionally auto-merge, likely duplicates). Amounts are stored
- * as integer minor units and rendered/emitted as decimals here (the CLI
- * boundary).
- */
+// `transactions`: list/show/add/update/delete/recategorize/dedupe over the
+// TigerBeetle-style table. Amounts are minor units in the DB, decimals here (the CLI boundary).
 
 // Read view (list / show)
 
@@ -90,6 +86,8 @@ const LIST_TRANSACTIONS_SPEC = {
   from: str().optional(),
   to: str().optional(),
   query: str().optional(),
+  amount: num().optional(),
+  currency: str().optional(),
   limit: num().optional(),
 };
 
@@ -101,11 +99,21 @@ function runList(opts: ListOpts): void {
   if (parsed.from) listOpts.from = parsed.from;
   if (parsed.to) listOpts.to = parsed.to;
   if (parsed.query) listOpts.query = parsed.query;
+  // Amount crosses the decimal -> minor-unit boundary here; currency defaults to
+  // THB (the ledger's primary currency) when the caller doesn't pin one.
+  if (parsed.amount !== undefined) {
+    listOpts.amount = toMinorUnits(parsed.amount, parsed.currency ?? "THB");
+  }
   if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
+
+  const total = countTransactions(db, listOpts);
+  const limit = clampListLimit(listOpts.limit);
 
   if (opts.group) {
     const clusters = listTransactions(db, { ...listOpts, group: true });
     emitClusters(clusters, !!opts.redact);
+    const returned = clusters.reduce((n, c) => n + c.transactions.length, 0);
+    emitSummary({ total, returned, has_more: total > returned, limit });
     return;
   }
 
@@ -115,6 +123,7 @@ function runList(opts: ListOpts): void {
     REDACT_FIELDS,
   );
   emitList(rows, LIST_COLUMNS);
+  emitSummary({ total, returned: rows.length, has_more: total > rows.length, limit });
 }
 
 function emitClusters(clusters: TransactionCluster[], redact: boolean): void {
@@ -196,6 +205,34 @@ function runDedupe(opts: { autoMerge?: boolean }): void {
   });
 }
 
+// Merge (void a mirror into its surviving twin)
+
+const MERGE_TRANSACTIONS_SPEC = {
+  from: str().required("--from"),
+  to: str().required("--to"),
+};
+
+function mergeTransactionsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
+  const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
+  requireYes(opts, "merging transactions");
+  const db = getDb();
+
+  let result;
+  try {
+    result = voidTransactionAsMirror(db, parsed.from, parsed.to);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/not found/i.test(message)) fail("NOT_FOUND", message);
+    fail("INVALID", message);
+  }
+
+  if (result.alreadyVoid) {
+    emit({ from: parsed.from, to: parsed.to, voided: false, already_void: true });
+    return;
+  }
+  emit({ from: parsed.from, to: parsed.to, voided: true });
+}
+
 // Write path (add)
 
 interface AddTransactionOpts {
@@ -216,8 +253,23 @@ const ADD_TRANSACTION_FLAGS_SPEC = {
   description: str().optional(),
 };
 
-/** Build a raw (decimal-amount) transaction from convenience flags or a JSON object
- *  on stdin. Does not validate accounts — the create path does that. */
+// Loose on required fields (debit/credit default to "", amount passes through
+// unchecked): the strict/resolve checks in `addTransaction` stay the authority
+// for exit codes and messages.
+const ADD_TRANSACTION_STDIN_SPEC = {
+  date: str().default(""),
+  description: str().optional(),
+  debit_account_id: str().default("").alias("debit_account"),
+  credit_account_id: str().default("").alias("credit_account"),
+  currency: str().nullable().default(null),
+  merchant: json<MerchantUpsertInput>().nullable().default(null),
+  merchant_id: str().nullable().default(null),
+  raw_descriptor: str().nullable().default(null),
+  source_page: num().nullable().default(null),
+  code: str().nullable().default(null),
+};
+
+// Builds a raw (decimal-amount) transaction from flags or stdin JSON; does not validate accounts.
 async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransactionInput> {
   const anyFlag =
     opts.debitAccount !== undefined || opts.creditAccount !== undefined || opts.amount !== undefined;
@@ -244,28 +296,24 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
       "provide --debit-account/--credit-account/--amount, or pipe a transaction JSON object on stdin",
     );
   }
-  let parsed: unknown;
+  let decoded: unknown;
   try {
-    parsed = JSON.parse(stdin);
+    decoded = JSON.parse(stdin);
   } catch (err) {
     fail("USAGE", `invalid JSON on stdin: ${(err as Error).message}`);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
     fail("USAGE", "stdin must contain a single JSON transaction object (not an array)");
   }
-  const obj = parsed as any;
+  const record = decoded as Record<string, unknown>;
+  const parsed = parseInput(ADD_TRANSACTION_STDIN_SPEC, record);
   return {
-    date: obj.date,
-    description: obj.description ?? obj.merchant?.canonical_name ?? "Manual entry",
-    debit_account_id: obj.debit_account_id ?? obj.debit_account,
-    credit_account_id: obj.credit_account_id ?? obj.credit_account,
-    amount: obj.amount,
-    currency: obj.currency ?? null,
-    merchant: obj.merchant ?? null,
-    merchant_id: obj.merchant_id ?? null,
-    raw_descriptor: obj.raw_descriptor ?? null,
-    source_page: obj.source_page ?? null,
-    code: obj.code ?? null,
+    ...parsed,
+    // Description prefers an explicit value, then the merchant's canonical name.
+    description: parsed.description ?? parsed.merchant?.canonical_name ?? "Manual entry",
+    // amount's number check is owned by the strict/resolve validators below, so it
+    // passes through un-coerced (keeping their exit codes and messages).
+    amount: record.amount as number,
   };
 }
 
@@ -274,13 +322,11 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
   const raw = await buildRawTransaction(opts);
 
   if (opts.resolve) {
-    const scanId = `sc:${randomUUID()}`;
+    const batchId = `ib:${randomUUID()}`;
     const ctx: TransactionCommitContext = {
-      scanId,
+      batchId,
       fileId: null,
       fileHash: null,
-      chunkId: null,
-      progress: null,
     };
     const outcome = commitTransaction(db, ctx, raw, defaultTransactionCommitHooks(db, ctx));
     if (!outcome.ok) {
@@ -353,6 +399,13 @@ const UPDATE_TRANSACTION_SPEC = {
   merchant_id: str().optional().alias("merchant"),
 };
 
+// The `--filter-account` clarification is folded into the required label so a
+// missing flag still explains what that account controls.
+const RECATEGORIZE_SPEC = {
+  set_account: str().required("--set-account"),
+  filter_account: str().required("--filter-account (recategorize moves that account's transactions)"),
+};
+
 export function registerTransactions(program: Command): void {
   const transactions = program
     .command("transactions")
@@ -365,7 +418,9 @@ export function registerTransactions(program: Command): void {
     .option("--from <date>", "filter from date")
     .option("--to <date>", "filter to date")
     .option("--query <text>", "filter by search text")
-    .option("--limit <n>", "maximum number of results")
+    .option("--amount <decimal>", "filter by exact amount (decimal)")
+    .option("--currency <code>", "currency for --amount (default THB)")
+    .option("--limit <n>", "max rows (default 50, max 500)")
     .option("--group", "fold linked transactions into their group clusters")
     .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction((opts: ListOpts) => runList(opts)));
@@ -426,17 +481,14 @@ export function registerTransactions(program: Command): void {
     .option("--filter-account <id>", "account whose transactions are moved (required)")
     .action(
       runAction(
-        (opts: { setAccount?: string; filterAccount?: string }) => {
-          if (!opts.setAccount) fail("USAGE", "--set-account is required");
-          if (!opts.filterAccount) {
-            fail("USAGE", "--filter-account is required (recategorize moves that account's transactions)");
-          }
+        (opts: Record<string, unknown>) => {
+          const parsed = parseInput(RECATEGORIZE_SPEC, opts);
           const db = getDb();
-          const filter: BulkRecategorizeFilter = { accountId: opts.filterAccount };
+          const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
 
           let result;
           try {
-            result = bulkRecategorize(db, filter, { accountId: opts.setAccount });
+            result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
           } catch (err) {
             fail("INVALID", (err as Error).message);
           }
@@ -454,4 +506,12 @@ export function registerTransactions(program: Command): void {
     .description("Find likely duplicate transactions (optionally auto-merge them)")
     .option("--auto-merge", "automatically merge detected duplicates")
     .action(runAction((opts: { autoMerge?: boolean }) => runDedupe(opts)));
+
+  transactions
+    .command("merge")
+    .description("Merge a mirror transaction into its surviving twin (voids --from)")
+    .option("--from <id>", "mirror transaction id to void")
+    .option("--to <id>", "surviving transaction id")
+    .option("--yes", "skip confirmation")
+    .action(runAction(mergeTransactionsAction));
 }

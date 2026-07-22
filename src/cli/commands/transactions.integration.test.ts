@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
+import { createSandbox, type Sandbox } from "../../lib/sandbox.js";
 
-// transactions.integration.test.ts lives in src/cli/commands/ -> repo root is
-// three levels up.
+// transactions.integration.test.ts lives in src/cli/commands/ -> repo root is three levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
 
 interface CliResult {
   stdout: string;
@@ -16,36 +17,26 @@ interface CliResult {
   code: number;
 }
 
-let tmpDir: string;
+let sandbox: Sandbox;
 let dbPath: string;
-let baseEnv: NodeJS.ProcessEnv;
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "plasalid-ledger-it-"));
-  dbPath = join(tmpDir, "db.sqlite");
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.FORCE_COLOR;
-  delete env.NO_COLOR;
-  env.HOME = tmpDir;
-  env.USERPROFILE = tmpDir;
-  env.PLASALID_DB_PATH = dbPath;
-  env.PLASALID_DATA_DIR = join(tmpDir, "data");
-  env.PLASALID_CACHE_DIR = join(tmpDir, "cache");
-  baseEnv = env;
+  sandbox = createSandbox("plasalid-ledger-it-");
+  dbPath = sandbox.dbPath;
 });
 
 afterAll(() => {
-  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  sandbox.cleanup();
 });
 
 function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      ["tsx", "src/cli/index.ts", ...args],
+      ["tsx", cliEntry, ...args],
       {
-        cwd: repoRoot,
-        env: baseEnv,
+        cwd: sandbox.root,
+        env: sandbox.env,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
       },
@@ -187,7 +178,7 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
-    "transactions add --resolve creates a placeholder account and raises a question",
+    "transactions add --resolve silently auto-creates a well-formed placeholder path (no question)",
     async () => {
       const result = await runCli([
         "transactions",
@@ -208,7 +199,9 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(result.code).toBe(0);
       const parsed = parseOne(result.stdout);
       expect(parsed.transaction_id).toMatch(/^tx:/);
-      expect(parsed.raised_questions).toBe(1);
+      // A well-formed multi-segment path under a known type is unambiguous, so the
+      // resolve ladder auto-creates it silently — no uncategorized question.
+      expect(parsed.raised_questions).toBe(0);
 
       const raw = new Database(dbPath);
       try {
@@ -220,7 +213,7 @@ describe("transactions CLI integration (subprocess)", () => {
         const question = raw
           .prepare("SELECT * FROM questions WHERE account_id = ? AND kind = 'uncategorized'")
           .get("expense:new-thing");
-        expect(question).toBeTruthy();
+        expect(question).toBeFalsy();
       } finally {
         raw.close();
       }
@@ -261,7 +254,6 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(parsed.skipped_self_transaction).toBe(0);
       expect(parsed.sample_transaction_ids).toHaveLength(1);
 
-      // The transaction now touches expense:food, no longer expense:groceries.
       const listed = await runCli(["transactions", "list", "--account", "expense:food", "--json"]);
       expect(listed.code).toBe(0);
       const rows = parseNdjson(listed.stdout) as any[];
@@ -528,9 +520,11 @@ describe("transactions CLI integration (subprocess)", () => {
   it(
     "accounts create with a 3-deep id and no --parent auto-creates missing ancestors",
     async () => {
-      // "liability" is untouched by every earlier test in this file, so this
-      // is a genuinely empty chain: the root and the middle category both
-      // need to be created as a side effect of the leaf create.
+      /**
+       * "liability" is untouched by every earlier test, so this is a
+       * genuinely empty chain — root and middle category both get created
+       * as a side effect of the leaf create.
+       */
       const result = await runCli([
         "accounts",
         "create",
@@ -592,11 +586,11 @@ describe("transactions CLI integration (subprocess)", () => {
   it(
     "accounts create with a type mismatch against an existing ancestor still fails INVALID",
     async () => {
-      // "liability:credit_card" exists with type "liability"; requesting a
-      // leaf under it with a mismatched --type must still fail cleanly, even
-      // though the ancestor-walk itself doesn't need to create anything (it
-      // already exists, so the walk silently skips it) — the mismatch is
-      // caught by createAccount's own parent/type check on the leaf insert.
+      /**
+       * "liability:credit_card" already exists, so the ancestor-walk skips
+       * it silently — the mismatched --type is instead caught by
+       * createAccount's own parent/type check on the leaf insert.
+       */
       const result = await runCli([
         "accounts",
         "create",
@@ -616,14 +610,131 @@ describe("transactions CLI integration (subprocess)", () => {
   );
 
   it(
+    "accounts create --masked echoes the stored (normalized) masked number",
+    async () => {
+      // "equity" is untouched by every earlier test in this file.
+      const result = await runCli([
+        "accounts", "create",
+        "--id", "equity:card",
+        "--name", "Card",
+        "--type", "equity",
+        "--masked", "075-2-48870-0",
+        "--json",
+      ]);
+      expect(result.code).toBe(0);
+      expect(parseOne(result.stdout)).toMatchObject({
+        id: "equity:card",
+        created: true,
+        account_number_masked: "••8870",
+      });
+
+      // A plain create without --masked keeps the field absent entirely.
+      const unmasked = await runCli([
+        "accounts", "create",
+        "--id", "equity:plain",
+        "--name", "Plain",
+        "--type", "equity",
+        "--json",
+      ]);
+      expect(unmasked.code).toBe(0);
+      expect(parseOne(unmasked.stdout)).not.toHaveProperty("account_number_masked");
+    },
+    30000,
+  );
+
+  it(
+    "accounts create --input batch-creates accounts, is idempotent on re-run, and PARTIALs on a malformed row",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "plasalid-accounts-input-"));
+      const inputPath = join(dir, "accounts.ndjson");
+      const rows = [
+        { id: "equity:batch-a", name: "Batch A", type: "equity", masked: "111-1-11111-1" },
+        { id: "equity:batch-b", name: "Batch B", type: "equity" },
+      ];
+      writeFileSync(inputPath, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+      const first = await runCli(["accounts", "create", "--input", inputPath, "--json"]);
+      expect(first.code).toBe(0);
+      const firstObjs = parseNdjson(first.stdout) as any[];
+      const firstResults = firstObjs.filter((o) => o.type === "result");
+      expect(firstResults).toHaveLength(2);
+      expect(firstResults[0]).toMatchObject({
+        index: 0, ok: true, id: "equity:batch-a", created: true, account_number_masked: "••1111",
+      });
+      expect(Array.isArray(firstResults[0].created_parents)).toBe(true);
+      expect(firstResults[1]).toMatchObject({
+        index: 1, ok: true, id: "equity:batch-b", created: true, created_parents: [],
+      });
+      expect(firstObjs.find((o) => o.type === "summary")).toMatchObject({
+        created: 2, duplicates: 0, failed: 0,
+      });
+
+      // Re-run the identical batch: idempotent, every row now a duplicate.
+      const second = await runCli(["accounts", "create", "--input", inputPath, "--json"]);
+      expect(second.code).toBe(0);
+      const secondObjs = parseNdjson(second.stdout) as any[];
+      expect(secondObjs.filter((o) => o.type === "result")).toEqual([
+        { type: "result", index: 0, ok: true, id: "equity:batch-a", duplicate: true },
+        { type: "result", index: 1, ok: true, id: "equity:batch-b", duplicate: true },
+      ]);
+      expect(secondObjs.find((o) => o.type === "summary")).toMatchObject({
+        created: 0, duplicates: 2, failed: 0,
+      });
+
+      // One malformed row (missing --name) alongside one good row: PARTIAL,
+      // the good row is still created.
+      const mixedPath = join(dir, "mixed.ndjson");
+      writeFileSync(
+        mixedPath,
+        [
+          JSON.stringify({ id: "equity:batch-c", type: "equity" }),
+          JSON.stringify({ id: "equity:batch-d", name: "Batch D", type: "equity" }),
+        ].join("\n") + "\n",
+      );
+      const mixed = await runCli(["accounts", "create", "--input", mixedPath, "--json"]);
+      expect(mixed.code).toBe(7); // EXIT.PARTIAL
+      const mixedObjs = parseNdjson(mixed.stdout) as any[];
+      const mixedResults = mixedObjs.filter((o) => o.type === "result");
+      expect(mixedResults[0]).toMatchObject({ index: 0, ok: false });
+      expect(typeof mixedResults[0].message).toBe("string");
+      expect(mixedResults[1]).toMatchObject({
+        index: 1, ok: true, id: "equity:batch-d", created: true,
+      });
+      expect(mixedObjs.find((o) => o.type === "summary")).toMatchObject({
+        created: 1, duplicates: 0, failed: 1,
+      });
+    },
+    45000,
+  );
+
+  it(
+    "accounts create --input rejects per-account flags passed alongside it (USAGE)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "plasalid-accounts-input-usage-"));
+      const inputPath = join(dir, "accounts.ndjson");
+      writeFileSync(inputPath, JSON.stringify({ id: "equity:batch-e", name: "E", type: "equity" }) + "\n");
+
+      const result = await runCli([
+        "accounts", "create", "--input", inputPath, "--name", "Nope", "--json",
+      ]);
+      expect(result.code).toBe(2); // EXIT.USAGE
+      expect(result.stdout.trim()).toBe("");
+      const err = JSON.parse(result.stderr.trim());
+      expect(err.error.code).toBe("E_USAGE");
+      expect(err.error.message).toBe("--input and per-account flags are mutually exclusive");
+    },
+    30000,
+  );
+
+  it(
     "transactions list --json masks PII by default (card number + configured user name); --no-redact returns verbatim",
     async () => {
       const userName = "Nutcha Wong";
-      // The redactor sources config.userName from ~/.plasalid/config.json's
+      // The redactor sources config.userName from PLASALID_DIR/config.json's
       // userName field (no env var override), same as system.integration.test.ts.
-      mkdirSync(join(tmpDir, ".plasalid"), { recursive: true });
+      mkdirSync(join(sandbox.home, ".plasalid"), { recursive: true });
       writeFileSync(
-        join(tmpDir, ".plasalid", "config.json"),
+        join(sandbox.home, ".plasalid", "config.json"),
         JSON.stringify({ userName }, null, 2) + "\n",
       );
 
@@ -664,5 +775,125 @@ describe("transactions CLI integration (subprocess)", () => {
       expect(verbatimRow.description).toBe(description);
     },
     45000,
+  );
+
+  it(
+    "transactions merge voids a mirror into its twin; re-merge is a no-op; guards reject non-mirrors and missing ids",
+    async () => {
+      await runCli([
+        "accounts", "create", "--id", "expense:mirror", "--name", "Mirror",
+        "--type", "expense", "--parent", "expense", "--json",
+      ]);
+
+      // Two faithful copies of the same real-world payment (one per statement).
+      const ids: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const add = await runCli([
+          "transactions", "add",
+          "--debit-account", "expense:mirror",
+          "--credit-account", "asset:bank",
+          "--amount", "88",
+          "--date", "2026-06-01",
+          "--description", "cross-statement payment",
+          "--json",
+        ]);
+        expect(add.code).toBe(0);
+        ids.push(parseOne(add.stdout).transaction_id as string);
+      }
+      const [a, b] = ids;
+
+      // --amount surfaces the mirror pair for deliberate detection.
+      const found = await runCli([
+        "transactions", "list", "--account", "expense:mirror", "--amount", "88", "--json",
+      ]);
+      expect(found.code).toBe(0);
+      const foundSummary = (parseNdjson(found.stdout) as any[]).find((o) => o.type === "summary");
+      expect(foundSummary.total).toBe(2);
+
+      const merge = await runCli([
+        "transactions", "merge", "--from", b, "--to", a, "--yes", "--json",
+      ]);
+      expect(merge.code).toBe(0);
+      expect(parseOne(merge.stdout)).toEqual({ from: b, to: a, voided: true });
+
+      // The voided row survives and points at its surviving twin.
+      const show = await runCli(["transactions", "show", b, "--json"]);
+      expect(show.code).toBe(0);
+      const shown = parseOne(show.stdout);
+      expect(shown.void_of).toBe(a);
+
+      const again = await runCli([
+        "transactions", "merge", "--from", b, "--to", a, "--yes", "--json",
+      ]);
+      expect(again.code).toBe(0);
+      expect(parseOne(again.stdout)).toEqual({ from: b, to: a, voided: false, already_void: true });
+
+      const noYes = await runCli([
+        "transactions", "merge", "--from", b, "--to", a, "--json",
+      ]);
+      expect(noYes.code).toBe(4); // EXIT.INPUT_REQUIRED
+
+      // A non-mirror (different amount) is refused with INVALID.
+      const other = await runCli([
+        "transactions", "add",
+        "--debit-account", "expense:mirror",
+        "--credit-account", "asset:bank",
+        "--amount", "99",
+        "--date", "2026-06-02",
+        "--description", "not a mirror",
+        "--json",
+      ]);
+      const otherId = parseOne(other.stdout).transaction_id as string;
+      const mismatch = await runCli([
+        "transactions", "merge", "--from", otherId, "--to", a, "--yes", "--json",
+      ]);
+      expect(mismatch.code).toBe(6); // EXIT.INVALID
+      expect(JSON.parse(mismatch.stderr.trim()).error.code).toBe("E_INVALID");
+
+      const missing = await runCli([
+        "transactions", "merge", "--from", "tx:nope", "--to", a, "--yes", "--json",
+      ]);
+      expect(missing.code).toBe(5); // EXIT.NOT_FOUND
+      expect(JSON.parse(missing.stderr.trim()).error.code).toBe("E_NOT_FOUND");
+    },
+    90000,
+  );
+
+  it(
+    "transactions list --json emits a summary row with total/returned/has_more",
+    async () => {
+      await runCli([
+        "accounts", "create", "--id", "expense:pagination", "--name", "Pagination",
+        "--type", "expense", "--parent", "expense", "--json",
+      ]);
+      for (let i = 0; i < 3; i++) {
+        const add = await runCli([
+          "transactions", "add",
+          "--debit-account", "expense:pagination",
+          "--credit-account", "asset:bank",
+          "--amount", String(10 + i),
+          "--date", `2026-07-0${i + 1}`,
+          "--description", `page row ${i}`,
+          "--json",
+        ]);
+        expect(add.code).toBe(0);
+      }
+
+      const all = await runCli(["transactions", "list", "--account", "expense:pagination", "--json"]);
+      expect(all.code).toBe(0);
+      const allObjs = parseNdjson(all.stdout) as any[];
+      const rows = allObjs.filter((o) => o.type !== "summary");
+      const summary = allObjs.find((o) => o.type === "summary");
+      expect(rows).toHaveLength(3);
+      expect(summary).toMatchObject({ total: 3, returned: 3, has_more: false, limit: 50 });
+
+      const capped = await runCli([
+        "transactions", "list", "--account", "expense:pagination", "--limit", "1", "--json",
+      ]);
+      expect(capped.code).toBe(0);
+      const cappedSummary = (parseNdjson(capped.stdout) as any[]).find((o) => o.type === "summary");
+      expect(cappedSummary).toMatchObject({ total: 3, returned: 1, has_more: true, limit: 1 });
+    },
+    90000,
   );
 });

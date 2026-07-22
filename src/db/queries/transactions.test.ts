@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
-import { createAccount } from "./account-balance.js";
+import {
+  createAccount,
+  getAccountBalancesFromTransactions,
+  getNetWorthFromTransactions,
+  getPeriodTotalsFromTransactions,
+  getRollupBalanceFromTransactions,
+} from "./account-balance.js";
 import {
   validateTransaction,
   deriveTransactionId,
@@ -13,6 +19,7 @@ import {
   deleteTransaction,
   bulkRecategorize,
   findDuplicateTransactions,
+  voidTransactionAsMirror,
   countTransactions,
   countTransactionsBySourceFile,
   updateTransactionMeta,
@@ -184,6 +191,12 @@ describe("listTransactions", () => {
     expect(listTransactions(db, { query: "KBank" }).map((r) => r.id)).toEqual(["tx:2"]);
   });
 
+  it("filters by exact amount (minor units)", () => {
+    expect(listTransactions(db, { amount: 15000 }).map((r) => r.id)).toEqual(["tx:1"]);
+    expect(listTransactions(db, { amount: 20000 }).map((r) => r.id)).toEqual(["tx:2"]);
+    expect(listTransactions(db, { amount: 999 })).toHaveLength(0);
+  });
+
   it("clusters by group when requested (nulls standalone)", () => {
     const linked = insertLinkedTransactions(db, [
       tf({ id: "tx:g1", amount: 5000 }),
@@ -260,6 +273,16 @@ describe("findDuplicateTransactions", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].map((r) => r.id).sort()).toEqual(["tx:dup1", "tx:dup2"]);
   });
+
+  it("excludes voided rows from candidates", () => {
+    insertTransaction(db, tf({ id: "tx:dupA", debit_account_id: "expense:transport", credit_account_id: "asset:bank", amount: 7000 }));
+    insertTransaction(db, tf({ id: "tx:dupB", debit_account_id: "expense:transport", credit_account_id: "asset:bank", amount: 7000 }));
+    expect(findDuplicateTransactions(db)).toHaveLength(1);
+
+    voidTransactionAsMirror(db, "tx:dupB", "tx:dupA");
+    // Only one non-void candidate remains, so the pair no longer reappears.
+    expect(findDuplicateTransactions(db)).toHaveLength(0);
+  });
 });
 
 describe("counts + updateTransactionMeta", () => {
@@ -267,7 +290,7 @@ describe("counts + updateTransactionMeta", () => {
   beforeEach(() => {
     db = freshDb();
     db.prepare(
-      `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES ('sf:1','/f.pdf','h1','application/pdf','scanned')`,
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES ('sf:1','/f.pdf','h1','application/pdf','ingested')`,
     ).run();
   });
 
@@ -285,5 +308,121 @@ describe("counts + updateTransactionMeta", () => {
     expect(r.description).toBe("Latte");
     expect(r.source_page).toBe(3);
     expect(updateTransactionMeta(db, "tx:m", {})).toBe(0);
+  });
+});
+
+describe("voidTransactionAsMirror", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+    insertTransaction(db, tf({ id: "tx:a", amount: 15000 }));
+    insertTransaction(db, tf({ id: "tx:b", amount: 15000 })); // exact mirror of tx:a
+  });
+
+  it("voids from into to and records the surviving twin", () => {
+    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ alreadyVoid: false });
+    const row = getTransaction(db, "tx:b")!;
+    expect(row.void_of).toBe("tx:a");
+  });
+
+  it("is an idempotent no-op when from is already void", () => {
+    voidTransactionAsMirror(db, "tx:b", "tx:a");
+    expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ alreadyVoid: true });
+  });
+
+  it("refuses a self-merge", () => {
+    expect(() => voidTransactionAsMirror(db, "tx:a", "tx:a")).toThrow(/itself/);
+  });
+
+  it("throws not found for a missing row (either side)", () => {
+    expect(() => voidTransactionAsMirror(db, "tx:missing", "tx:a")).toThrow(/not found/);
+    expect(() => voidTransactionAsMirror(db, "tx:a", "tx:missing")).toThrow(/not found/);
+  });
+
+  it("refuses when amount, currency, or accounts differ", () => {
+    insertTransaction(db, tf({ id: "tx:amt", amount: 99999 }));
+    expect(() => voidTransactionAsMirror(db, "tx:amt", "tx:a")).toThrow(/mirror/);
+
+    insertTransaction(db, tf({ id: "tx:pair", debit_account_id: "expense:transport", amount: 15000 }));
+    expect(() => voidTransactionAsMirror(db, "tx:pair", "tx:a")).toThrow(/mirror/);
+
+    insertTransaction(db, tf({ id: "tx:ccy", amount: 15000, currency: "USD" }));
+    expect(() => voidTransactionAsMirror(db, "tx:ccy", "tx:a")).toThrow(/mirror/);
+  });
+
+  it("refuses merging into a voided row", () => {
+    voidTransactionAsMirror(db, "tx:b", "tx:a"); // tx:b is now void
+    insertTransaction(db, tf({ id: "tx:c", amount: 15000 })); // another mirror
+    expect(() => voidTransactionAsMirror(db, "tx:c", "tx:b")).toThrow(/voided/);
+  });
+});
+
+describe("void excludes rows from balance derivation", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+    insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));   // expense:food <- asset:cash, 150.00
+    insertTransaction(db, tf({ id: "tx:mirror", amount: 15000 })); // identical mirror
+  });
+
+  const balanceOf = (id: string): number =>
+    getAccountBalancesFromTransactions(db).find((b) => b.id === id)!.balance;
+
+  it("double-counts before void, counts once after", () => {
+    expect(balanceOf("asset:cash")).toBe(-300);
+    expect(balanceOf("expense:food")).toBe(300);
+
+    voidTransactionAsMirror(db, "tx:mirror", "tx:orig");
+
+    expect(balanceOf("asset:cash")).toBe(-150);
+    expect(balanceOf("expense:food")).toBe(150);
+  });
+
+  it("also excludes void from net worth, period totals, and rollup", () => {
+    voidTransactionAsMirror(db, "tx:mirror", "tx:orig");
+    expect(getNetWorthFromTransactions(db).net_worth).toBe(-150);
+    expect(getPeriodTotalsFromTransactions(db, "2026-01-01", "2026-12-31").expenses).toBe(150);
+    expect(getRollupBalanceFromTransactions(db, "expense")).toBe(150);
+  });
+});
+
+describe("void survives re-insert (ON CONFLICT)", () => {
+  it("keeps void_of when the deterministic id is re-inserted", () => {
+    const db = freshDb();
+    insertTransaction(db, tf({ id: "tx:orig", amount: 15000 }));
+    insertTransaction(db, tf({ id: "tx:dup", amount: 15000 }));
+    voidTransactionAsMirror(db, "tx:dup", "tx:orig");
+
+    // Re-ingesting the mirror's source file re-derives the same id; ON CONFLICT DO
+    // NOTHING must leave the void intact rather than resurrecting the mirror.
+    const res = insertTransaction(db, tf({ id: "tx:dup", amount: 15000 }));
+    expect(res.duplicate).toBe(true);
+    const row = getTransaction(db, "tx:dup")!;
+    expect(row.void_of).toBe("tx:orig");
+  });
+});
+
+describe("countTransactions with filters", () => {
+  let db: Database.Database;
+  beforeEach(() => {
+    db = freshDb();
+    insertTransaction(db, tf({ id: "tx:1", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 15000 }));
+    insertTransaction(db, tf({ id: "tx:2", debit_account_id: "expense:transport", credit_account_id: "asset:bank", amount: 20000 }));
+    insertTransaction(db, tf({ id: "tx:3", debit_account_id: "expense:food", credit_account_id: "asset:bank", amount: 15000 }));
+  });
+
+  it("counts every row with no filter", () => {
+    expect(countTransactions(db)).toBe(3);
+  });
+
+  it("matches the row count of the same list filter", () => {
+    for (const opts of [
+      { account: "expense:food" },
+      { amount: 15000 },
+      { account: "asset:bank", amount: 20000 },
+      { query: "KBank" },
+    ]) {
+      expect(countTransactions(db, opts)).toBe(listTransactions(db, opts).length);
+    }
   });
 });

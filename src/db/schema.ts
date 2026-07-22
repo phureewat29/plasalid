@@ -1,16 +1,9 @@
 import type Database from "libsql";
 
 export function migrate(db: Database.Database): void {
-  // Backward compatibility is not supported. If any legacy schema shape is
-  // present — the conversation_history/hints tables, the old `postings` table,
-  // the now-legacy `transfers` table (renamed to `transactions` this release),
-  // provider/model columns on scanned_files, or a transfer_id column on
-  // questions — all tables are dropped and rebuilt (data loss intended; the
-  // user gets a fresh, empty ledger). The current shape (a `transactions`
-  // table with a debit_account_id column and questions carrying
-  // transaction_id) is NOT legacy. Fresh and already-migrated DBs are NOT
-  // legacy, so they skip the wipe and every CREATE ... IF NOT EXISTS is a
-  // no-op, making a second migrate() call idempotent.
+  // No backward compatibility: a legacy schema (see isLegacySchema) is dropped and
+  // rebuilt (data loss intended). Fresh/already-migrated DBs skip the wipe, so every
+  // CREATE ... IF NOT EXISTS below is a no-op and a second migrate() call is idempotent.
   if (isLegacySchema(db)) {
     dropAllTables(db);
   }
@@ -53,14 +46,14 @@ export function migrate(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS merchant_aliases_merchant_idx ON merchant_aliases(merchant_id);
 
-    CREATE TABLE IF NOT EXISTS scanned_files (
+    CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
       path TEXT NOT NULL,
       file_hash TEXT NOT NULL UNIQUE,
       mime TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('pending','scanned','failed')),
+      status TEXT NOT NULL CHECK(status IN ('pending','ingested','failed')),
       raw_text TEXT,
-      scanned_at TEXT,
+      ingested_at TEXT,
       source TEXT,
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -73,7 +66,7 @@ export function migrate(db: Database.Database): void {
       description       TEXT NOT NULL,
       merchant_id       TEXT REFERENCES merchants(id),
       raw_descriptor    TEXT,
-      source_file_id    TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
+      source_file_id    TEXT REFERENCES files(id) ON DELETE CASCADE,
       source_page       INTEGER,
       debit_account_id  TEXT NOT NULL REFERENCES accounts(id),
       credit_account_id TEXT NOT NULL REFERENCES accounts(id),
@@ -81,6 +74,7 @@ export function migrate(db: Database.Database): void {
       currency          TEXT NOT NULL DEFAULT 'THB',
       code              TEXT,
       user_ref          TEXT,
+      void_of           TEXT,
       has_question      INTEGER NOT NULL DEFAULT 0,
       created_at        TEXT NOT NULL DEFAULT (datetime('now')),
       CHECK (amount > 0),
@@ -96,8 +90,8 @@ export function migrate(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS questions (
       id TEXT PRIMARY KEY,
-      scan_id TEXT,
-      file_id TEXT REFERENCES scanned_files(id) ON DELETE CASCADE,
+      batch_id TEXT,
+      file_id TEXT REFERENCES files(id) ON DELETE CASCADE,
       transaction_id TEXT REFERENCES transactions(id) ON DELETE CASCADE,
       account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
       kind TEXT,
@@ -110,7 +104,7 @@ export function migrate(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS questions_scan_idx ON questions(scan_id);
+    CREATE INDEX IF NOT EXISTS questions_batch_idx ON questions(batch_id);
     CREATE INDEX IF NOT EXISTS questions_deferred_idx ON questions(deferred_until);
 
     CREATE TABLE IF NOT EXISTS memories (
@@ -137,49 +131,37 @@ export function migrate(db: Database.Database): void {
 }
 
 /**
- * Detects whether any legacy schema shape is present. Any of these signals is
- * conclusive:
- *   - the `conversation_history` / `hints` tables exist, or
- *   - the `postings` table exists (the old two-table ledger), or
- *   - the `transfers` table exists (the v0.12 single-table name, renamed to
- *     `transactions` this release), or
- *   - `scanned_files` still carries `provider` / `model` columns, or
- *   - `questions` still carries a `transfer_id` column.
- * The current shape — a `transactions` table (with a `debit_account_id`
- * column) and `questions` carrying `transaction_id` — is deliberately NOT a
- * signal, so the renamed ledger is never mistaken for the old two-table
- * `transactions` header. A fresh (empty) DB and an already-migrated clean DB
- * both return false, so the caller only wipes genuinely-legacy databases.
- * Nuke-and-recreate is intended: data loss on a legacy DB is accepted (the
- * user gets a fresh, empty ledger).
+ * True if any legacy table (`conversation_history`, `hints`, `postings`,
+ * `transfers`, `scanned_files`) exists, `questions` carries a `transfer_id` or
+ * `scan_id` column, or `transactions` exists without a `void_of` column. A
+ * fresh or already-migrated DB matches none of these, so only genuinely
+ * legacy databases get wiped.
  */
 function isLegacySchema(db: Database.Database): boolean {
   const legacyTable = db
     .prepare(
       `SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'postings', 'transfers')
+        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'postings', 'transfers', 'scanned_files')
         LIMIT 1`,
     )
     .get();
   if (legacyTable) return true;
 
-  const fileCols = db
-    .prepare(`PRAGMA table_info(scanned_files)`)
-    .all() as { name: string }[];
-  if (fileCols.some(c => c.name === "provider" || c.name === "model")) return true;
-
   const questionCols = db
     .prepare(`PRAGMA table_info(questions)`)
     .all() as { name: string }[];
-  return questionCols.some(c => c.name === "transfer_id");
+  if (questionCols.some(c => c.name === "transfer_id" || c.name === "scan_id")) return true;
+
+  const transactionCols = db
+    .prepare(`PRAGMA table_info(transactions)`)
+    .all() as { name: string }[];
+  return transactionCols.length > 0 && !transactionCols.some(c => c.name === "void_of");
 }
 
 /**
- * Drop every user table (nuke). Foreign-key enforcement is toggled off for the
- * teardown so drop order and cross-table references can't raise constraint
- * violations, then restored. Called only after isLegacySchema() confirms a
- * legacy DB; migrate() rebuilds the clean shape immediately afterwards.
- * (Safe to toggle the pragma here: migrate() runs outside any transaction.)
+ * Drops every user table. Foreign-key enforcement is toggled off for the
+ * teardown (safe: migrate() runs outside any transaction) so drop order can't
+ * raise constraint violations, then restored.
  */
 function dropAllTables(db: Database.Database): void {
   const tables = db

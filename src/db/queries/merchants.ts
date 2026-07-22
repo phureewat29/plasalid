@@ -14,12 +14,21 @@ export interface MerchantRow {
   created_at: string;
 }
 
+export interface MerchantAliasConflict {
+  pattern: string;
+  held_by: string;
+}
+
+export interface MerchantUpsertResult extends MerchantRow {
+  /** Present when `input.alias` normalizes to a pattern already claimed by a
+   *  different merchant; the alias is left on its current owner. */
+  alias_conflict?: MerchantAliasConflict;
+}
+
 /**
- * Strip the noise that PDF descriptors carry on top of a merchant identity:
- * trailing store ids, terminal codes, city tags, transaction-type words. The
- * normalized form is what `merchant_aliases.normalized_pattern` indexes, so
- * "STARBUCKS #1234 BKK CHARGE" and "Starbucks #5678 BANGKOK" collapse to the
- * same alias "starbucks".
+ * Strips store ids, terminal codes, city tags, and transaction-type words so
+ * "STARBUCKS #1234 BKK CHARGE" and "Starbucks #5678 BANGKOK" both normalize
+ * to "starbucks" — the form `merchant_aliases.normalized_pattern` indexes.
  */
 const NOISE_TOKENS = new Set([
   "bkk", "bangkok", "thailand", "th", "tha",
@@ -44,15 +53,14 @@ export function normalizeDescriptor(raw: string): string {
 }
 
 /**
- * Upsert a merchant by canonical_name. Optionally upsert an alias and update
- * the cached default_account_id. Idempotent: re-running with the same inputs
- * does not duplicate rows. Designed to be called inside the same DB transaction
- * as the posting writes so a transaction never lands without its merchant.
+ * Upserts by canonical_name, optionally upserting an alias and updating the
+ * cached default_account_id. Idempotent. Meant to run inside the same DB
+ * transaction as the write it serves, so a transaction never lands without its merchant.
  */
 export function upsertMerchant(
   db: Database.Database,
   input: MerchantUpsertInput,
-): MerchantRow {
+): MerchantUpsertResult {
   const canonical = input.canonical_name.trim();
   if (!canonical) {
     throw new Error("merchant canonical_name is required");
@@ -83,21 +91,24 @@ export function upsertMerchant(
     };
   }
 
+  let aliasConflict: MerchantAliasConflict | undefined;
   if (input.alias) {
     const normalized = normalizeDescriptor(input.alias);
     if (normalized) {
       const existsAlias = db
-        .prepare(`SELECT id FROM merchant_aliases WHERE normalized_pattern = ?`)
-        .get(normalized) as { id: string } | undefined;
+        .prepare(`SELECT merchant_id FROM merchant_aliases WHERE normalized_pattern = ?`)
+        .get(normalized) as { merchant_id: string } | undefined;
       if (!existsAlias) {
         db.prepare(
           `INSERT INTO merchant_aliases (id, merchant_id, normalized_pattern) VALUES (?, ?, ?)`,
         ).run(`ma:${randomUUID()}`, merchant.id, normalized);
+      } else if (existsAlias.merchant_id !== merchant.id) {
+        aliasConflict = { pattern: normalized, held_by: existsAlias.merchant_id };
       }
     }
   }
 
-  return merchant;
+  return aliasConflict ? { ...merchant, alias_conflict: aliasConflict } : merchant;
 }
 
 interface MerchantWithDefault {
@@ -107,8 +118,8 @@ interface MerchantWithDefault {
 
 /**
  * Resolve a raw PDF descriptor to a known merchant via the alias table.
- * Returns null if no alias matches. The scanner uses this in its pre-resolution
- * pass so the LLM can skip re-categorizing already-seen merchants.
+ * Returns null if no alias matches. The ingest pipeline uses this in its
+ * pre-resolution pass so the LLM can skip re-categorizing already-seen merchants.
  */
 export function findMerchantByAlias(
   db: Database.Database,
@@ -180,4 +191,54 @@ export function clearMerchantDefaultAccount(
   if (!row) return null;
   db.prepare(`UPDATE merchants SET default_account_id = NULL WHERE id = ?`).run(merchantId);
   return { before: row.default_account_id };
+}
+
+export interface MergeMerchantsResult {
+  moved_transactions: number;
+  moved_aliases: number;
+  /** Present only when the destination had no default_account_id and the
+   *  source's was adopted in its place. */
+  adopted_default_account?: string;
+}
+
+/**
+ * Re-points every transaction and alias from `fromId` to `toId`, adopts the
+ * source's `default_account_id` if the destination has none, then deletes the
+ * source. One transaction, so a partial merge never persists.
+ */
+export function mergeMerchants(
+  db: Database.Database,
+  fromId: string,
+  toId: string,
+): MergeMerchantsResult {
+  if (fromId === toId) throw new Error("Cannot merge a merchant into itself.");
+  const from = findMerchantById(db, fromId);
+  if (!from) throw new Error(`Source merchant ${fromId} not found.`);
+  const to = findMerchantById(db, toId);
+  if (!to) throw new Error(`Destination merchant ${toId} not found.`);
+
+  let movedTransactions = 0;
+  let movedAliases = 0;
+  let adoptedDefaultAccount: string | undefined;
+  const tx = db.transaction((): void => {
+    movedTransactions = db
+      .prepare(`UPDATE transactions SET merchant_id = ? WHERE merchant_id = ?`)
+      .run(toId, fromId).changes;
+    movedAliases = db
+      .prepare(`UPDATE merchant_aliases SET merchant_id = ? WHERE merchant_id = ?`)
+      .run(toId, fromId).changes;
+    if (!to.default_account_id && from.default_account_id) {
+      db.prepare(`UPDATE merchants SET default_account_id = ? WHERE id = ?`)
+        .run(from.default_account_id, toId);
+      adoptedDefaultAccount = from.default_account_id;
+    }
+    db.prepare(`DELETE FROM merchants WHERE id = ?`).run(fromId);
+  });
+  tx();
+
+  return {
+    moved_transactions: movedTransactions,
+    moved_aliases: movedAliases,
+    ...(adoptedDefaultAccount ? { adopted_default_account: adoptedDefaultAccount } : {}),
+  };
 }

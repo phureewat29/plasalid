@@ -8,9 +8,11 @@ import {
   listMerchants,
   setMerchantDefaultAccount,
   clearMerchantDefaultAccount,
+  mergeMerchants,
   normalizeDescriptor,
 } from "./merchants.js";
 import { createAccount } from "./account-balance.js";
+import { insertTransaction, type TransactionInput } from "./transactions.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -19,7 +21,21 @@ function freshDb() {
   createAccount(db, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
   createAccount(db, { id: "expense:food", name: "Food", type: "expense", parent_id: "expense" });
   createAccount(db, { id: "expense:food:dining", name: "Dining", type: "expense", parent_id: "expense:food" });
+  createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
+  createAccount(db, { id: "asset:cash", name: "Cash", type: "asset", parent_id: "asset" });
   return db;
+}
+
+function tf(over: Partial<TransactionInput> = {}): TransactionInput {
+  return {
+    date: "2026-05-01",
+    description: "Coffee",
+    debit_account_id: "expense:food",
+    credit_account_id: "asset:cash",
+    amount: 15000,
+    currency: "THB",
+    ...over,
+  };
 }
 
 describe("normalizeDescriptor", () => {
@@ -74,6 +90,29 @@ describe("upsertMerchant", () => {
     upsertMerchant(db, { canonical_name: "Starbucks", alias: "STARBUCKS #5678" });
     const aliases = db.prepare(`SELECT normalized_pattern FROM merchant_aliases`).all() as { normalized_pattern: string }[];
     expect(aliases.map(a => a.normalized_pattern).sort()).toEqual(["starbucks"]);
+  });
+
+  it("reports alias_conflict and leaves the alias on its current owner when it belongs to another merchant", () => {
+    upsertMerchant(db, { canonical_name: "Starbucks", alias: "STARBUCKS #1234" });
+    const amazon = upsertMerchant(db, { canonical_name: "Amazon", alias: "STARBUCKS #5678" });
+    expect(amazon.alias_conflict).toEqual({ pattern: "starbucks", held_by: expect.stringMatching(/^m:/) });
+    const owner = db
+      .prepare(`SELECT merchant_id FROM merchant_aliases WHERE normalized_pattern = 'starbucks'`)
+      .get() as { merchant_id: string };
+    expect(owner.merchant_id).not.toBe(amazon.id);
+    expect(owner.merchant_id).toBe(amazon.alias_conflict!.held_by);
+  });
+
+  it("stays a silent no-op (no alias_conflict) when the alias already belongs to the same merchant", () => {
+    const first = upsertMerchant(db, { canonical_name: "Starbucks", alias: "STARBUCKS #1234" });
+    const second = upsertMerchant(db, { canonical_name: "Starbucks", alias: "STARBUCKS #1234" });
+    expect(second.alias_conflict).toBeUndefined();
+    expect(first.id).toBe(second.id);
+  });
+
+  it("omits alias_conflict for a fresh alias with no existing owner", () => {
+    const m = upsertMerchant(db, { canonical_name: "Starbucks", alias: "STARBUCKS #1234" });
+    expect(m.alias_conflict).toBeUndefined();
   });
 });
 
@@ -156,5 +195,62 @@ describe("clearMerchantDefaultAccount", () => {
     const result = clearMerchantDefaultAccount(db, m.id);
     expect(result).toEqual({ before: null });
     expect(findMerchantById(db, m.id)!.default_account_id).toBeNull();
+  });
+});
+
+describe("mergeMerchants", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = freshDb(); });
+
+  it("re-points transactions, moves aliases, and deletes the source", () => {
+    const from = upsertMerchant(db, { canonical_name: "Starbux", alias: "STARBUX #1" });
+    const to = upsertMerchant(db, { canonical_name: "Starbucks" });
+    insertTransaction(db, tf({ merchant_id: from.id }));
+    insertTransaction(db, tf({ merchant_id: from.id, description: "Coffee 2" }));
+
+    const result = mergeMerchants(db, from.id, to.id);
+
+    expect(result.moved_transactions).toBe(2);
+    expect(result.moved_aliases).toBe(1);
+    expect(findMerchantById(db, from.id)).toBeNull();
+    const txRows = db.prepare(`SELECT merchant_id FROM transactions`).all() as { merchant_id: string }[];
+    expect(txRows.every(r => r.merchant_id === to.id)).toBe(true);
+    const aliasRows = db.prepare(`SELECT merchant_id FROM merchant_aliases`).all() as { merchant_id: string }[];
+    expect(aliasRows.every(r => r.merchant_id === to.id)).toBe(true);
+  });
+
+  it("adopts the source's default_account_id when the destination has none", () => {
+    const from = upsertMerchant(db, { canonical_name: "Starbux", default_account_id: "expense:food:dining" });
+    const to = upsertMerchant(db, { canonical_name: "Starbucks" });
+
+    const result = mergeMerchants(db, from.id, to.id);
+
+    expect(result.adopted_default_account).toBe("expense:food:dining");
+    expect(findMerchantById(db, to.id)!.default_account_id).toBe("expense:food:dining");
+  });
+
+  it("keeps the destination's default_account_id when it already has one", () => {
+    const from = upsertMerchant(db, { canonical_name: "Starbux", default_account_id: "expense:food:dining" });
+    const to = upsertMerchant(db, { canonical_name: "Starbucks", default_account_id: "expense:food" });
+
+    const result = mergeMerchants(db, from.id, to.id);
+
+    expect(result.adopted_default_account).toBeUndefined();
+    expect(findMerchantById(db, to.id)!.default_account_id).toBe("expense:food");
+  });
+
+  it("throws on self-merge", () => {
+    const m = upsertMerchant(db, { canonical_name: "Starbucks" });
+    expect(() => mergeMerchants(db, m.id, m.id)).toThrow(/Cannot merge a merchant into itself/);
+  });
+
+  it("throws when the source merchant does not exist", () => {
+    const to = upsertMerchant(db, { canonical_name: "Starbucks" });
+    expect(() => mergeMerchants(db, "m:does-not-exist", to.id)).toThrow(/not found/);
+  });
+
+  it("throws when the destination merchant does not exist", () => {
+    const from = upsertMerchant(db, { canonical_name: "Starbucks" });
+    expect(() => mergeMerchants(db, from.id, "m:does-not-exist")).toThrow(/not found/);
   });
 });

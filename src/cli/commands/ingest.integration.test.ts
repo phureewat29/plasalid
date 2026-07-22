@@ -1,15 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../db/queries/account-balance.js";
+import { createSandbox, type Sandbox } from "../../lib/sandbox.js";
 
 // This test lives in src/cli/commands/ -> repo root is three levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
 
 interface CliResult {
   stdout: string;
@@ -17,27 +18,18 @@ interface CliResult {
   code: number;
 }
 
-let tmpDir: string;
+let sandbox: Sandbox;
 let dbPath: string;
-let baseEnv: NodeJS.ProcessEnv;
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "plasalid-ingest-it-"));
-  dbPath = join(tmpDir, "db.sqlite");
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.FORCE_COLOR;
-  delete env.NO_COLOR;
-  delete env.PLASALID_DB_ENCRYPTION_KEY; // unencrypted so the test can read the db directly
-  env.HOME = tmpDir;
-  env.USERPROFILE = tmpDir;
-  env.PLASALID_DB_PATH = dbPath;
-  env.PLASALID_DATA_DIR = join(tmpDir, "data");
-  env.PLASALID_CACHE_DIR = join(tmpDir, "cache");
-  baseEnv = env;
+  // createSandbox blanks PLASALID_DB_ENCRYPTION_KEY, so this file can read the db directly with `libsql`.
+  sandbox = createSandbox("plasalid-ingest-it-");
+  dbPath = sandbox.dbPath;
 
-  // Migrate + seed real accounts so a "clean" transaction's sides resolve exactly
-  // (rather than via placeholder creation). Closed before running the CLI so the
-  // subprocess owns the writer.
+  /**
+   * Seed real accounts so a "clean" transaction's sides resolve exactly (not
+   * via placeholder creation) — closed before the CLI runs, so the subprocess owns the writer.
+   */
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
@@ -48,20 +40,19 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  sandbox.cleanup();
 });
 
 function runCli(args: string[], opts: { stdin?: string; cwd?: string } = {}): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      // Absolute script path so callers can override `cwd` (e.g. to simulate
-      // an agent shell sitting somewhere other than the data dir) without
-      // breaking tsx's ability to find the entrypoint.
-      ["tsx", resolve(repoRoot, "src", "cli", "index.ts"), ...args],
+      // Absolute script path, so callers can override `cwd` (e.g. an agent
+      // shell elsewhere than the data dir) without breaking tsx's entrypoint lookup.
+      ["tsx", cliEntry, ...args],
       {
-        cwd: opts.cwd ?? repoRoot,
-        env: baseEnv,
+        cwd: opts.cwd ?? sandbox.root,
+        env: sandbox.env,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
       },
@@ -80,9 +71,10 @@ function runCli(args: string[], opts: { stdin?: string; cwd?: string } = {}): Pr
   });
 }
 
-// A tiny but structurally valid single-page PDF (mirrors the fixture used in
-// src/scanner/ingest.test.ts) — enough for readPdf/countPdfPages to parse it
-// without needing a real statement.
+/**
+ * A tiny but structurally valid single-page PDF (mirrors the fixture in
+ * src/ingest/prepare.test.ts) — enough for readPdf/countPdfPages without a real statement.
+ */
 function minimalPdf(): Buffer {
   const header = "%PDF-1.4\n";
   const o1 = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
@@ -118,7 +110,7 @@ function readDb(): Database.Database {
 }
 
 describe("ingest commit v2 (subprocess)", () => {
-  it("posts a clean transaction and a placeholder transaction, raises a question, exit 0", async () => {
+  it("commits exact + silent well-formed placeholder + uncategorized fallback (only the fallback asks), exit 0", async () => {
     const ndjson = [
       JSON.stringify({
         date: "2026-01-02",
@@ -129,10 +121,17 @@ describe("ingest commit v2 (subprocess)", () => {
       }),
       JSON.stringify({
         date: "2026-01-03",
-        description: "Mystery charge",
+        description: "New category charge",
         debit_account: "expense:totally-made-up-xyz",
         credit_account: "asset:cash",
         amount: 50,
+      }),
+      JSON.stringify({
+        date: "2026-01-04",
+        description: "Unresolvable charge",
+        debit_account: "mysterious",
+        credit_account: "asset:cash",
+        amount: 25,
       }),
     ].join("\n");
 
@@ -142,9 +141,9 @@ describe("ingest commit v2 (subprocess)", () => {
     const objs = parseNdjson(stdout);
     const results = objs.filter((o) => o.type === "result");
     const summary = objs.find((o) => o.type === "summary");
-    expect(results).toHaveLength(2);
+    expect(results).toHaveLength(3);
 
-    const [r0, r1] = results;
+    const [r0, r1, r2] = results;
 
     // Clean transaction: both sides resolve exactly, no questions, no merchant.
     expect(r0.ok).toBe(true);
@@ -158,9 +157,9 @@ describe("ingest commit v2 (subprocess)", () => {
       { side: "credit", requested: "asset:cash", resolved: "asset:cash", how: "exact" },
     ]);
 
-    // Bogus account hint: a placeholder is created (valid top-level) -> 1 question.
+    // Well-formed new-category hint: auto-created silently -> placeholder_created, NO question.
     expect(r1.ok).toBe(true);
-    expect(r1.raised_questions).toBe(1);
+    expect(r1.raised_questions).toBe(0);
     expect(r1.sides[0]).toEqual({
       side: "debit",
       requested: "expense:totally-made-up-xyz",
@@ -169,22 +168,39 @@ describe("ingest commit v2 (subprocess)", () => {
     });
     expect(r1.sides[1].how).toBe("exact");
 
+    // Leaf-only hint: nothing well-formed to build -> uncategorized fallback + 1 question.
+    expect(r2.ok).toBe(true);
+    expect(r2.raised_questions).toBe(1);
+    expect(r2.sides[0]).toEqual({
+      side: "debit",
+      requested: "mysterious",
+      resolved: "expense:uncategorized",
+      how: "uncategorized_fallback",
+    });
+    expect(r2.sides[1].how).toBe("exact");
+
     expect(summary).toBeDefined();
-    expect(summary.batch_id).toMatch(/^sc:/);
-    expect(summary.posted).toBe(2);
+    expect(summary.batch_id).toMatch(/^ib:/);
+    expect(summary.posted).toBe(3);
     expect(summary.duplicates).toBe(0);
     expect(summary.failed).toBe(0);
     expect(summary.raised_questions).toBe(1);
 
-    // The question was actually written, scoped to this batch's scan id.
+    // Only the fallback wrote a question; the silently created placeholder account carries no has_question flag.
     const db = readDb();
     const n = (
-      db.prepare("SELECT COUNT(*) AS n FROM questions WHERE scan_id = ?").get(summary.batch_id) as {
+      db.prepare("SELECT COUNT(*) AS n FROM questions WHERE batch_id = ?").get(summary.batch_id) as {
         n: number;
       }
     ).n;
+    const placeholderFlag = (
+      db
+        .prepare("SELECT has_question FROM accounts WHERE id = ?")
+        .get("expense:totally-made-up-xyz") as { has_question: number } | undefined
+    )?.has_question;
     db.close();
     expect(n).toBe(1);
+    expect(placeholderFlag).toBe(0);
   }, 30000);
 
   it("reads the batch from a file via --input (agent file-staging path)", async () => {
@@ -276,7 +292,7 @@ describe("ingest commit v2 (subprocess)", () => {
   it("is idempotent: a second commit of the same row reports duplicate:true, balance unchanged", async () => {
     const db = readDb();
     db.prepare(
-      `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+      `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
     ).run("sf:idem", "/tmp/idem.pdf", "idem-hash", "application/pdf");
     db.close();
 
@@ -318,6 +334,38 @@ describe("ingest commit v2 (subprocess)", () => {
     db2.close();
     expect(n).toBe(1);
   }, 45000);
+
+  it("an ingested row carrying code:\"void\" still counts in balances (void is void_of-only, unreachable from ingest input)", async () => {
+    const before = await runCli(["accounts", "show", "expense:food", "--json"]);
+    const balanceBefore = parseNdjson(before.stdout)[0].balance as number;
+
+    const description = "Statement extractor guessed code:void";
+    const item = JSON.stringify({
+      date: "2026-03-05",
+      description,
+      debit_account: "expense:food",
+      credit_account: "asset:cash",
+      amount: 42,
+      code: "void",
+    });
+
+    const { code } = await runCli(["ingest", "commit", "--json"], { stdin: item });
+    expect(code).toBe(0);
+
+    const db = readDb();
+    const row = db
+      .prepare(`SELECT code, void_of FROM transactions WHERE description = ?`)
+      .get(description) as { code: string | null; void_of: string | null };
+    db.close();
+    // `code` passes through verbatim (still a dormant, agent-settable field)...
+    expect(row.code).toBe("void");
+    // ...but only `void_of` can exclude a row from balances, and ingest cannot set it.
+    expect(row.void_of).toBeNull();
+
+    const after = await runCli(["accounts", "show", "expense:food", "--json"]);
+    const balanceAfter = parseNdjson(after.stdout)[0].balance as number;
+    expect(balanceAfter - balanceBefore).toBeCloseTo(42, 5);
+  });
 
   it("commits a compound (linked) salary split under one shared group", async () => {
     const db = readDb();
@@ -398,21 +446,21 @@ describe("ingest commit v2 (subprocess)", () => {
 
 describe("ingest prepare (subprocess)", () => {
   it("resolves the rel_path `ingest list` itself emits, even when invoked from an unrelated cwd", async () => {
-    const dataDir = join(tmpDir, "data");
+    const dataDir = sandbox.dataDir;
     mkdirSync(join(dataDir, "statements"), { recursive: true });
     writeFileSync(join(dataDir, "statements", "kbank-jan.pdf"), minimalPdf());
 
-    // A real agent session hit E_NOT_FOUND passing `ingest list`'s own
-    // rel_path back into `ingest prepare` because its shell cwd wasn't the
-    // data dir. Reproduce that: run from tmpDir, which is neither the data
-    // dir nor the repo root.
-    const list = await runCli(["ingest", "list", "--regex", "kbank-jan", "--json"], { cwd: tmpDir });
+    /**
+     * Regression: a real agent session hit E_NOT_FOUND passing `ingest list`'s own rel_path
+     * into `ingest prepare` from a cwd that wasn't the data dir; reproduced by running from the sandbox root.
+     */
+    const list = await runCli(["ingest", "list", "--regex", "kbank-jan", "--json"], { cwd: sandbox.root });
     expect(list.code).toBe(0);
     const entry = parseNdjson(list.stdout).find((r) => r.type === "file");
     expect(entry).toBeTruthy();
     expect(entry.rel_path).toBe("statements/kbank-jan.pdf");
 
-    const prepare = await runCli(["ingest", "prepare", entry.rel_path, "--json"], { cwd: tmpDir });
+    const prepare = await runCli(["ingest", "prepare", entry.rel_path, "--json"], { cwd: sandbox.root });
     expect(prepare.code).toBe(0);
     const obj = JSON.parse(prepare.stdout.trim());
     expect(obj.document).toBe(join(dataDir, "statements", "kbank-jan.pdf"));
@@ -468,16 +516,17 @@ describe("ingest fail (subprocess)", () => {
     const db = readDb();
     try {
       db.prepare(
-        `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+        `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
       ).run(fileId, "/tmp/cache-test.pdf", "cache-test-hash", "application/pdf");
     } finally {
       db.close();
     }
 
-    // cleanCache resolves PLASALID_CACHE_DIR/<fileId>; precreate it so the
-    // subprocess has something real to remove (mirrors what `ingest prepare`
-    // would have left behind, without needing an actual PDF fixture here).
-    const cacheSubdir = join(tmpDir, "cache", fileId);
+    /**
+     * cleanCache resolves PLASALID_CACHE_DIR/<fileId>; precreate it so the subprocess
+     * has something real to remove, mirroring what `ingest prepare` would leave behind.
+     */
+    const cacheSubdir = join(sandbox.cacheDir, fileId);
     mkdirSync(cacheSubdir, { recursive: true });
     writeFileSync(join(cacheSubdir, "page-1.png"), "fake png bytes");
     expect(existsSync(cacheSubdir)).toBe(true);

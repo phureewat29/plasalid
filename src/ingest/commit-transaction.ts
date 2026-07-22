@@ -5,7 +5,6 @@ import {
   resolveMerchantId,
   type AccountHint,
   type ResolvedMerchant,
-  type ProgressEmitter,
 } from "./resolve.js";
 import {
   insertTransaction,
@@ -21,19 +20,17 @@ import type { MerchantUpsertInput } from "../db/queries/merchants.js";
 
 /**
  * Commit context for the transaction pipeline. `fileHash` enables idempotent
- * transaction id derivation; `chunkId`/`progress` are unused and always null.
+ * transaction id derivation.
  */
 export interface TransactionCommitContext {
-  readonly scanId: string | null;
+  readonly batchId: string | null;
   readonly fileId: string | null;
   readonly fileHash?: string | null;
-  readonly chunkId: string | null;
-  readonly progress: ProgressEmitter | null;
 }
 
 /**
- * Raw transaction as the scanner/LLM produces it: a DECIMAL amount (converted to
- * minor units here) and optional source coordinates for deterministic ids.
+ * Raw transaction as the ingest input produces it: a DECIMAL amount (converted
+ * to minor units here) plus optional source coordinates for deterministic ids.
  */
 export interface RawTransactionInput {
   id?: string;
@@ -95,7 +92,12 @@ export interface TransactionCommitHooks {
   onCommitted(transactionId: string): void;
   onDirtyInput(input: RawTransactionInput, reason: string): void;
   onUnknownMerchant(input: RawTransactionInput, transactionId: string, attemptedId: string): void;
+  /** A well-formed multi-segment hint was silently auto-created as a placeholder
+   *  account. Reported for the per-side resolution summary; raises NO question. */
   onPlaceholderAccount(side: TransactionSide, accountId: string, transactionId: string): void;
+  /** A hint couldn't be built into a well-formed path and fell back to
+   *  `expense:uncategorized`. Raises the `uncategorized` question. */
+  onUncategorizedFallback(side: TransactionSide, accountId: string, transactionId: string): void;
   onSimilarAccount(
     side: TransactionSide,
     originalId: string,
@@ -128,25 +130,21 @@ function accountPairKey(a: string, b: string): string {
 /**
  * Default hooks: turn pipeline events into `questions` rows, attaching each to
  * its `transaction_id` (or none, for pre-insert failures). Every raise() no-ops
- * when `ctx.scanId` is null.
+ * when `ctx.batchId` is null.
  */
 export function defaultTransactionCommitHooks(
   db: Database.Database,
   ctx: TransactionCommitContext,
 ): TransactionCommitHooks {
-  const tick = (kind: "tx" | "question"): void => {
-    if (ctx.progress && ctx.chunkId) ctx.progress.emit({ chunkId: ctx.chunkId, kind });
-  };
   const raise = (
-    input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "scan_id">,
+    input: Omit<Parameters<typeof recordQuestion>[1], "file_id" | "batch_id">,
   ): void => {
-    if (!ctx.scanId) return;
-    recordQuestion(db, { ...input, file_id: ctx.fileId, scan_id: ctx.scanId });
-    tick("question");
+    if (!ctx.batchId) return;
+    recordQuestion(db, { ...input, file_id: ctx.fileId, batch_id: ctx.batchId });
   };
 
   return {
-    onCommitted: () => tick("tx"),
+    onCommitted: () => {},
 
     onDirtyInput: (input, reason) =>
       raise({
@@ -154,7 +152,7 @@ export function defaultTransactionCommitHooks(
         account_id: null,
         kind: "dirty_input",
         prompt:
-          `The scanner returned a transaction that couldn't be validated: ${reason}. ` +
+          `The ingest input produced a transaction that couldn't be validated: ${reason}. ` +
           `Raw description: "${input.description}" on ${input.date}.`,
         context: { description: input.description, date: input.date, reason },
       }),
@@ -166,20 +164,24 @@ export function defaultTransactionCommitHooks(
         account_id: null,
         kind: "unknown_merchant",
         prompt:
-          `The scanner referenced merchant id "${attemptedId}" but no such merchant exists. ` +
+          `The ingest input referenced merchant id "${attemptedId}" but no such merchant exists. ` +
           `Link "${descriptor}" to an existing merchant or leave it unlinked.`,
         context: { rule_key: descriptorKey(descriptor), descriptor, attempted_id: attemptedId },
       });
     },
 
-    onPlaceholderAccount: (side, accountId, transactionId) =>
+    // A well-formed placeholder path is unambiguous — auto-created silently, no question.
+    onPlaceholderAccount: () => {},
+
+    onUncategorizedFallback: (side, accountId, transactionId) =>
       raise({
         transaction_id: transactionId,
         account_id: accountId,
         kind: "uncategorized",
         prompt:
-          `A placeholder account was created for the ${side} side "${accountId}". ` +
-          `Confirm the category, merge into an existing account, or rename.`,
+          `The ${side} side couldn't be matched to a well-formed account and was booked to ` +
+          `"${accountId}". Recategorize it onto a real account, or re-run with a full ` +
+          `colon-path hint (e.g. expense:food:dining).`,
         context: { rule_key: accountIdKey(accountId), placeholder_id: accountId, side },
       }),
 
@@ -189,7 +191,7 @@ export function defaultTransactionCommitHooks(
         account_id: matchedId,
         kind: "similar_accounts",
         prompt:
-          `The scanner referenced "${originalId}" for the ${side} side — the closest ` +
+          `The ingest input referenced "${originalId}" for the ${side} side — the closest ` +
           `existing account is "${matchedId}". Confirm they are the same, or split them apart.`,
         context: {
           rule_key: accountPairKey(originalId, matchedId),
@@ -264,12 +266,10 @@ function accountCurrency(db: Database.Database, id: string): string {
 }
 
 /**
- * Run the transaction stages (validate -> resolve both account sides -> derive
- * currency -> convert amount to minor units -> resolve merchant -> compute id),
- * WITHOUT touching the transactions table. Returns a ready-to-insert TransactionInput
- * plus the events to raise, or a drop reason. Resolving accounts may create
- * placeholder accounts as a side effect; on a currency mismatch those side
- * effects remain but no transaction is inserted.
+ * Runs validate -> resolve accounts -> derive currency -> convert amount ->
+ * resolve merchant -> compute id, without touching the transactions table.
+ * Resolving accounts may create placeholder accounts as a side effect; on a
+ * currency mismatch those side effects remain even though nothing is inserted.
  */
 function prepareTransaction(
   db: Database.Database,
@@ -279,23 +279,16 @@ function prepareTransaction(
   const raw = validateRawTransaction(input);
   if (!raw.ok) return { ok: false, reason: "dirty_input", message: raw.reason };
 
-  // Resolve both sides via the exact same logic the posting pipeline uses.
   let debitRes = resolveOnePosting(db, { account_id: input.debit_account_id });
   let creditRes = resolveOnePosting(db, { account_id: input.credit_account_id });
   let debitId = debitRes.posting.account_id;
   let creditId = creditRes.posting.account_id;
 
-  // Fuzzy-collapse guard: `debit_account_id` and `credit_account_id` are
-  // guaranteed distinct at this point (validateRawTransaction above), so if they
-  // RESOLVED to the same account, that's the fuzzy matcher over-eagerly
-  // collapsing two different accounts that happen to share a token (e.g. hint
-  // "asset:bank:ttb" fuzzy-matching onto an existing "liability:credit_card:ttb").
-  // That's not genuinely dirty input — re-resolve whichever side(s) went
-  // through fuzzy matching as a placeholder instead (skipping the fuzzy
-  // stage), so the two sides land on distinct accounts again. Only a
-  // collision with NO fuzzy match on either side (both sides landing on the
-  // same fallback/placeholder some other way) is left to the dirty_input
-  // backstop below — that's genuinely invalid input.
+  // Fuzzy-collapse guard: inputs are guaranteed distinct (validated above), so a
+  // collision here means fuzzy matching over-eagerly collapsed two accounts onto
+  // one — not dirty input. Re-resolve the fuzzy-matched side(s) with skipFuzzy.
+  // A collision with no fuzzy match on either side falls through to the
+  // dirty_input backstop below.
   if (debitId === creditId) {
     if (debitRes.hint?.type === "similar_matched") {
       debitRes = resolveOnePosting(db, { account_id: input.debit_account_id }, { skipFuzzy: true });
@@ -379,20 +372,21 @@ function applyTransactionHints(
   for (const { side, hint } of prepared.hints) {
     if (hint.type === "placeholder_created") {
       hooks.onPlaceholderAccount(side, hint.accountId, transactionId);
-    } else {
-      hooks.onSimilarAccount(side, hint.originalId, hint.matchedId, transactionId);
+      continue;
     }
+    if (hint.type === "uncategorized_fallback") {
+      hooks.onUncategorizedFallback(side, hint.accountId, transactionId);
+      raised++;
+      continue;
+    }
+    hooks.onSimilarAccount(side, hint.originalId, hint.matchedId, transactionId);
     raised++;
   }
   return raised;
 }
 
-/**
- * Commit a single transaction. Order (documented in the design): validate ->
- * resolve accounts -> derive currency -> convert amount -> resolve merchant ->
- * derive id -> idempotent insert -> raise questions. A duplicate re-commit is a
- * no-op (no questions, no balance change).
- */
+/** Commits one transaction: prepare -> idempotent insert -> raise questions.
+ *  A duplicate re-commit is a no-op (no questions, no balance change). */
 export function commitTransaction(
   db: Database.Database,
   ctx: TransactionCommitContext,
@@ -482,11 +476,10 @@ function mergeHeaderLeg(
 }
 
 /**
- * Commit several linked transactions atomically under a shared group_id. All legs
- * are prepared first; if ANY leg fails (dirty input or currency mismatch),
- * nothing is inserted and the failing leg's question is raised. Otherwise every
- * leg is inserted in one transaction, then questions are raised per leg. Models
- * e.g. a salary split into net-pay + tax-withholding + social-security legs.
+ * Commits several linked legs atomically under a shared group_id. All legs are
+ * prepared first; if any fails, nothing is inserted and only its question is
+ * raised. Otherwise every leg is inserted in one transaction, then questions
+ * are raised per leg.
  */
 export function commitLinkedTransactions(
   db: Database.Database,

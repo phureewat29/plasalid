@@ -6,16 +6,16 @@ import type {
   RawTransactionInput,
   LinkedTransactionHeader,
   LinkedTransactionLeg,
-} from "../../scanner/commit-transaction.js";
-import { EXIT, currentMode, emit, emitSummary, fail, readStdinTransactions } from "../output.js";
+} from "../../ingest/commit-transaction.js";
+import { EXIT, asRecord, currentMode, emit, emitSummary, fail, readStdinBatch } from "../output.js";
 import { emitObject, openDb } from "./ingest.js";
+import { safeParse, str, num, json } from "../../lib/validate.js";
+import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
 
 /**
- * `ingest commit` — the critical contract: reads an NDJSON/JSON batch of
- * extracted rows from stdin (or --input) and posts each as a transaction
- * (or a linked group) into the ledger, reporting per-row resolution detail
- * (account/merchant fuzzy-match vs. placeholder vs. exact) alongside the
- * usual ok/duplicate/failed outcome.
+ * `ingest commit`: reads an NDJSON/JSON batch from stdin (or --input) and
+ * posts each row as a transaction (or linked group), reporting per-row
+ * resolution detail (fuzzy-match vs. placeholder vs. exact) alongside ok/duplicate/failed.
  */
 
 interface CommitOpts {
@@ -32,9 +32,8 @@ type CommitEvent =
   | { kind: "dirty"; reason: string }
   | { kind: "currency_mismatch" };
 
-/** Wrap the default hooks so every raised question still fires (delegated to
- *  the default), while we also capture a typed event per callback to build the
- *  per-side resolution report afterwards. */
+// Delegates to the default hooks (so questions still raise) while capturing a
+// typed event per callback, to build the per-side resolution report afterwards.
 function makeRecordingHooks(base: TransactionCommitHooks, events: CommitEvent[]): TransactionCommitHooks {
   return {
     onCommitted: (id) => base.onCommitted(id),
@@ -50,6 +49,9 @@ function makeRecordingHooks(base: TransactionCommitHooks, events: CommitEvent[])
       base.onPlaceholderAccount(side, accountId, id);
       events.push({ kind: "placeholder", side, accountId });
     },
+    // No event needed: classifySide infers uncategorized_fallback from the
+    // absence of a placeholder/fuzzy event plus the requested id not existing.
+    onUncategorizedFallback: (side, accountId, id) => base.onUncategorizedFallback(side, accountId, id),
     onSimilarAccount: (side, originalId, matchedId, id) => {
       base.onSimilarAccount(side, originalId, matchedId, id);
       events.push({ kind: "fuzzy", side, originalId, matchedId });
@@ -61,12 +63,8 @@ function makeRecordingHooks(base: TransactionCommitHooks, events: CommitEvent[])
   };
 }
 
-/**
- * Classify how an input side's account_id was resolved. Derived from the
- * captured hook events + a post-commit existence check — NOT from the stored
- * row (a duplicate re-commit fires no hooks, so absence of an event on an
- * existing account reads correctly as "exact").
- */
+// Derived from hook events + a post-commit existence check, NOT the stored row:
+// a duplicate re-commit fires no hooks, so a missing event still reads as "exact".
 function classifySide(
   requested: string,
   side: TransactionSide,
@@ -89,7 +87,7 @@ function classifySide(
 }
 
 function classifyMerchant(
-  item: any,
+  item: { merchant?: unknown; merchant_id?: unknown },
   events: CommitEvent[],
   resolvedMerchantId: () => string | null | undefined,
 ): { how: string; merchant_id?: string } {
@@ -100,29 +98,66 @@ function classifyMerchant(
   return { how: "linked", merchant_id: mid ?? undefined };
 }
 
+// Loose by design: shape + defaults + aliasing only. `validateRawTransaction`
+// stays the authority on validity, so missing required fields default to ""
+// and surface there as `dirty_input`. `amount` is excluded so its raw type
+// reaches the validator's `typeof` check unconverted by `num()`.
+const LINKED_HEADER_SPEC = {
+  date: str().default(""),
+  description: str().default(""),
+  raw_descriptor: str().nullable().default(null),
+  source_page: num().nullable().default(null),
+  merchant: json<MerchantUpsertInput>().nullable().default(null),
+  merchant_id: str().nullable().default(null),
+  group_id: str().nullable().default(null),
+  row_index: num().nullable().default(null),
+};
+
+const LINKED_LEG_SPEC = {
+  debit_account_id: str().default("").alias("debit_account"),
+  credit_account_id: str().default("").alias("credit_account"),
+  currency: str().nullable().default(null),
+  description: str().optional(),
+  code: str().nullable().default(null),
+};
+
+const STANDALONE_SPEC = {
+  id: str().optional(),
+  date: str().default(""),
+  description: str().default(""),
+  raw_descriptor: str().nullable().default(null),
+  source_page: num().nullable().default(null),
+  row_index: num().nullable().default(null),
+  merchant: json<MerchantUpsertInput>().nullable().default(null),
+  merchant_id: str().nullable().default(null),
+  debit_account_id: str().default("").alias("debit_account"),
+  credit_account_id: str().default("").alias("credit_account"),
+  currency: str().nullable().default(null),
+  code: str().nullable().default(null),
+};
+
 export async function ingestCommit(opts: CommitOpts): Promise<void> {
-  const items = await readStdinTransactions(opts.input);
+  const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no transaction data provided");
 
   const db = await openDb();
   const { commitTransaction, commitLinkedTransactions, defaultTransactionCommitHooks } = await import(
-    "../../scanner/commit-transaction.js"
+    "../../ingest/commit-transaction.js"
   );
   const { getTransaction } = await import("../../db/queries/transactions.js");
   const { findAccountById } = await import("../../db/queries/account-balance.js");
-  const { findScannedFileById } = await import("../../db/queries/files.js");
+  const { findFileById } = await import("../../db/queries/files.js");
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
 
-  // ALWAYS have a scanId: defaultTransactionCommitHooks.raise() early-returns when
-  // scanId is null, which silently drops every question. Minted once per invocation.
-  const scanId = `sc:${randomUUID()}`;
+  // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
+  const batchId = `ib:${randomUUID()}`;
 
-  // Derive the deterministic-id source hash from the scanned_files row (cached).
+  // Derive the deterministic-id source hash from the files row (cached).
   const fileHashCache = new Map<string, string | null>();
   const fileHashFor = (fileId: string | null): string | null => {
     if (!fileId) return null;
     if (!fileHashCache.has(fileId)) {
-      fileHashCache.set(fileId, findScannedFileById(db, fileId)?.file_hash ?? null);
+      fileHashCache.set(fileId, findFileById(db, fileId)?.file_hash ?? null);
     }
     return fileHashCache.get(fileId) ?? null;
   };
@@ -133,41 +168,60 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
   let failed = 0;
   let raisedTotal = 0;
 
+  // A row rejected before the commit pipeline (bad JSON shape) reuses the loop's
+  // per-row failure shape so the PARTIAL contract holds — never throws.
+  const failRow = (index: number, message: string): void => {
+    failed++;
+    results.push({ type: "result", index, ok: false, reason: "dirty_input", message, raised_questions: 0 });
+  };
+
   for (let index = 0; index < items.length; index++) {
-    const item: any = items[index];
-    const fileId = (item.source_file_id ?? opts.file) ?? null;
+    const record = asRecord(items[index]);
+    if (!record) {
+      failRow(index, "each transaction must be a JSON object.");
+      continue;
+    }
+
+    const fileId = ((record.source_file_id as string | null | undefined) ?? opts.file) ?? null;
     const ctx: TransactionCommitContext = {
-      scanId,
+      batchId,
       fileId,
       fileHash: fileHashFor(fileId),
-      chunkId: null,
-      progress: null,
     };
     const events: CommitEvent[] = [];
     const hooks = makeRecordingHooks(defaultTransactionCommitHooks(db, ctx), events);
 
-    const isCompound = Array.isArray(item.linked) && item.linked.length > 0;
+    const linked = record.linked;
+    const isCompound = Array.isArray(linked) && linked.length > 0;
 
     if (isCompound) {
-      const header: LinkedTransactionHeader = {
-        date: item.date,
-        description: item.description,
-        raw_descriptor: item.raw_descriptor ?? null,
-        source_file_id: fileId,
-        source_page: item.source_page ?? null,
-        merchant: item.merchant ?? null,
-        merchant_id: item.merchant_id ?? null,
-        group_id: item.group_id ?? null,
-        row_index: item.row_index ?? null,
-      };
-      const legs: LinkedTransactionLeg[] = item.linked.map((l: any) => ({
-        debit_account_id: l.debit_account ?? l.debit_account_id,
-        credit_account_id: l.credit_account ?? l.credit_account_id,
-        amount: l.amount,
-        currency: l.currency ?? null,
-        description: l.description,
-        code: l.code ?? null,
-      }));
+      const parsedHeader = safeParse(LINKED_HEADER_SPEC, record);
+      if (!parsedHeader.ok) {
+        failRow(index, parsedHeader.error);
+        continue;
+      }
+      const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: fileId };
+
+      const legs: LinkedTransactionLeg[] = [];
+      let legError: string | undefined;
+      for (const rawLeg of linked) {
+        const legRecord = asRecord(rawLeg);
+        if (!legRecord) {
+          legError = "each linked leg must be a JSON object.";
+          break;
+        }
+        const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord);
+        if (!parsedLeg.ok) {
+          legError = parsedLeg.error;
+          break;
+        }
+        // Cast is a lie for malformed rows — validateRawTransaction rejects those.
+        legs.push({ ...parsedLeg.value, amount: legRecord.amount as number });
+      }
+      if (legError !== undefined) {
+        failRow(index, legError);
+        continue;
+      }
 
       const outcome = commitLinkedTransactions(db, ctx, header, legs, hooks);
       raisedTotal += outcome.raisedQuestions;
@@ -197,7 +251,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
         legs: outcome.results.map((r) => ({ transaction_id: r.id, duplicate: r.duplicate })),
         duplicate: allDuplicate,
         raised_questions: outcome.raisedQuestions,
-        merchant: classifyMerchant(item, events, () =>
+        merchant: classifyMerchant(parsedHeader.value, events, () =>
           getTransaction(db, outcome.results[0]?.id)?.merchant_id,
         ),
       });
@@ -205,21 +259,16 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
     }
 
     // Standalone transaction.
+    const parsed = safeParse(STANDALONE_SPEC, record);
+    if (!parsed.ok) {
+      failRow(index, parsed.error);
+      continue;
+    }
+    // Cast is a lie for malformed rows — validateRawTransaction rejects those.
     const raw: RawTransactionInput = {
-      id: item.id ?? undefined,
-      date: item.date,
-      description: item.description,
-      raw_descriptor: item.raw_descriptor ?? null,
+      ...parsed.value,
       source_file_id: fileId,
-      source_page: item.source_page ?? null,
-      row_index: item.row_index ?? null,
-      merchant: item.merchant ?? null,
-      merchant_id: item.merchant_id ?? null,
-      debit_account_id: item.debit_account ?? item.debit_account_id,
-      credit_account_id: item.credit_account ?? item.credit_account_id,
-      amount: item.amount,
-      currency: item.currency ?? null,
-      code: item.code ?? null,
+      amount: record.amount as number,
     };
 
     const outcome = commitTransaction(db, ctx, raw, hooks);
@@ -248,7 +297,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
       transaction_id: outcome.transactionId,
       duplicate: outcome.duplicate,
       raised_questions: outcome.raisedQuestions,
-      merchant: classifyMerchant(item, events, () => getTransaction(db, outcome.transactionId)?.merchant_id),
+      merchant: classifyMerchant(parsed.value, events, () => getTransaction(db, outcome.transactionId)?.merchant_id),
       sides: [
         {
           side: "debit",
@@ -267,11 +316,11 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
   const mode = currentMode();
   if (mode.json) {
     for (const r of results) emit(r);
-    emitSummary({ batch_id: scanId, posted, duplicates, failed, raised_questions: raisedTotal });
+    emitSummary({ batch_id: batchId, posted, duplicates, failed, raised_questions: raisedTotal });
   } else {
     for (const r of results) emitObject(r);
     process.stdout.write(
-      `\nbatch ${scanId}: ${posted} posted, ${duplicates} duplicate(s), ${failed} failed, ${raisedTotal} question(s) raised\n`,
+      `\nbatch ${batchId}: ${posted} posted, ${duplicates} duplicate(s), ${failed} failed, ${raisedTotal} question(s) raised\n`,
     );
   }
 

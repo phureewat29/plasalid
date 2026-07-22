@@ -9,15 +9,7 @@ import {
 } from "../db/queries/account-balance.js";
 import { findAccountsByFuzzyName } from "../db/queries/account-match.js";
 
-/**
- * Shared account/merchant resolution used by the commit pipeline
- * (`commit-transaction.ts`). Relocated here from the deleted `commit.ts` so the
- * transaction core owns it directly — no posting-model dependency remains.
- */
-
-export interface ProgressEmitter {
-  emit(event: { chunkId: string; kind: "tx" | "question" }): void;
-}
+// Shared account/merchant resolution used by the commit pipeline (`commit-transaction.ts`).
 
 export interface ResolvedMerchant {
   readonly merchantId: string | null;
@@ -26,6 +18,7 @@ export interface ResolvedMerchant {
 
 export type AccountHint =
   | { readonly type: "placeholder_created"; readonly accountId: string }
+  | { readonly type: "uncategorized_fallback"; readonly accountId: string }
   | {
       readonly type: "similar_matched";
       readonly originalId: string;
@@ -47,22 +40,18 @@ export function resolveMerchantId(
 }
 
 interface ResolveOnePostingOptions {
-  /**
-   * Skip the fuzzy-match stage and go straight to placeholder creation (or
-   * the uncategorized fallback) after an exact match misses. Used by the
-   * commit pipeline's fuzzy-collapse guard to re-resolve a side that fuzzy-
-   * matched onto the other side's account, without repeating the same fuzzy
-   * match.
-   */
+  /** Skip fuzzy-match and go straight to placeholder/fallback. Used by the
+   *  commit pipeline's fuzzy-collapse guard to re-resolve a side without
+   *  repeating the fuzzy match that caused the collapse. */
   skipFuzzy?: boolean;
 }
 
 /**
- * Resolve one account reference: exact match, then fuzzy (score >= 0.7,
- * unless `skipFuzzy`), then a freshly created placeholder account, then the
- * `expense:uncategorized` fallback. Returns the input shape with its
- * `account_id` rewritten to the resolved id, plus a hint describing any
- * non-exact resolution.
+ * Resolves one account reference: exact match, then fuzzy (score >= 0.7,
+ * unless `skipFuzzy`), then a placeholder for a well-formed multi-segment
+ * path, else the `expense:uncategorized` fallback. `hint` is null on exact
+ * match; `uncategorized_fallback` is the ambiguous case the commit pipeline
+ * turns into a question.
  */
 export function resolveOnePosting<T extends { account_id: string }>(
   db: Database.Database,
@@ -85,10 +74,12 @@ export function resolveOnePosting<T extends { account_id: string }>(
       };
     }
   }
-  const placeholderId = ensurePlaceholderAccount(db, posting.account_id);
+  const placeholder = ensurePlaceholderAccount(db, posting.account_id);
   return {
-    posting: { ...posting, account_id: placeholderId },
-    hint: { type: "placeholder_created", accountId: placeholderId },
+    posting: { ...posting, account_id: placeholder.accountId },
+    hint: placeholder.fellBack
+      ? { type: "uncategorized_fallback", accountId: placeholder.accountId }
+      : { type: "placeholder_created", accountId: placeholder.accountId },
   };
 }
 
@@ -107,13 +98,10 @@ function leafSegment(id: string): string {
 }
 
 /**
- * Walk `segments` from the top-level root down to and including index
- * `upTo` (1-based; `upTo === segments.length` reaches the leaf), creating any
- * account row that doesn't yet exist with a humanized placeholder name of
- * the shared `type`. Returns the ids actually created, in root-to-leaf
- * order (existing rows are skipped, not reported). `ACCOUNT_EXISTS` races are
- * swallowed as a no-op; every other error propagates to the caller, which
- * decides whether that's fatal or worth a soft fallback.
+ * Walks `segments` from the root down through index `upTo` (1-based),
+ * creating any missing account with a humanized placeholder name. Returns
+ * ids actually created, root-to-leaf. `ACCOUNT_EXISTS` races are swallowed
+ * as a no-op; every other error propagates to the caller.
  */
 function walkAncestorChain(
   db: Database.Database,
@@ -140,24 +128,35 @@ function walkAncestorChain(
   return created;
 }
 
-// Falls back to expense:uncategorized when the top-level segment isn't a
-// known account type, or when the chain walk hits a genuine hierarchy error
-// (e.g. a type mismatch against an existing ancestor) — this is the ingest
-// pipeline's best-effort resolution, so it always returns SOME usable id
-// rather than surfacing the error.
-function ensurePlaceholderAccount(db: Database.Database, accountId: string): string {
+interface PlaceholderResult {
+  /** The resolved account id: the requested path when it was created, else
+   *  `expense:uncategorized`. */
+  accountId: string;
+  /** True when the path couldn't be built (bad id, unknown type, or a
+   *  hierarchy error) and resolution fell back to `expense:uncategorized`.
+   *  The commit pipeline turns a fallback into a question. */
+  fellBack: boolean;
+}
+
+/**
+ * Best-effort placeholder resolution: creates the account and every missing
+ * ancestor when the id is a well-formed multi-segment path under a known
+ * top-level type, else falls back to `expense:uncategorized`. Always returns
+ * a usable id rather than surfacing an error.
+ */
+function ensurePlaceholderAccount(db: Database.Database, accountId: string): PlaceholderResult {
   const segments = accountId.split(":").filter(Boolean);
-  if (segments.length === 0) return ensureUncategorizedFallback(db);
+  if (segments.length < 2) return { accountId: ensureUncategorizedFallback(db), fellBack: true };
 
   const type = segments[0] as AccountType;
-  if (!TOP_LEVEL_TYPES.includes(type)) return ensureUncategorizedFallback(db);
+  if (!TOP_LEVEL_TYPES.includes(type)) return { accountId: ensureUncategorizedFallback(db), fellBack: true };
 
   try {
     walkAncestorChain(db, segments, type, segments.length);
   } catch {
-    return ensureUncategorizedFallback(db);
+    return { accountId: ensureUncategorizedFallback(db), fellBack: true };
   }
-  return accountId;
+  return { accountId, fellBack: false };
 }
 
 interface EnsureAccountAncestorsResult {
@@ -170,18 +169,11 @@ interface EnsureAccountAncestorsResult {
 }
 
 /**
- * For a multi-segment account id about to be created (e.g. `asset:bank:ttb`),
- * walk from the top-level root down to (but excluding) the leaf segment,
- * creating any missing ancestor with a humanized placeholder name of the
- * given `type`. Used by `accounts create` when the caller didn't pass an
- * explicit `--parent`, so a deep id doesn't require pre-creating every
- * intermediate category by hand.
- *
- * Unlike `ensurePlaceholderAccount` above (the ingest pipeline's best-effort
- * resolution, which swallows a genuine hierarchy error into the
- * `expense:uncategorized` fallback), this propagates errors as-is so
- * `accounts create` can surface a real INVALID failure — e.g. a type
- * mismatch against an existing ancestor.
+ * For a multi-segment id about to be created (e.g. `asset:bank:ttb`), creates
+ * any missing ancestor above the leaf. Used by `accounts create` so a deep id
+ * doesn't require pre-creating every intermediate category. Unlike
+ * `ensurePlaceholderAccount`, propagates hierarchy errors as-is (no
+ * `expense:uncategorized` fallback) so the CLI can surface a real INVALID.
  */
 export function ensureAccountAncestors(
   db: Database.Database,

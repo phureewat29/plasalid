@@ -3,6 +3,7 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import {
   createAccount,
+  findAccountById,
   getAccountBalancesFromTransactions,
 } from "../db/queries/account-balance.js";
 import {
@@ -24,7 +25,7 @@ function freshDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   migrate(db);
   db.prepare(
-    `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES ('sf:1','/f.pdf','hashABC','application/pdf','scanned')`,
+    `INSERT INTO files (id, path, file_hash, mime, status) VALUES ('sf:1','/f.pdf','hashABC','application/pdf','ingested')`,
   ).run();
   createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
   createAccount(db, { id: "asset:cash", name: "Cash", type: "asset", parent_id: "asset" });
@@ -40,11 +41,9 @@ function freshDb(): Database.Database {
 }
 
 const CTX: TransactionCommitContext = {
-  scanId: "sc:1",
+  batchId: "ib:1",
   fileId: "sf:1",
   fileHash: "hashABC",
-  chunkId: null,
-  progress: null,
 };
 
 function raw(over: Partial<RawTransactionInput> = {}): RawTransactionInput {
@@ -79,11 +78,31 @@ describe("commitTransaction", () => {
     expect(countQuestions(db)).toBe(0);
   });
 
-  it("raises a per-side question when an account resolves to a placeholder", () => {
+  it("auto-creates a well-formed placeholder silently — no question, no has_question flag", () => {
     const out = commitTransaction(
       db,
       CTX,
-      raw({ debit_account_id: "expense:mystery-thing", row_index: 1 }),
+      raw({ debit_account_id: "expense:subscriptions:news", row_index: 1 }),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.raisedQuestions).toBe(0);
+    expect(countQuestions(db)).toBe(0);
+
+    const row = getTransaction(db, out.transactionId)!;
+    expect(row.debit_account_id).toBe("expense:subscriptions:news");
+    const created = findAccountById(db, "expense:subscriptions:news")!;
+    expect(created).toBeTruthy();
+    // A silently created placeholder is NOT flagged with has_question.
+    expect(created.has_question).toBe(0);
+    expect(countTransactions(db)).toBe(1);
+  });
+
+  it("raises an uncategorized question when a leaf-only hint falls back to expense:uncategorized", () => {
+    const out = commitTransaction(
+      db,
+      CTX,
+      raw({ debit_account_id: "mysterycharge", row_index: 1 }),
     );
     expect(out.ok).toBe(true);
     if (!out.ok) return;
@@ -93,9 +112,34 @@ describe("commitTransaction", () => {
     expect(qs).toHaveLength(1);
     expect(qs[0].transaction_id).toBe(out.transactionId);
     expect(qs[0].kind).toBe("uncategorized");
-    expect(JSON.parse(qs[0].context_json!).side).toBe("debit");
-    // The transaction still committed against the created placeholder account.
+    const ctx = JSON.parse(qs[0].context_json!);
+    expect(ctx.side).toBe("debit");
+    expect(ctx.placeholder_id).toBe("expense:uncategorized");
+    expect(getTransaction(db, out.transactionId)!.debit_account_id).toBe("expense:uncategorized");
     expect(countTransactions(db)).toBe(1);
+  });
+
+  it("raises similar_accounts when a hint fuzzy-matches an existing account", () => {
+    // Leaf "fod" is one edit from "Food" (expense:food) -> fuzzy match >= 0.7,
+    // so it resolves onto the existing account and asks to confirm the merge.
+    const out = commitTransaction(
+      db,
+      CTX,
+      raw({ debit_account_id: "expense:fod", row_index: 3 }),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.raisedQuestions).toBe(1);
+    expect(getTransaction(db, out.transactionId)!.debit_account_id).toBe("expense:food");
+
+    const qs = listQuestions(db);
+    expect(qs).toHaveLength(1);
+    expect(qs[0].kind).toBe("similar_accounts");
+    expect(JSON.parse(qs[0].context_json!)).toMatchObject({
+      original_id: "expense:fod",
+      matched_id: "expense:food",
+      side: "debit",
+    });
   });
 
   it("drops a cross-currency transaction and raises currency_mismatch (no insert)", () => {
@@ -125,14 +169,15 @@ describe("commitTransaction", () => {
     expect(countTransactions(db)).toBe(1);
   });
 
-  it("no-ops every question raise when scanId is null", () => {
+  it("no-ops every question raise when batchId is null", () => {
+    // A leaf-only hint would raise `uncategorized` with a batchId set; with none
+    // the raise() no-ops, so the fallback commits without persisting a question.
     const out = commitTransaction(
       db,
-      { ...CTX, scanId: null },
-      raw({ debit_account_id: "expense:mystery-thing", row_index: 2 }),
+      { ...CTX, batchId: null },
+      raw({ debit_account_id: "mysterycharge", row_index: 2 }),
     );
     expect(out.ok).toBe(true);
-    // Placeholder still created and transaction committed, but no question persisted.
     expect(countQuestions(db, { includeDeferred: true })).toBe(0);
   });
 
@@ -165,16 +210,18 @@ describe("commitTransaction", () => {
     expect(row.debit_account_id).toBe("asset:bank:ttb");
     expect(row.credit_account_id).toBe("liability:credit_card:ttb");
 
-    const qs = listQuestions(db);
-    expect(qs).toHaveLength(1);
-    expect(qs[0].kind).toBe("uncategorized");
-    expect(JSON.parse(qs[0].context_json!)).toMatchObject({ side: "debit", placeholder_id: "asset:bank:ttb" });
+    // asset:bank:ttb is a well-formed multi-segment path, so the re-resolved placeholder is created silently, no question.
+    expect(out.raisedQuestions).toBe(0);
+    expect(listQuestions(db)).toHaveLength(0);
+    expect(findAccountById(db, "asset:bank:ttb")).toBeTruthy();
   });
 
   it("keeps the dirty_input failure when debit and credit collapse with no fuzzy match involved", () => {
-    // "bogus" and "also-bogus" aren't prefixed with a known account type, so
-    // both fall through fuzzy match (no name comes close) straight to the
-    // expense:uncategorized fallback — a genuine collision, not a fuzzy one.
+    /**
+     * "bogus" and "also-bogus" aren't prefixed with a known account type, so
+     * both fall through fuzzy match straight to expense:uncategorized — a
+     * genuine collision, not a fuzzy one.
+     */
     const out = commitTransaction(
       db,
       CTX,
@@ -213,7 +260,6 @@ describe("commitLinkedTransactions", () => {
     expect(salary.credits_posted).toBe(6_000_000); // minor units
     expect(salary.balance).toBe(60000); // decimal, credit-normal
 
-    // Every leg shares the group id.
     for (const r of out.results) {
       expect(getTransaction(db, r.id)?.group_id).toBe(out.group_id);
     }

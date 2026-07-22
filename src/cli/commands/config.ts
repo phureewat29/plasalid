@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import {
   config as appConfig,
   getConfigPath,
@@ -10,14 +10,14 @@ import {
 import { generateKey } from "../../db/encryption.js";
 import { getContextPath } from "../../context.js";
 import { currentMode, emit, fail, readSecretFromStdin, runAction, type OutputMode } from "../output.js";
+import { parseInput, str, bool, type Infer } from "../../lib/validate.js";
 
 type RedactedConfig = Omit<PlasalidConfig, "dbEncryptionKey"> & {
   dbEncryptionKey: { set: boolean; fingerprint?: string };
 };
 
-// The only secret left in the config after the harness cut is dbEncryptionKey
-// (the provider API keys are gone). Surface it as {set, fingerprint} rather than
-// printing the passphrase verbatim into shells, logs, and bug reports.
+// dbEncryptionKey is the only secret in config; surface {set, fingerprint}
+// rather than the passphrase itself, which would land in shells/logs/bug reports.
 function redactConfig(cfg: PlasalidConfig): RedactedConfig {
   const key = cfg.dbEncryptionKey;
   const dbEncryptionKey = key
@@ -26,8 +26,7 @@ function redactConfig(cfg: PlasalidConfig): RedactedConfig {
   return { ...cfg, dbEncryptionKey };
 }
 
-/** The `config show` payload: the redacted config plus the resolved context.md
- *  path (surfaced here since the `context` noun was retired). */
+/** Redacted config plus the resolved context.md path (there's no separate `context` command). */
 function showPayload(): Record<string, unknown> {
   return { ...redactConfig(appConfig), context_path: getContextPath() };
 }
@@ -61,48 +60,35 @@ function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
   for (const [k, v] of rows) process.stdout.write(`${k.padEnd(width)}  ${v}\n`);
 }
 
-interface ConfigConvergeOptions {
-  dataDir?: string;
-  db?: string;
-  generateKey?: boolean;
-  encryptionKeyStdin?: boolean;
-  locale?: string;
-  currency?: string;
-  userName?: string;
-}
+/** Every flag the bare `config` action accepts, keyed to auto-bridge commander's
+ *  camelCase opts (parseInput tries each key's camelCase/snake_case form). */
+const CONVERGE_FLAGS_SPEC = {
+  data_dir: str().optional(),
+  db: str().optional(),
+  generate_key: bool().optional(),
+  encryption_key_stdin: bool().optional(),
+  locale: str().optional(),
+  currency: str().optional(),
+  user_name: str().optional(),
+};
 
-/** True when the caller passed at least one converge flag. Bare `config` with
- *  none is a read (show); with any, it converges (create-or-update). */
-function hasConvergeFlags(opts: ConfigConvergeOptions): boolean {
-  return (
-    opts.dataDir !== undefined ||
-    opts.db !== undefined ||
-    opts.generateKey === true ||
-    opts.encryptionKeyStdin === true ||
-    opts.locale !== undefined ||
-    opts.currency !== undefined ||
-    opts.userName !== undefined
-  );
-}
+type ConvergeFlags = Infer<typeof CONVERGE_FLAGS_SPEC>;
 
 /**
- * Idempotent configure: ensure the data dir exists, persist the resolved
- * settings, open the db (running the migration), and seed context.md if
- * absent. The first run initializes a fresh install; later runs update only
- * what the caller passes. Each value resolves to an explicit flag or the
- * already-loaded (env > file > default) singleton value, so re-writing an
- * unchanged value is a no-op — which is what makes a re-run idempotent.
+ * Idempotent configure: ensures the data dir, persists settings, migrates the
+ * db, seeds context.md if absent. Each value resolves to an explicit flag or
+ * the already-loaded singleton value, so re-writing unchanged values is a no-op.
  */
-async function convergeConfig(opts: ConfigConvergeOptions): Promise<void> {
-  if (opts.generateKey && opts.encryptionKeyStdin) {
+async function convergeConfig(flags: ConvergeFlags): Promise<void> {
+  if (flags.generate_key && flags.encryption_key_stdin) {
     fail("USAGE", "--generate-key and --encryption-key-stdin are mutually exclusive");
   }
 
-  const dataDir: string = opts.dataDir ?? appConfig.dataDir;
-  const dbPath: string = opts.db ?? appConfig.dbPath;
-  const displayLocale: string = opts.locale ?? appConfig.displayLocale;
-  const displayCurrency: string = opts.currency ?? appConfig.displayCurrency;
-  const userName: string = opts.userName ?? appConfig.userName;
+  const dataDir: string = flags.data_dir ?? appConfig.dataDir;
+  const dbPath: string = flags.db ?? appConfig.dbPath;
+  const displayLocale: string = flags.locale ?? appConfig.displayLocale;
+  const displayCurrency: string = flags.currency ?? appConfig.displayCurrency;
+  const userName: string = flags.user_name ?? appConfig.userName;
 
   mkdirSync(dataDir, { recursive: true });
 
@@ -113,17 +99,37 @@ async function convergeConfig(opts: ConfigConvergeOptions): Promise<void> {
     displayCurrency,
     userName,
   };
-  if (opts.generateKey) {
-    patch.dbEncryptionKey = generateKey();
-  } else if (opts.encryptionKeyStdin) {
+  if (flags.generate_key) {
+    // "Ensure a key exists": minting a new one over a live key would orphan the encrypted db.
+    if (!appConfig.dbEncryptionKey) patch.dbEncryptionKey = generateKey();
+  } else if (flags.encryption_key_stdin) {
     patch.dbEncryptionKey = await readSecretFromStdin();
+  }
+
+  // No re-encryption path exists, so refuse before saveConfig — a bad request
+  // must leave both the config file and the database untouched.
+  if (
+    patch.dbEncryptionKey !== undefined &&
+    patch.dbEncryptionKey !== appConfig.dbEncryptionKey &&
+    existsSync(dbPath)
+  ) {
+    fail("INVALID", `database ${dbPath} already exists; changing the encryption key would make it unreadable`, {
+      hint: "keep the current key (drop --generate-key / --encryption-key-stdin), or move the database file aside first",
+    });
   }
 
   saveConfig(patch);
 
   // Open once to run the migration against the (freshly) configured db path.
   const { getDb } = await import("../../db/connection.js");
-  getDb();
+  const db = getDb();
+
+  // Seed the structural accounts the ledger auto-references, so the first
+  // ingest resolves them by exact match. Idempotent: no-ops if already present.
+  const { ensureStructuralAccount } = await import("../../db/queries/account-balance.js");
+  for (const id of ["expense:uncategorized", "equity:adjustments", "equity:opening-balance"] as const) {
+    ensureStructuralAccount(db, id);
+  }
 
   // Seed the context template only when absent — createContextTemplate is a
   // no-op if the file already exists, so a converge never clobbers edits.
@@ -139,10 +145,8 @@ async function convergeConfig(opts: ConfigConvergeOptions): Promise<void> {
 export function registerConfig(program: Command): void {
   const configCmd = program
     .command("config")
-    // config has a bare converge action AND a `show` subcommand. Positional
-    // options bind flags placed after the subcommand name to the subcommand
-    // rather than being swallowed by the parent action (mirrors ledger; see
-    // program.ts's root note on enablePositionalOptions).
+    // Needed because `config` has both a bare action and a `show` subcommand
+    // (see program.ts's note on enablePositionalOptions).
     .enablePositionalOptions()
     .description("Configure the harness (bare with flags converges; bare with none shows)")
     .option("--data-dir <dir>", "data directory")
@@ -153,9 +157,10 @@ export function registerConfig(program: Command): void {
     .option("--currency <code>", "default currency code")
     .option("--user-name <name>", "user display name")
     .action(
-      runAction(async (opts: ConfigConvergeOptions) => {
-        if (hasConvergeFlags(opts)) {
-          await convergeConfig(opts);
+      runAction(async (opts: Record<string, unknown>) => {
+        const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
+        if (Object.keys(flags).length > 0) {
+          await convergeConfig(flags);
         } else {
           printConfig(currentMode(), showPayload());
         }

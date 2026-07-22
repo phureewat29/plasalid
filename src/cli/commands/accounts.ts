@@ -1,6 +1,20 @@
 import type { Command } from "commander";
+import type Database from "libsql";
 import { getDb } from "../../db/connection.js";
-import { currentMode, emit, emitList, fail, requireYes, runAction, type Column } from "../output.js";
+import {
+  EXIT,
+  asRecord,
+  currentMode,
+  emit,
+  emitList,
+  emitSummary,
+  fail,
+  readStdinBatch,
+  requireYes,
+  runAction,
+  type Column,
+} from "../output.js";
+import { emitObject } from "./ingest.js";
 import {
   getAccountBalancesFromTransactions,
   getRollupBalanceFromTransactions,
@@ -17,10 +31,10 @@ import {
   type CreateAccountInput,
 } from "../../db/queries/account-balance.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "../../db/queries/account-match.js";
-import { ensureAccountAncestors } from "../../scanner/resolve.js";
+import { ensureAccountAncestors } from "../../ingest/resolve.js";
 import { fromMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
-import { parseInput, str, num, int, json } from "../../lib/validate.js";
+import { parseInput, safeParse, str, num, int, json, type Infer } from "../../lib/validate.js";
 
 // The account display `name` is the only free-text field; id/parent_id/type/
 // currency and the numeric balances are structured data left verbatim.
@@ -42,10 +56,8 @@ function present(a: AccountBalanceMinor): PresentedAccount {
   };
 }
 
-/** Thrown-Error → exit code mapping shared by create/merge/delete/adjust/update:
- *  messages that name a missing id ("not found" / "does not exist") map to NOT_FOUND,
- *  everything else (hierarchy mismatches, self-merge, non-empty accounts, duplicates)
- *  is a constraint violation and maps to INVALID. */
+/** Shared by create/merge/delete/adjust/update: a missing-id message maps to
+ *  NOT_FOUND, everything else (hierarchy/self-merge/duplicate) maps to INVALID. */
 function mapAccountError(err: unknown): never {
   const message = err instanceof Error ? err.message : String(err);
   if (/not found|does not exist/i.test(message)) fail("NOT_FOUND", message);
@@ -194,45 +206,162 @@ const CREATE_ACCOUNT_SPEC = {
   metadata: json<Record<string, unknown>>().optional(),
 };
 
-function createAccountAction(opts: Record<string, unknown>): void {
-  const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts);
+interface CreateOneAccountResult {
+  id: string;
+  created_parents: string[];
+  account_number_masked?: string | null;
+}
 
-  const db = getDb();
-
-  // Auto-create missing intermediate ancestors from the id's colon
-  // segments when the caller didn't pin an explicit --parent (which is
-  // still honored as-is, unchanged). Skipped for an unrecognized type
-  // so the usual createAccount validation reports a clean INVALID
-  // instead of failing deeper inside the ancestor walk.
+/**
+ * Shared by the single-flag action and the `--input` batch loop. Auto-creates
+ * missing ancestors from the id's colon segments when no explicit parent was
+ * given (skipped for an unrecognized type, so `createAccount` reports a clean
+ * INVALID instead of failing deeper in the ancestor walk). Throws on failure,
+ * including the `ACCOUNT_EXISTS`-coded duplicate.
+ */
+function createOneAccount(
+  db: Database.Database,
+  parsed: Infer<typeof CREATE_ACCOUNT_SPEC>,
+): CreateOneAccountResult {
   let parentId = parsed.parent_id ?? null;
   let createdParents: string[] = [];
-  try {
-    if (parsed.parent_id === undefined && TOP_LEVEL_TYPES.includes(parsed.type)) {
-      const ancestors = ensureAccountAncestors(db, parsed.id, parsed.type);
-      if (ancestors.parentId !== null) {
-        parentId = ancestors.parentId;
-        createdParents = ancestors.createdParents;
-      }
+  if (parsed.parent_id === undefined && TOP_LEVEL_TYPES.includes(parsed.type)) {
+    const ancestors = ensureAccountAncestors(db, parsed.id, parsed.type);
+    if (ancestors.parentId !== null) {
+      parentId = ancestors.parentId;
+      createdParents = ancestors.createdParents;
     }
+  }
 
-    const input: CreateAccountInput = {
-      id: parsed.id,
-      name: parsed.name,
-      type: parsed.type,
-      parent_id: parentId,
-      subtype: parsed.subtype ?? null,
-      bank_name: parsed.bank_name ?? null,
-      account_number_masked: parsed.account_number_masked ?? null,
-      currency: parsed.currency,
-      due_day: parsed.due_day ?? null,
-      statement_day: parsed.statement_day ?? null,
-      metadata: parsed.metadata ?? null,
-    };
-    createAccount(db, input);
-    emit({ id: input.id, created: true, created_parents: createdParents });
+  const input: CreateAccountInput = {
+    id: parsed.id,
+    name: parsed.name,
+    type: parsed.type,
+    parent_id: parentId,
+    subtype: parsed.subtype ?? null,
+    bank_name: parsed.bank_name ?? null,
+    account_number_masked: parsed.account_number_masked ?? null,
+    currency: parsed.currency,
+    due_day: parsed.due_day ?? null,
+    statement_day: parsed.statement_day ?? null,
+    metadata: parsed.metadata ?? null,
+  };
+  createAccount(db, input);
+
+  const result: CreateOneAccountResult = { id: input.id, created_parents: createdParents };
+  // Only echo the masked number back when the caller actually provided one —
+  // read the stored value (post-normalization) rather than re-deriving it.
+  if (parsed.account_number_masked !== undefined) {
+    result.account_number_masked = findAccountById(db, input.id)?.account_number_masked ?? null;
+  }
+  return result;
+}
+
+/** The `account_number_masked` result key, present only when the caller
+ *  actually provided one (shared shape between single and batch results). */
+function maskedResultField(result: CreateOneAccountResult): Record<string, unknown> {
+  return result.account_number_masked !== undefined
+    ? { account_number_masked: result.account_number_masked }
+    : {};
+}
+
+function createSingleAccount(opts: Record<string, unknown>): void {
+  const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts);
+  const db = getDb();
+  let result: CreateOneAccountResult;
+  try {
+    result = createOneAccount(db, parsed);
   } catch (err) {
     mapAccountError(err);
   }
+  emit({
+    id: result.id,
+    created: true,
+    created_parents: result.created_parents,
+    ...maskedResultField(result),
+  });
+}
+
+// The only non-per-account options `accounts create` accepts (json/color are
+// global flags); anything else alongside --input means mixed batch/single-flag usage.
+const NON_ACCOUNT_FLAG_KEYS = new Set(["input", "json", "color"]);
+
+/**
+ * Mirrors `ingest commit`'s batch shape: one result row per item, a summary
+ * row, exit PARTIAL(7) on any failure. `ACCOUNT_EXISTS` counts as an
+ * idempotent success (`duplicate: true`) so re-running a batch is a no-op.
+ */
+async function createAccountsBatch(inputPath: string | undefined): Promise<void> {
+  const items = await readStdinBatch(inputPath);
+  if (items.length === 0) fail("USAGE", "no account data provided");
+
+  const db = getDb();
+  const results: Record<string, unknown>[] = [];
+  let created = 0;
+  let duplicates = 0;
+  let failed = 0;
+
+  for (let index = 0; index < items.length; index++) {
+    const record = asRecord(items[index]);
+    if (!record) {
+      failed++;
+      results.push({ type: "result", index, ok: false, message: "each account must be a JSON object." });
+      continue;
+    }
+
+    const parsed = safeParse(CREATE_ACCOUNT_SPEC, record);
+    if (!parsed.ok) {
+      failed++;
+      results.push({ type: "result", index, ok: false, message: parsed.error });
+      continue;
+    }
+
+    try {
+      const one = createOneAccount(db, parsed.value);
+      created++;
+      results.push({
+        type: "result",
+        index,
+        ok: true,
+        id: one.id,
+        created: true,
+        created_parents: one.created_parents,
+        ...maskedResultField(one),
+      });
+    } catch (err: any) {
+      if (err?.code === "ACCOUNT_EXISTS") {
+        duplicates++;
+        results.push({ type: "result", index, ok: true, id: parsed.value.id, duplicate: true });
+        continue;
+      }
+      failed++;
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ type: "result", index, ok: false, message });
+    }
+  }
+
+  const mode = currentMode();
+  if (mode.json) {
+    for (const r of results) emit(r);
+    emitSummary({ created, duplicates, failed });
+  } else {
+    for (const r of results) emitObject(r);
+    process.stdout.write(`\n${created} created, ${duplicates} duplicate(s), ${failed} failed\n`);
+  }
+
+  // Exit 7 only for genuine failures — duplicates are a successful no-op.
+  if (failed > 0) process.exitCode = EXIT.PARTIAL;
+}
+
+async function createAccountAction(opts: Record<string, unknown>): Promise<void> {
+  if (opts.input !== undefined) {
+    if (Object.keys(opts).some((k) => opts[k] !== undefined && !NON_ACCOUNT_FLAG_KEYS.has(k))) {
+      fail("USAGE", "--input and per-account flags are mutually exclusive");
+    }
+    await createAccountsBatch(opts.input as string);
+    return;
+  }
+  createSingleAccount(opts);
 }
 
 const MERGE_ACCOUNTS_SPEC = {
@@ -371,7 +500,7 @@ export function registerAccounts(program: Command): void {
 
   accounts
     .command("create")
-    .description("Create a new account")
+    .description("Create a new account (single via flags, or batch via --input)")
     .option("--id <id>", "account id")
     .option("--name <name>", "account name")
     .option("--type <type>", "account type")
@@ -383,6 +512,7 @@ export function registerAccounts(program: Command): void {
     .option("--due-day <n>", "payment due day")
     .option("--statement-day <n>", "statement closing day")
     .option("--metadata <json>", "additional metadata as JSON")
+    .option("--input <path>", "batch-create accounts from an NDJSON/JSON file instead of individual flags")
     .action(runAction(createAccountAction));
 
   accounts

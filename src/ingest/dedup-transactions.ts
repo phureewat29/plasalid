@@ -6,12 +6,10 @@ import {
 } from "../db/queries/transactions.js";
 
 /**
- * Deterministic strict-duplicate merge for the transaction model, the counterpart
- * of `dedup.ts`'s `autoMergeStrictDuplicates`. Within each duplicate group,
- * keep the earliest transaction and delete any later member that matches it
- * exactly on merchant, source file, date, and amount. Amounts are integer minor
- * units, so equality is a plain `===` (no float rounding). The group finder
- * already excludes intra-group members, so linked legs are never merged away.
+ * Within each duplicate group, keeps the earliest transaction and deletes any
+ * later member matching it exactly on merchant, source file, date, and
+ * amount (integer minor units, so `===` needs no float rounding). The group
+ * finder already excludes linked legs from matching each other.
  */
 export function autoMergeStrictDuplicateTransactions(db: Database.Database): { merged: number } {
   let merged = 0;

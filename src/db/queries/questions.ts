@@ -9,7 +9,7 @@ interface QuestionTarget {
 
 interface RecordQuestionInput extends QuestionTarget {
   file_id: string | null;
-  scan_id?: string | null;
+  batch_id?: string | null;
   kind?: string | null;
   prompt: string;
   options?: string[];
@@ -19,7 +19,7 @@ interface RecordQuestionInput extends QuestionTarget {
 
 export interface QuestionRow {
   id: string;
-  scan_id: string | null;
+  batch_id: string | null;
   file_id: string | null;
   transaction_id: string | null;
   account_id: string | null;
@@ -35,26 +35,24 @@ interface ClosedQuestion {
   prompt: string;
   kind: string | null;
   answer: string;
-  /** Stable signature pulled from the question's context_json. When set, the
-   * rule synthesizer keys the learned rule on this (so future questions with
-   * different prose but the same key match). When null, no rule is learned. */
+  /** Stable signature from context_json the rule synthesizer keys a learned
+   *  rule on (so future questions with different prose still match); null learns nothing. */
   rule_key: string | null;
 }
 
 /**
- * Insert a new questions row and flip the `has_question` boolean on whichever
- * target (transaction / account) was named. Returns the new id. The id keeps
- * the historical `cn:` prefix: it's opaque and nothing else references it,
- * so the prefix is a no-op detail.
+ * Inserts a questions row and flips `has_question` on whichever target
+ * (transaction / account) was named. The `cn:` id prefix is opaque —
+ * nothing else parses it.
  */
 export function recordQuestion(db: Database.Database, input: RecordQuestionInput): string {
   const id = `cn:${randomUUID()}`;
   db.prepare(
-    `INSERT INTO questions (id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json)
+    `INSERT INTO questions (id, batch_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
-    input.scan_id ?? null,
+    input.batch_id ?? null,
     input.file_id,
     input.transaction_id ?? null,
     input.account_id,
@@ -72,11 +70,8 @@ export function recordQuestion(db: Database.Database, input: RecordQuestionInput
   return id;
 }
 
-/**
- * Close a question by capturing its (prompt, kind, answer) tuple and
- * deleting the row outright. Returns the captured tuple so callers can
- * synthesize memory rules; returns null when the id doesn't exist.
- */
+/** Captures (prompt, kind, answer) and deletes the row outright, so callers
+ *  can synthesize memory rules; null if the id doesn't exist. */
 export function closeQuestion(
   db: Database.Database,
   id: string,
@@ -143,7 +138,7 @@ interface CountQuestionsScope {
   transaction_id?: string;
   account_id?: string;
   kind?: string;
-  scan_id?: string;
+  batch_id?: string;
   /** When true, count deferred rows too (default false: defer hides). */
   includeDeferred?: boolean;
 }
@@ -158,7 +153,7 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
   if (scope.transaction_id) { conditions.push("transaction_id = ?"); params.push(scope.transaction_id); }
   if (scope.account_id)  { conditions.push("account_id = ?");  params.push(scope.account_id); }
   if (scope.kind)           { conditions.push("kind = ?");           params.push(scope.kind); }
-  if (scope.scan_id)        { conditions.push("scan_id = ?");        params.push(scope.scan_id); }
+  if (scope.batch_id)       { conditions.push("batch_id = ?");       params.push(scope.batch_id); }
   if (!scope.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const row = db
@@ -169,13 +164,13 @@ export function countQuestions(db: Database.Database, scope: CountQuestionsScope
 
 interface ListQuestionsOptions {
   limit?: number;
-  scanId?: string;
+  batchId?: string;
   /** When true, include deferred rows in the result (default false). */
   includeDeferred?: boolean;
 }
 
 const ROW_COLUMNS =
-  "id, scan_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, deferred_until, created_at";
+  "id, batch_id, file_id, transaction_id, account_id, kind, prompt, options_json, context_json, deferred_until, created_at";
 
 export function listQuestions(
   db: Database.Database,
@@ -184,7 +179,7 @@ export function listQuestions(
   const capped = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
   const conditions: string[] = [];
   const params: any[] = [];
-  if (opts.scanId) { conditions.push("scan_id = ?"); params.push(opts.scanId); }
+  if (opts.batchId) { conditions.push("batch_id = ?"); params.push(opts.batchId); }
   if (!opts.includeDeferred) conditions.push(ACTIVE_DEFERRED_CLAUSE);
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(capped);
@@ -198,11 +193,9 @@ export function listQuestions(
 }
 
 /**
- * Mark a question as deferred for `days` days from now. The default
- * `listQuestions` / `countQuestions` filter hides deferred rows until the
- * timestamp passes, so the clarifier won't re-encounter the question on the
- * next run. Pass `includeDeferred: true` to those functions for an
- * unfiltered view (e.g. for the rules / files browsers).
+ * Defers a question for `days` days. `listQuestions`/`countQuestions` hide
+ * deferred rows by default until the timestamp passes; pass `includeDeferred:
+ * true` for an unfiltered view.
  */
 export function deferQuestion(
   db: Database.Database,

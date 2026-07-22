@@ -32,7 +32,7 @@ export async function isEncrypted(bytes: Buffer): Promise<boolean> {
   }
 }
 
-export async function unlock(
+async function unlock(
   bytes: Buffer,
   password: string,
 ): Promise<UnlockResult> {
@@ -56,9 +56,7 @@ export async function unlock(
   }
 }
 
-/**
- * Password store: filename-pattern keyed, encrypted-at-rest
- */
+// Password store: filename-pattern keyed, encrypted-at-rest.
 
 interface StoredPassword {
   id: string;
@@ -126,7 +124,7 @@ function safeTest(pattern: string, target: string): boolean {
   }
 }
 
-// Replaces on conflict so a bank's rotated password overwrites the stale one.
+/** Replaces on conflict, so a bank's rotated password overwrites the stale one. */
 export function savePassword(
   db: Database.Database,
   pattern: string,
@@ -197,9 +195,7 @@ export async function unlockNonInteractive(
   return { ok: true, decrypted: result.decrypted };
 }
 
-/**
- * PDF read + hash
- */
+// PDF read + hash.
 
 const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -214,7 +210,7 @@ interface LoadedFile {
   fileName: string;
 }
 
-// Hash is sha256 of the on-disk bytes (still encrypted if pw-protected) so re-scans dedup before unlock.
+/** Hash is sha256 of the on-disk (still-encrypted, if pw-protected) bytes, so re-ingests dedup before unlock. */
 export function readPdf(path: string): LoadedFile {
   const ext = extname(path).toLowerCase();
   const mime = MIME_BY_EXT[ext];
@@ -234,9 +230,7 @@ export function readPdf(path: string): LoadedFile {
   return { bytes, hash, mime, fileName: basename(path) };
 }
 
-/**
- * Page rasterize: PDF → PNG for VL providers that don't accept documents
- */
+// Page rasterize: PDF → PNG for VL providers that don't accept documents.
 
 // Readable to a VL model without blowing up the token bill on a dense statement.
 const DEFAULT_DPI = 150;

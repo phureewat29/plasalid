@@ -18,10 +18,10 @@ import {
   countPdfPages,
   findCandidates,
 } from "./pdf.js";
-import { deleteScannedFile, findScannedFileById } from "../db/queries/files.js";
+import { deleteFile, findFileById } from "../db/queries/files.js";
 import { tryExecute } from "../lib/result.js";
 
-type IngestStatus = "new" | "pending" | "scanned" | "failed";
+type IngestStatus = "new" | "pending" | "ingested" | "failed";
 
 interface IngestEntry {
   path: string;
@@ -43,15 +43,14 @@ export interface PrepareResult {
   fileId: string;
   pageCount: number;
   format: "png" | "pdf";
-  // Present for format:"pdf" — the document an agent model should Read
-  // directly (the original data-dir path when unencrypted, a decrypted cache
-  // copy when the source was encrypted).
+  /** Present for format:"pdf" — the document to Read directly (original path
+   *  when unencrypted, a decrypted cache copy when the source was encrypted). */
   document?: string;
   pages: PreparedPage[];
 }
 
-// Thrown when a PDF is encrypted and neither the vault nor the caller's password
-// unlocks it. The CLI maps `reason` onto its own exit/prompt behavior.
+/** Thrown when a PDF is encrypted and neither the vault nor the caller's
+ *  password unlocks it; the CLI maps `reason` to its own exit/prompt behavior. */
 export class PasswordRequiredError extends Error {
   readonly reason: "password_required" | "wrong_password";
   constructor(reason: "password_required" | "wrong_password") {
@@ -99,13 +98,13 @@ function walk(dir: string, root: string, out: WalkedFile[]): void {
 
 interface KnownRow {
   id: string;
-  status: "pending" | "scanned" | "failed";
+  status: "pending" | "ingested" | "failed";
 }
 
 function findKnownByHash(db: Database.Database, hash: string): KnownRow | null {
   return (
     (db
-      .prepare(`SELECT id, status FROM scanned_files WHERE file_hash = ?`)
+      .prepare(`SELECT id, status FROM files WHERE file_hash = ?`)
       .get(hash) as KnownRow | undefined) ?? null
   );
 }
@@ -140,8 +139,8 @@ export async function discoverFiles(
   return entries;
 }
 
-// Bootstrap semantics copied from decrypt.ts: pending row keyed by content hash,
-// so a re-register of the same bytes is a no-op returning the existing id.
+/** Pending row keyed by content hash, so re-registering the same bytes is a
+ *  no-op that returns the existing id. */
 export function registerPendingFile(
   db: Database.Database,
   absPath: string,
@@ -152,7 +151,7 @@ export function registerPendingFile(
 
   const fileId = `sf:${randomUUID()}`;
   db.prepare(
-    `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
+    `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'pending')`,
   ).run(fileId, absPath, loaded.hash, loaded.mime);
   return { fileId, alreadyKnown: false };
 }
@@ -168,10 +167,9 @@ interface PrepareOptions {
 }
 
 /**
- * Resolve an `ingest prepare` argument that may be an absolute path, a
- * data-dir-relative path (what `ingest list`'s `rel_path` emits), a
- * cwd-relative path, or a `sf:` scanned_files id. Tried in that order;
- * returns null when nothing matches.
+ * Resolves the entry path in order: absolute, data-dir-relative (what `ingest
+ * list`'s `rel_path` emits), cwd-relative, then `sf:` file id. Returns null
+ * when nothing matches.
  */
 export function resolveEntryPath(db: Database.Database, entryOrId: string): string | null {
   // 1. Absolute path that exists as-is.
@@ -186,8 +184,8 @@ export function resolveEntryPath(db: Database.Database, entryOrId: string): stri
   const viaCwd = resolve(entryOrId);
   if (existsSync(viaCwd)) return viaCwd;
 
-  // 4. A scanned_files id.
-  const byId = findScannedFileById(db, entryOrId);
+  // 4. A file id.
+  const byId = findFileById(db, entryOrId);
   if (byId) return byId.path;
 
   return null;
@@ -208,16 +206,14 @@ export async function prepareFile(
   const loaded = readPdf(absPath);
   let known = findKnownByHash(db, loaded.hash);
   if (known && opts.force) {
-    deleteScannedFile(db, known.id);
+    deleteFile(db, known.id);
     known = null;
   }
   const fileId = known
     ? known.id
     : registerPendingFile(db, absPath).fileId;
 
-  // PDF-first fast path: an unencrypted statement is handed back by its
-  // original data-dir path — agent models Read PDFs natively, so no cache
-  // copy is made and nothing is written to disk.
+  // Fast path: an unencrypted PDF is handed back by its original path — no cache copy, nothing written.
   if (format === "pdf" && !(await isEncrypted(loaded.bytes))) {
     const pageCount = await countPdfPages(loaded.bytes);
     return {

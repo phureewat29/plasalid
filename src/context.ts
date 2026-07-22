@@ -27,6 +27,6 @@ function writeContext(content: string): void {
 export function createContextTemplate(userName: string): void {
   if (existsSync(getContextPath())) return;
   writeContext(
-    `# Plasalid context for ${userName}\n\n## Family\n- ${userName}\n\n## Income\n- (Optional: add your primary income source so Plasalid can mark it as PII when sending data to the model.)\n\n## Notes\n- (Free-form notes about your accounts, bank preferences, or anything Plasalid should keep in mind when scanning.)\n`,
+    `# Plasalid context for ${userName}\n\n## Family\n- ${userName}\n\n## Income\n- (Optional: add your primary income source so Plasalid can mark it as PII when sending data to the model.)\n\n## Notes\n- (Free-form notes about your accounts, bank preferences, or anything Plasalid should keep in mind when ingesting.)\n`,
   );
 }

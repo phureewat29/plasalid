@@ -18,7 +18,7 @@ import { config } from "../config.js";
 import { createAccount } from "../db/queries/account-balance.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
 import { insertTransaction, countTransactionsBySourceFile } from "../db/queries/transactions.js";
-import { findScannedFileById } from "../db/queries/files.js";
+import { findFileById } from "../db/queries/files.js";
 import { savePassword } from "./pdf.js";
 import {
   discoverFiles,
@@ -27,7 +27,7 @@ import {
   resolveEntryPath,
   cleanCache,
   PasswordRequiredError,
-} from "./ingest.js";
+} from "./prepare.js";
 
 function minimalPdf(): Buffer {
   const header = "%PDF-1.4\n";
@@ -141,7 +141,7 @@ describe("registerPendingFile", () => {
     const first = registerPendingFile(db, path);
     expect(first.alreadyKnown).toBe(false);
     expect(first.fileId.startsWith("sf:")).toBe(true);
-    expect(findScannedFileById(db, first.fileId)?.status).toBe("pending");
+    expect(findFileById(db, first.fileId)?.status).toBe("pending");
 
     const second = registerPendingFile(db, path);
     expect(second).toEqual({ fileId: first.fileId, alreadyKnown: true });
@@ -182,9 +182,10 @@ describe("resolveEntryPath", () => {
     const prevCwd = process.cwd();
     process.chdir(outDir);
     try {
-      // Compare against process.cwd() (not the pre-chdir `outDir` string) —
-      // on macOS the tmp dir is itself a symlink, so chdir resolves it to
-      // its real path (`/private/var/...` vs `/var/...`).
+      /**
+       * Compare against process.cwd(), not the pre-chdir `outDir` string — on macOS the tmp
+       * dir is itself a symlink, so chdir resolves it to its real path (`/private/var/...` vs `/var/...`).
+       */
       expect(resolveEntryPath(db, "c.pdf")).toBe(resolve(process.cwd(), "c.pdf"));
     } finally {
       process.chdir(prevCwd);
@@ -281,7 +282,7 @@ describe("prepareFile", () => {
     expect(existsSync(result.document!)).toBe(false);
   });
 
-  it("force re-registers and cascades away the prior scan's transactions", async () => {
+  it("force re-registers and cascades away the prior ingest's transactions", async () => {
     const db = freshDb();
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
@@ -304,7 +305,7 @@ describe("prepareFile", () => {
 
     const result = await prepareFile(db, path, { force: true, dpi: 72, outDir });
     expect(result.fileId).not.toBe(oldId);
-    expect(findScannedFileById(db, oldId)).toBeNull();
+    expect(findFileById(db, oldId)).toBeNull();
     expect(countTransactionsBySourceFile(db, oldId)).toBe(0);
   });
 
@@ -342,9 +343,10 @@ describe("cleanCache", () => {
     const path = resolve(dataDir, "a.pdf");
     writeFileSync(path, minimalPdf());
 
-    // No outDir -> lands under getCacheDir()/<fileId> (redirected to tmp).
-    // format:"png" so a cache write actually happens (the pdf default is a
-    // no-write passthrough for a non-encrypted file — see prepareFile tests).
+    /**
+     * No outDir -> lands under getCacheDir()/<fileId> (redirected to tmp). format:"png" so a
+     * cache write actually happens (pdf's default is a no-write passthrough — see prepareFile tests).
+     */
     const one = await prepareFile(db, path, { format: "png", dpi: 72 });
     const oneDir = resolve(cacheDir, one.fileId);
     expect(existsSync(oneDir)).toBe(true);

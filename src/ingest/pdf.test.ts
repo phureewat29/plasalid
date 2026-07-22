@@ -133,9 +133,10 @@ describe("unlockNonInteractive", () => {
     expect(result).toEqual({ ok: false, reason: "password_required" });
   });
 
-  // suggestPattern() is a private helper of unlockNonInteractive's persist step;
-  // exercised here through its observable effect on findCandidates rather than
-  // imported directly.
+  /**
+   * suggestPattern() is a private helper of unlockNonInteractive's persist step, exercised
+   * here through its observable effect on findCandidates rather than imported directly.
+   */
   it("derives a reusable alpha-prefix pattern, matching sibling statements from the same source", async () => {
     const db = freshDb();
     const enc = await encryptedPdf("secret");

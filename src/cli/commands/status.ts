@@ -29,7 +29,7 @@ interface StatusReport {
     error: string | null;
   };
   counts: Counts | null;
-  files: { scanned: number; pending: number; failed: number } | null;
+  files: { ingested: number; pending: number; failed: number } | null;
   questions: { open: number; deferred: number } | null;
   net_worth: { assets: number; liabilities: number; net_worth: number } | null;
 }
@@ -37,7 +37,7 @@ interface StatusReport {
 async function buildReport(): Promise<StatusReport> {
   const report: StatusReport = {
     type: "status",
-    configured: existsSync(getConfigPath()),
+    configured: existsSync(getConfigPath()) || existsSync(config.dbPath),
     config_path: getConfigPath(),
     data_dir: getDataDir(),
     locale: config.displayLocale,
@@ -56,16 +56,15 @@ async function buildReport(): Promise<StatusReport> {
     net_worth: null,
   };
 
-  // Heavy db-layer imports are deferred so that other (non-db) commands do not
-  // pay for libsql on startup. getDb() is wrapped so an unconfigured / wrong-key
-  // / unreadable database degrades to a not-ready report rather than crashing.
+  // Deferred so non-db commands skip the libsql cost at startup; getDb() is
+  // wrapped so an unconfigured/wrong-key/unreadable db degrades to not-ready, never crashes.
   try {
     const { getDb } = await import("../../db/connection.js");
     const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
       "../../db/queries/account-balance.js"
     );
     const { countTransactions } = await import("../../db/queries/transactions.js");
-    const { countScannedFiles } = await import("../../db/queries/files.js");
+    const { countFiles } = await import("../../db/queries/files.js");
     const { countQuestions } = await import("../../db/queries/questions.js");
     const { listMerchants } = await import("../../db/queries/merchants.js");
     const { countMemories } = await import("../../db/queries/notes.js");
@@ -79,7 +78,7 @@ async function buildReport(): Promise<StatusReport> {
       merchants: listMerchants(db, { limit: 1000 }).length,
       notes: countMemories(db),
     };
-    report.files = countScannedFiles(db);
+    report.files = countFiles(db);
     const open = countQuestions(db);
     const total = countQuestions(db, { includeDeferred: true });
     report.questions = { open, deferred: Math.max(0, total - open) };
@@ -138,7 +137,7 @@ function renderPlain(r: StatusReport): void {
   }
   if (r.files) {
     lines.push(
-      ["files_scanned", r.files.scanned],
+      ["files_ingested", r.files.ingested],
       ["files_pending", r.files.pending],
       ["files_failed", r.files.failed],
     );
@@ -209,7 +208,7 @@ function renderTty(r: StatusReport, color: boolean): void {
       if (r.files.failed > 0) extras.push(`${r.files.failed} failed`);
       rows.push([
         "Files",
-        `${formatInt(r.files.scanned)}${extras.length ? "  " + dim(`(${extras.join(", ")})`) : ""}`,
+        `${formatInt(r.files.ingested)}${extras.length ? "  " + dim(`(${extras.join(", ")})`) : ""}`,
       ]);
     }
     if (r.questions) {

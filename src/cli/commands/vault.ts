@@ -12,10 +12,9 @@ import {
 } from "../output.js";
 
 /**
- * `vault` command tree: manage the file-password patterns used to unlock
- * encrypted statements non-interactively. Passwords are stored encrypted at
- * rest (see scanner/pdf.ts savePassword); this surface never prints plaintext.
- * Heavy db/scanner imports are deferred inside each action (mirrors status.ts).
+ * `vault`: manages file-password patterns for unlocking encrypted statements
+ * non-interactively. Passwords are encrypted at rest (see pdf.ts's
+ * savePassword); this surface never prints plaintext.
  */
 
 function emitObject(obj: Record<string, unknown>): void {
@@ -56,7 +55,7 @@ async function vaultAdd(pattern: string, _opts: AddOpts): Promise<void> {
   }
 
   const db = await openDb();
-  const { savePassword } = await import("../../scanner/pdf.js");
+  const { savePassword } = await import("../../ingest/pdf.js");
   const id = savePassword(db, pattern, password, config.dbEncryptionKey);
   emitObject({ id, pattern });
 }

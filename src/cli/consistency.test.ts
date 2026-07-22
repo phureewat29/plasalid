@@ -9,13 +9,12 @@ import { ALL_THAI_INSTITUTIONS } from "../accounts/taxonomy.js";
 
 /**
  * Drift-prevention test: no subprocesses, pure import + string parsing. Keeps
- * the program's real command tree, README.md's "## Commands" overview, the
- * checked-in agent skill (skills/SKILL.md), the codex AGENTS.md block, and the
- * root help screen's COMMANDS array from silently diverging as commands, flags,
- * or the Thai institution registry change.
+ * the program tree, README's "## Commands" section, SKILL.md, the codex
+ * AGENTS.md block, and the help screen's COMMANDS array from silently
+ * diverging as commands, flags, or the Thai institution registry change.
  *
- * buildProgram() only constructs the commander tree — it never parses argv or
- * runs an action — so importing/calling it here is side-effect free.
+ * buildProgram() only constructs the commander tree (no argv parsing, no
+ * action run), so calling it here is side-effect free.
  */
 
 // docs-consistency.test.ts lives in src/cli/ -> repo root is two levels up.
@@ -27,17 +26,18 @@ const SKILL = readFileSync(resolve(repoRoot, "skills", "SKILL.md"), "utf8");
 const CODEX_BLOCK = AGENTS_MD_BLOCK("0.0.0");
 
 /**
- * Institution kinds SKILL.md lists as account leaves. Named here as a literal so
- * this test — not the doc or the registry — owns which kinds are account-forming.
- * Merchant-ish kinds (insurer/gov/telco/utility/payment_rail) are excluded: they
+ * Institution kinds SKILL.md lists as account leaves, named as a literal so this
+ * test (not the doc or the registry) owns which kinds are account-forming.
+ * Merchant-ish kinds (insurer/gov/telco/utility/payment_rail) are excluded — they
  * become merchants via `merchants upsert`, never account leaves.
  */
 const ACCOUNT_FORMING_KINDS = ["bank", "card_issuer", "wallet", "broker", "crypto_exchange"];
 
 function topLevelNames(program: Command): string[] {
-  // Aliases (e.g. `data`'s `open`) live on the same Command instance, not as
-  // a separate entry in `program.commands`, so no explicit alias filtering
-  // is needed here.
+  /**
+   * Aliases (e.g. `data`'s `open`) live on the same Command instance, not
+   * a separate program.commands entry — no alias filtering needed here.
+   */
   return program.commands.map((c) => c.name());
 }
 
@@ -54,10 +54,9 @@ function readmeCommandsBlock(readme: string): string {
 }
 
 /**
- * Extract the noun named on each `plasalid <noun> ...` line of the README's
- * grouped overview. The bare `plasalid` line (no noun token before the `#`
- * comment) documents the no-arg default action, which is an alias for the
- * `status` command — mapped explicitly rather than left unmatched.
+ * Extracts the noun named on each `plasalid <noun> ...` README line. The bare
+ * `plasalid` line documents the no-arg default action (an alias for `status`),
+ * mapped explicitly rather than left unmatched.
  */
 function extractReadmeCommandNames(readme: string): Set<string> {
   const block = readmeCommandsBlock(readme);
@@ -98,10 +97,9 @@ function isArgToken(token: string): boolean {
 }
 
 /**
- * The concrete command noun a span names: the first token after `plasalid`, but
- * only when it is a real command word. A bare `plasalid`, a root flag
- * (`plasalid --version`), or a generic `plasalid <noun> --help` template names
- * no specific command and returns undefined.
+ * The concrete command noun a span names — the first token after `plasalid`,
+ * when it's a real command word. A bare `plasalid`, a root flag, or a generic
+ * `plasalid <noun> --help` template names no command and returns undefined.
  */
 function commandNounOf(span: string): string | undefined {
   const noun = span.trim().split(/\s+/)[1];
@@ -131,9 +129,9 @@ function firstSubToken(span: string): string | undefined {
 }
 
 /**
- * Resolve the command a doc code-span like `plasalid transactions recategorize --set-account <id> ...`
- * refers to: the top-level noun command, drilled into its subcommand when the
- * span names one (the first bare, non-flag, non-placeholder token after the noun).
+ * Resolves the command a doc code-span like `plasalid transactions recategorize
+ * --set-account <id> ...` refers to: the noun command, drilled into a subcommand
+ * when the span names one.
  */
 function resolveTargetCommand(program: Command, span: string): Command | undefined {
   const nounName = commandNounOf(span);
@@ -162,9 +160,11 @@ function extractFlagTokens(span: string): string[] {
 
 describe("docs consistency (no subprocesses)", () => {
   it("program construction has no side effects (importing/building never touches argv)", () => {
-    // If buildProgram() parsed argv or ran an action at import/construction
-    // time, this bare call under vitest (whose own argv it would see) would
-    // throw or hang. Merely reaching this assertion is the proof.
+    /**
+     * If buildProgram() parsed argv or ran an action at import time, this
+     * bare call under vitest (which has its own argv) would throw or hang.
+     * Reaching this assertion is the proof it doesn't.
+     */
     expect(() => buildProgram()).not.toThrow();
   });
 
@@ -210,8 +210,7 @@ describe("docs consistency (no subprocesses)", () => {
 
     for (const [label, md] of sources) {
       for (const span of extractPlasalidCodeSpans(md)) {
-        // Bare `plasalid`, root flags (`plasalid --version`), and generic
-        // `plasalid <noun> --help` templates name no concrete command to check.
+        // Bare `plasalid`, root flags, and generic `--help` templates name no command to check.
         if (!commandNounOf(span)) continue;
         const target = resolveTargetCommand(program, span);
         if (!target) {

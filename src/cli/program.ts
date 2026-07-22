@@ -25,7 +25,7 @@ export const COMMANDS = [
   { name: "setup", desc: "Install the skill pack for external agent CLIs (Claude Code, codex)" },
   { name: "config", desc: "Configure the harness (converge/init) and show configuration" },
   { name: "ingest", desc: "Ingest pipeline: list/prepare/commit/done/fail" },
-  { name: "files", desc: "Browse scanned files (list/show/drop)" },
+  { name: "files", desc: "Browse ingested files (list/show/drop)" },
   { name: "vault", desc: "Manage file-password patterns for encrypted statements" },
   { name: "transactions", desc: "Transactions: list/show/add/update/delete/recategorize/dedupe" },
   { name: "accounts", desc: "Manage the chart of accounts" },
@@ -41,24 +41,16 @@ const GLOBAL_OPTIONS = [
   { name: "--no-color", desc: "Disable ANSI color output" },
 ];
 
-/**
- * Construct the full commander program: root command, every noun's
- * subcommand tree, global flags, and the branded root help screen. Pure
- * construction only — never parses argv or executes an action. Callers own
- * calling `.parse()` / `.parseAsync()`.
- */
+/** Builds the full commander program. Pure construction — never parses argv
+ *  or executes an action; callers own `.parse()` / `.parseAsync()`. */
 export function buildProgram(): Command {
   const require = createRequire(import.meta.url);
   const { version } = require("../../package.json");
 
   const program = new Command();
 
-  // Positional options: options are bound to the command level whose operand
-  // (subcommand name) precedes them. Required so a parent command that has BOTH
-  // a bare action and subcommands (config) dispatches its subcommand instead of
-  // swallowing the operand's options into the bare action. Global --json/--no-color
-  // live on every level (addGlobalOptions), so the OR-walk in getOutputMode still
-  // sees them wherever they land.
+  // Required so a command with BOTH a bare action and subcommands (config)
+  // dispatches the subcommand instead of swallowing its options into the bare action.
   program.enablePositionalOptions();
 
   program
@@ -67,8 +59,7 @@ export function buildProgram(): Command {
     .version(version)
     .addHelpCommand(false)
     .showHelpAfterError("Run `plasalid --help` for the list of commands.")
-    // No-arg default action runs status (same implementation as the `status`
-    // command), so `plasalid` on its own reports harness status.
+    // Bare `plasalid` reports harness status (same implementation as `status`).
     .action(
       runAction(async () => {
         await runStatus();
@@ -101,11 +92,8 @@ export function buildProgram(): Command {
   registerReport(program);
   registerNotes(program);
 
-  // Global flags on EVERY command so they are accepted before or after the
-  // subcommand (`plasalid --json vault list` and `plasalid vault list --json`).
-  // getOutputMode() OR-walks the command chain, so wherever commander lands the
-  // flag, the resolved mode sees it. Applied after registration so the whole tree
-  // exists.
+  // On every command so --json/--no-color work before or after the subcommand
+  // name; getOutputMode() OR-walks the chain to find them wherever they land.
   function addGlobalOptions(cmd: Command): void {
     cmd
       .option("--json", "Emit NDJSON (machine-readable) instead of human output")
@@ -115,9 +103,8 @@ export function buildProgram(): Command {
   addGlobalOptions(program);
 
   program.configureHelp({
-    // Root help stays the branded screen; subcommands fall back to commander's
-    // default formatter so `plasalid <noun> --help` shows the real subcommand tree
-    // (configureHelp is inherited by subcommands, hence the explicit root guard).
+    // configureHelp is inherited by subcommands, so guard explicitly: only the
+    // root gets the branded screen; subcommands keep commander's default formatter.
     formatHelp: (cmd, helper) =>
       cmd === program
         ? helpScreen(COMMANDS, GLOBAL_OPTIONS)

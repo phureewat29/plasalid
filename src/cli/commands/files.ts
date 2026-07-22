@@ -10,10 +10,8 @@ import {
 } from "../output.js";
 
 /**
- * `files` command tree for the deterministic harness: browse scanned files,
- * inspect one with its transaction / open-question counts, and drop one
- * (cascade-removing its rows). Heavy db imports are deferred inside each action
- * so non-db commands don't pay for libsql at startup.
+ * `files`: browse ingested files, inspect one with its transaction/question
+ * counts, and drop one (cascade-removing its rows).
  */
 
 /** JSON → one NDJSON object; human/plain → tab-separated key/value lines
@@ -40,15 +38,15 @@ interface FilesListOpts {
 
 async function filesList(opts: FilesListOpts): Promise<void> {
   const db = await openDb();
-  const { listScannedFiles } = await import("../../db/queries/files.js");
-  let rows = listScannedFiles(db);
+  const { listFiles } = await import("../../db/queries/files.js");
+  let rows = listFiles(db);
   if (opts.status) rows = rows.filter((r) => r.status === opts.status);
 
   const columns: Column<(typeof rows)[number]>[] = [
     { header: "STATUS", value: (r) => r.status },
     { header: "ID", value: (r) => r.id },
     { header: "SOURCE", value: (r) => r.source ?? "-" },
-    { header: "SCANNED_AT", value: (r) => r.scanned_at ?? "-" },
+    { header: "INGESTED_AT", value: (r) => r.ingested_at ?? "-" },
     { header: "PATH", value: (r) => r.path },
   ];
   emitList(rows, columns);
@@ -56,9 +54,9 @@ async function filesList(opts: FilesListOpts): Promise<void> {
 
 async function filesShow(id: string): Promise<void> {
   const db = await openDb();
-  const { findScannedFileById } = await import("../../db/queries/files.js");
-  const row = findScannedFileById(db, id);
-  if (!row) fail("NOT_FOUND", `no scanned file: ${id}`);
+  const { findFileById } = await import("../../db/queries/files.js");
+  const row = findFileById(db, id);
+  if (!row) fail("NOT_FOUND", `no file: ${id}`);
 
   const { countTransactionsBySourceFile } = await import("../../db/queries/transactions.js");
   const { countQuestions } = await import("../../db/queries/questions.js");
@@ -75,11 +73,11 @@ interface FilesDropOpts {
 }
 
 async function filesDrop(id: string, opts: FilesDropOpts): Promise<void> {
-  requireYes(opts, `dropping scanned file ${id}`);
+  requireYes(opts, `dropping file ${id}`);
   const db = await openDb();
-  const { deleteScannedFile } = await import("../../db/queries/files.js");
-  const res = deleteScannedFile(db, id);
-  if (!res.removed) fail("NOT_FOUND", `no scanned file: ${id}`);
+  const { deleteFile } = await import("../../db/queries/files.js");
+  const res = deleteFile(db, id);
+  if (!res.removed) fail("NOT_FOUND", `no file: ${id}`);
   emitObject({
     file_id: id,
     removed_transactions: res.removedTransactions,
@@ -88,22 +86,22 @@ async function filesDrop(id: string, opts: FilesDropOpts): Promise<void> {
 }
 
 export function registerFiles(program: Command): void {
-  const files = program.command("files").description("Browse scanned files");
+  const files = program.command("files").description("Browse ingested files");
 
   files
     .command("list")
-    .description("List scanned files")
-    .option("--status <status>", "filter by status (new|pending|scanned|failed)")
+    .description("List ingested files")
+    .option("--status <status>", "filter by status (new|pending|ingested|failed)")
     .action(runAction(filesList));
 
   files
     .command("show <id>")
-    .description("Show a scanned file with its transaction and open-question counts")
+    .description("Show a file with its transaction and open-question counts")
     .action(runAction(filesShow));
 
   files
     .command("drop <id>")
-    .description("Drop a scanned file and cascade-remove its transactions/questions")
+    .description("Drop a file and cascade-remove its transactions/questions")
     .option("--yes", "skip confirmation")
     .action(runAction(filesDrop));
 }

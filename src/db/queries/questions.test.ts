@@ -15,7 +15,7 @@ function freshDb() {
 
 function insertFile(db: Database.Database, id: string): void {
   db.prepare(
-    `INSERT INTO scanned_files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'scanned')`,
+    `INSERT INTO files (id, path, file_hash, mime, status) VALUES (?, ?, ?, ?, 'ingested')`,
   ).run(id, `/tmp/${id}.pdf`, `hash-${id}`, "application/pdf");
 }
 
@@ -43,12 +43,12 @@ describe("questions table", () => {
     expect(countQuestions(db)).toBe(0);
   });
 
-  it("listQuestions scopes by scanId when supplied", () => {
-    recordQuestion(db, { file_id: null, scan_id: "sc:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
-    recordQuestion(db, { file_id: null, scan_id: "sc:b", account_id: "expense:food", kind: "uncategorized", prompt: "b" });
-    recordQuestion(db, { file_id: null, scan_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
-    expect(listQuestions(db, { scanId: "sc:a" }).map(r => r.prompt)).toEqual(["a"]);
-    expect(listQuestions(db, { scanId: "sc:b" }).map(r => r.prompt)).toEqual(["b"]);
+  it("listQuestions scopes by batchId when supplied", () => {
+    recordQuestion(db, { file_id: null, batch_id: "ib:a", account_id: "expense:food", kind: "uncategorized", prompt: "a" });
+    recordQuestion(db, { file_id: null, batch_id: "ib:b", account_id: "expense:food", kind: "uncategorized", prompt: "b" });
+    recordQuestion(db, { file_id: null, batch_id: null, account_id: "expense:food", kind: "uncategorized", prompt: "c" });
+    expect(listQuestions(db, { batchId: "ib:a" }).map(r => r.prompt)).toEqual(["a"]);
+    expect(listQuestions(db, { batchId: "ib:b" }).map(r => r.prompt)).toEqual(["b"]);
     expect(listQuestions(db).map(r => r.prompt).sort()).toEqual(["a", "b", "c"]);
   });
 

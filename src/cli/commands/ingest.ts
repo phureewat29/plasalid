@@ -15,12 +15,9 @@ import {
 import { ingestCommit } from "./ingest-commit.js";
 
 /**
- * `ingest` command tree for the deterministic harness.
- * Everything an external scan agent needs to drive the pipeline without the
- * interactive TUI: list candidate files, prepare pages, commit extracted rows
- * as transactions, and mark files done/failed. Heavy db/scanner imports are
- * deferred inside each action so non-db commands don't pay for libsql/mupdf at
- * startup (mirrors the pattern in status.ts).
+ * `ingest`: list candidate files, prepare pages, commit extracted rows, mark
+ * files done/failed. Heavy db/ingest imports are deferred inside each action
+ * so non-db commands don't pay for libsql/mupdf at startup (see status.ts).
  */
 
 // small shared output helper
@@ -79,7 +76,7 @@ interface ListOpts {
 
 async function ingestList(opts: ListOpts): Promise<void> {
   const db = await openDb();
-  const { discoverFiles } = await import("../../scanner/ingest.js");
+  const { discoverFiles } = await import("../../ingest/prepare.js");
 
   let regex: RegExp | undefined;
   if (opts.regex) {
@@ -91,7 +88,7 @@ async function ingestList(opts: ListOpts): Promise<void> {
   }
 
   const entries = await discoverFiles(db, { regex });
-  const counts = { new: 0, pending: 0, scanned: 0, failed: 0 };
+  const counts = { new: 0, pending: 0, ingested: 0, failed: 0 };
   for (const e of entries) counts[e.status]++;
   const total = entries.length;
 
@@ -122,7 +119,7 @@ async function ingestList(opts: ListOpts): Promise<void> {
   emitList(entries, columns);
   if (mode.tty) {
     process.stdout.write(
-      `\n${counts.new} new, ${counts.pending} pending, ${counts.scanned} scanned, ${counts.failed} failed (${total} total)\n`,
+      `\n${counts.new} new, ${counts.pending} pending, ${counts.ingested} ingested, ${counts.failed} failed (${total} total)\n`,
     );
   }
 }
@@ -138,14 +135,14 @@ interface PrepareOpts {
   out?: string;
 }
 
-// Mirrors DEFAULT_DPI in scanner/pdf.ts (not exported), reported back so the
+// Mirrors DEFAULT_DPI in ingest/pdf.ts (not exported), reported back so the
 // caller knows the resolution used when rasterizing to png.
 const DEFAULT_DPI = 150;
 
 async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void> {
   const db = await openDb();
   const { resolveEntryPath, prepareFile, PasswordRequiredError } = await import(
-    "../../scanner/ingest.js"
+    "../../ingest/prepare.js"
   );
 
   if (resolveEntryPath(db, pathOrId) === null) {
@@ -220,13 +217,13 @@ interface DoneOpts {
 
 async function ingestDone(id: string, opts: DoneOpts): Promise<void> {
   const db = await openDb();
-  const { markFileScanned } = await import("../../db/queries/files.js");
-  const changes = markFileScanned(db, id, { source: opts.agent ?? "external" });
+  const { markFileIngested } = await import("../../db/queries/files.js");
+  const changes = markFileIngested(db, id, { source: opts.agent ?? "external" });
   if (changes === 0) fail("NOT_FOUND", `no ingest entry: ${id}`);
 
-  const { cleanCache } = await import("../../scanner/ingest.js");
+  const { cleanCache } = await import("../../ingest/prepare.js");
   const { removed } = cleanCache(id);
-  emitObject({ file_id: id, status: "scanned", cache_removed: removed });
+  emitObject({ file_id: id, status: "ingested", cache_removed: removed });
 }
 
 interface FailOpts {
@@ -242,7 +239,7 @@ async function ingestFail(id: string, opts: FailOpts): Promise<void> {
   const changes = markFileFailed(db, id, { source: opts.agent ?? "external", error: opts.error });
   if (changes === 0) fail("NOT_FOUND", `no ingest entry: ${id}`);
 
-  const { cleanCache } = await import("../../scanner/ingest.js");
+  const { cleanCache } = await import("../../ingest/prepare.js");
   const { removed } = cleanCache(id);
   emitObject({ file_id: id, status: "failed", cache_removed: removed });
 }

@@ -1,179 +1,178 @@
 import type Database from "libsql";
+import { copyFileSync, readdirSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { MIGRATIONS, type Migration } from "./migrations/index.js";
 
-export function migrate(db: Database.Database): void {
-  // No backward compatibility: a legacy schema (see isLegacySchema) is dropped and
-  // rebuilt (data loss intended). Fresh/already-migrated DBs skip the wipe, so every
-  // CREATE ... IF NOT EXISTS below is a no-op and a second migrate() call is idempotent.
-  if (isLegacySchema(db)) {
-    dropAllTables(db);
-  }
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('asset','liability','income','expense','equity')),
-      parent_id TEXT REFERENCES accounts(id),
-      subtype TEXT,
-      bank_name TEXT,
-      account_number_masked TEXT,
-      currency TEXT NOT NULL DEFAULT 'THB',
-      due_day INTEGER,
-      statement_day INTEGER,
-      points_balance REAL,
-      metadata_json TEXT,
-      pii_flag INTEGER NOT NULL DEFAULT 0,
-      has_question INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS accounts_parent_idx ON accounts(parent_id);
-    CREATE INDEX IF NOT EXISTS accounts_type_idx ON accounts(type);
-
-    CREATE TABLE IF NOT EXISTS merchants (
-      id TEXT PRIMARY KEY,
-      canonical_name TEXT NOT NULL UNIQUE,
-      default_account_id TEXT REFERENCES accounts(id),
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS merchant_aliases (
-      id TEXT PRIMARY KEY,
-      merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
-      normalized_pattern TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS merchant_aliases_merchant_idx ON merchant_aliases(merchant_id);
-
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      file_hash TEXT NOT NULL UNIQUE,
-      mime TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('pending','ingested','failed')),
-      raw_text TEXT,
-      ingested_at TEXT,
-      source TEXT,
-      error TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id                TEXT PRIMARY KEY,
-      group_id          TEXT,
-      date              TEXT NOT NULL,
-      description       TEXT NOT NULL,
-      merchant_id       TEXT REFERENCES merchants(id),
-      raw_descriptor    TEXT,
-      source_file_id    TEXT REFERENCES files(id) ON DELETE CASCADE,
-      source_page       INTEGER,
-      debit_account_id  TEXT NOT NULL REFERENCES accounts(id),
-      credit_account_id TEXT NOT NULL REFERENCES accounts(id),
-      amount            INTEGER NOT NULL,
-      currency          TEXT NOT NULL DEFAULT 'THB',
-      code              TEXT,
-      user_ref          TEXT,
-      void_of           TEXT,
-      has_question      INTEGER NOT NULL DEFAULT 0,
-      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-      CHECK (amount > 0),
-      CHECK (debit_account_id <> credit_account_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
-    CREATE INDEX IF NOT EXISTS transactions_debit_account_idx ON transactions(debit_account_id);
-    CREATE INDEX IF NOT EXISTS transactions_credit_account_idx ON transactions(credit_account_id);
-    CREATE INDEX IF NOT EXISTS transactions_source_file_idx ON transactions(source_file_id);
-    CREATE INDEX IF NOT EXISTS transactions_group_idx ON transactions(group_id);
-    CREATE INDEX IF NOT EXISTS transactions_merchant_idx ON transactions(merchant_id);
-
-    CREATE TABLE IF NOT EXISTS questions (
-      id TEXT PRIMARY KEY,
-      batch_id TEXT,
-      file_id TEXT REFERENCES files(id) ON DELETE CASCADE,
-      transaction_id TEXT REFERENCES transactions(id) ON DELETE CASCADE,
-      account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
-      kind TEXT,
-      prompt TEXT NOT NULL,
-      options_json TEXT,
-      context_json TEXT,
-      answer TEXT,
-      resolved_at TEXT,
-      deferred_until TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS questions_batch_idx ON questions(batch_id);
-    CREATE INDEX IF NOT EXISTS questions_deferred_idx ON questions(deferred_until);
-
-    CREATE TABLE IF NOT EXISTS memories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      content TEXT NOT NULL,
-      category TEXT NOT NULL DEFAULT 'general',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS file_passwords (
-      id TEXT PRIMARY KEY,
-      pattern TEXT NOT NULL UNIQUE,
-      password_encrypted TEXT NOT NULL,
-      last_used_at TEXT,
-      use_count INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
+/**
+ * Brings `db` up to the latest schema version by applying any pending forward
+ * migrations. Never drops tables or overwrites the file. `dbPath` (omitted for
+ * :memory:) enables a pre-migration backup of the file.
+ */
+export function migrate(db: Database.Database, dbPath?: string): void {
+  applyMigrations(db, MIGRATIONS, dbPath);
 }
 
 /**
- * True if any legacy table (`conversation_history`, `hints`, `postings`,
- * `transfers`, `scanned_files`) exists, `questions` carries a `transfer_id` or
- * `scan_id` column, or `transactions` exists without a `void_of` column. A
- * fresh or already-migrated DB matches none of these, so only genuinely
- * legacy databases get wiped.
+ * The migration runner, parameterised on the manifest so tests can drive a
+ * synthetic one. Reads the applied version from `schema_migrations`; refuses a
+ * database newer than the build; on a version-0 database, refuses an
+ * unrecognized legacy shape loudly and without touching it; backs the file up
+ * when it already holds user data; then applies each pending migration in its
+ * own transaction, recording the version only if its `up` commits.
  */
-function isLegacySchema(db: Database.Database): boolean {
-  const legacyTable = db
+export function applyMigrations(
+  db: Database.Database,
+  migrations: Migration[],
+  dbPath?: string,
+): void {
+  const current = currentVersion(db);
+
+  if (current > migrations.length) {
+    throw new Error(
+      `Database schema version ${current} is newer than this build supports ` +
+        `(${migrations.length}). Upgrade plasalid to open this database.`,
+    );
+  }
+  if (current === migrations.length) return;
+
+  if (current === 0) {
+    const reason = detectLegacyShape(db);
+    if (reason) {
+      const at = dbPath ? ` at ${dbPath}` : "";
+      throw new Error(
+        `This database${at} has an unrecognized legacy schema (${reason}) and ` +
+          `cannot be migrated automatically. Your data has not been touched. ` +
+          `Back up the database file, then start a fresh database to continue.`,
+      );
+    }
+  }
+
+  if (dbPath && hasUserTables(db)) backupDatabase(db, dbPath);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  for (let i = current; i < migrations.length; i++) {
+    const version = i + 1;
+    const migration = migrations[i];
+    const apply = db.transaction((): void => {
+      migration.up(db);
+      db.prepare(`INSERT INTO schema_migrations (version) VALUES (?)`).run(version);
+    });
+    apply();
+  }
+}
+
+function currentVersion(db: Database.Database): number {
+  const table = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1`,
+    )
+    .get();
+  if (!table) return 0;
+  const row = db
+    .prepare(`SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations`)
+    .get() as { version: number };
+  return row.version;
+}
+
+/** True once the database holds any table other than the migration ledger. */
+function hasUserTables(db: Database.Database): boolean {
+  const row = db
     .prepare(
       `SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'postings', 'transfers', 'scanned_files')
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
         LIMIT 1`,
     )
     .get();
-  if (legacyTable) return true;
-
-  const questionCols = db
-    .prepare(`PRAGMA table_info(questions)`)
-    .all() as { name: string }[];
-  if (questionCols.some(c => c.name === "transfer_id" || c.name === "scan_id")) return true;
-
-  const transactionCols = db
-    .prepare(`PRAGMA table_info(transactions)`)
-    .all() as { name: string }[];
-  return transactionCols.length > 0 && !transactionCols.some(c => c.name === "void_of");
+  return !!row;
 }
 
 /**
- * Drops every user table. Foreign-key enforcement is toggled off for the
- * teardown (safe: migrate() runs outside any transaction) so drop order can't
- * raise constraint violations, then restored.
+ * Read-only probe for a pre-migration legacy shape: a legacy table name,
+ * `questions.transfer_id`/`scan_id`, or a `transactions` table lacking
+ * `void_of`. Returns a human-readable reason on a match, else null. Writes
+ * nothing, so the caller can refuse the database with its bytes intact.
  */
-function dropAllTables(db: Database.Database): void {
-  const tables = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
-    .all() as { name: string }[];
+function detectLegacyShape(db: Database.Database): string | null {
+  const legacyTable = db
+    .prepare(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name IN ('conversation_history', 'hints', 'postings', 'transfers', 'scanned_files')
+        LIMIT 1`,
+    )
+    .get() as { name: string } | undefined;
+  if (legacyTable) return `legacy table ${legacyTable.name}`;
 
-  db.pragma("foreign_keys = OFF");
+  const questionCols = db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[];
+  if (questionCols.some((c) => c.name === "transfer_id" || c.name === "scan_id")) {
+    return "questions.transfer_id/scan_id";
+  }
+
+  const transactionCols = db.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[];
+  if (transactionCols.length > 0 && !transactionCols.some((c) => c.name === "void_of")) {
+    return "transactions table without void_of";
+  }
+  return null;
+}
+
+/**
+ * Copies the database file to `<dbPath>.<YYYYMMDD-HHMMSS>.bak` before a
+ * migration runs, keeping only the five newest. Checkpoints the WAL first so
+ * the copy is complete; a non-WAL database tolerates the checkpoint failing.
+ */
+function backupDatabase(db: Database.Database, dbPath: string): void {
   try {
-    for (const { name } of tables) {
-      db.exec(`DROP TABLE IF EXISTS "${name}"`);
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // Rollback-journal databases have no WAL to checkpoint; the copy still holds.
+  }
+  copyFileSync(dbPath, `${dbPath}.${backupStamp()}.bak`);
+  pruneBackups(dbPath);
+}
+
+function backupStamp(): string {
+  const d = new Date();
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+  );
+}
+
+function pruneBackups(dbPath: string): void {
+  const dir = dirname(dbPath);
+  const prefix = `${basename(dbPath)}.`;
+  // The fixed-width stamp makes lexicographic order chronological.
+  const backups = readdirSync(dir)
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
+    .sort();
+  for (const name of backups.slice(0, Math.max(0, backups.length - 5))) {
+    try {
+      unlinkSync(join(dir, name));
+    } catch {
+      // A backup already gone is fine; pruning is best-effort.
     }
-  } finally {
-    db.pragma("foreign_keys = ON");
   }
 }
+
+// dropAllTables is disabled, not deleted: auto-dropping user data on a schema
+// mismatch is forbidden. The open path now refuses unrecognized shapes instead.
+// function dropAllTables(db: Database.Database): void {
+//   const tables = db
+//     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+//     .all() as { name: string }[];
+//
+//   db.pragma("foreign_keys = OFF");
+//   try {
+//     for (const { name } of tables) {
+//       db.exec(`DROP TABLE IF EXISTS "${name}"`);
+//     }
+//   } finally {
+//     db.pragma("foreign_keys = ON");
+//   }
+// }

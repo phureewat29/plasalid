@@ -261,6 +261,7 @@ const NOT_READY_PATTERNS = [
   "not a database",
   "file is encrypted",
   "not configured",
+  "unrecognized legacy schema",
 ];
 
 function isNotReadyError(err: unknown): boolean {

@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import Database from "libsql";
-import { migrate } from "./schema.js";
+import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { migrate, applyMigrations } from "./schema.js";
+import type { Migration } from "./migrations/index.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -8,15 +12,29 @@ function freshDb() {
   return db;
 }
 
+function tableNames(db: Database.Database): string[] {
+  return db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+    .all()
+    .map((r: any) => r.name);
+}
+
+function versions(db: Database.Database): number[] {
+  return (db.prepare(`SELECT version FROM schema_migrations ORDER BY version`).all() as {
+    version: number;
+  }[]).map((r) => r.version);
+}
+
+function rowCount(db: Database.Database, table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
+}
+
 describe("migrate", () => {
   it("creates the expected tables", () => {
     const db = freshDb();
     migrate(db);
 
-    const tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-      .all()
-      .map((r: any) => r.name);
+    const tables = tableNames(db).sort();
 
     const expected = [
       "accounts",
@@ -58,6 +76,25 @@ describe("migrate", () => {
     const db = freshDb();
     migrate(db);
     expect(() => migrate(db)).not.toThrow();
+  });
+
+  it("records exactly version 1 and preserves data across re-migration", () => {
+    const db = freshDb();
+    migrate(db);
+    db.prepare(
+      `INSERT INTO accounts (id, name, type) VALUES ('asset:a', 'A', 'asset'), ('asset:b', 'B', 'asset')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO transactions (id, date, description, debit_account_id, credit_account_id, amount, currency)
+       VALUES ('tx:1', '2026-07-01', 'Coffee', 'asset:a', 'asset:b', 100, 'THB')`,
+    ).run();
+
+    // A second migrate() takes the up-to-date fast path: no guard, no wipe.
+    expect(() => migrate(db)).not.toThrow();
+
+    expect(rowCount(db, "transactions")).toBe(1);
+    expect(rowCount(db, "accounts")).toBe(2);
+    expect(versions(db)).toEqual([1]);
   });
 
   it("accepts hierarchical accounts via parent_id", () => {
@@ -162,25 +199,23 @@ describe("transactions table (TigerBeetle-core)", () => {
   });
 });
 
-describe("legacy DB migration (nuke + recreate)", () => {
-  function tableNames(db: Database.Database): string[] {
-    return db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
-      .all()
-      .map((r: any) => r.name);
+describe("legacy DB guard (non-destructive)", () => {
+  function questionCols(db: Database.Database): string[] {
+    return (db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
   }
 
-  function filesCols(db: Database.Database): string[] {
-    return (db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[]).map(
+  function transactionCols(db: Database.Database): string[] {
+    return (db.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[]).map(
       (c) => c.name,
     );
   }
 
   /**
    * A v0.12-shaped DB: single-table `transfers` ledger (renamed to
-   * `transactions`) plus `questions.transfer_id`. scanned_files already uses
-   * `source` (provider/model predate v0.12), isolating `transfers` as the
-   * detection signal. Seeds a row so the wipe can be asserted.
+   * `transactions`) plus `questions.transfer_id`. Seeds rows so their survival
+   * proves migrate() never dropped anything.
    */
   function v012Db(): Database.Database {
     const db = freshDb();
@@ -245,10 +280,8 @@ describe("legacy DB migration (nuke + recreate)", () => {
   }
 
   /**
-   * Pre-v0.12 shape: conversation_history/hints tables, provider/model
-   * columns on scanned_files, and the old two-table `postings` ledger.
-   * Guards that these still trigger the wipe now that a bare `transactions`
-   * table doesn't.
+   * Pre-v0.12 shape: conversation_history/hints tables, provider/model columns
+   * on scanned_files, and the old two-table `postings` ledger.
    */
   function ancientLegacyDb(): Database.Database {
     const db = freshDb();
@@ -298,59 +331,9 @@ describe("legacy DB migration (nuke + recreate)", () => {
     return db;
   }
 
-  it("detects a v0.12 transfers-table DB and rebuilds the clean shape", () => {
-    const db = v012Db();
-    expect(() => migrate(db)).not.toThrow();
-
-    const tables = tableNames(db);
-    // The legacy single-table name is gone; the renamed table is present.
-    expect(tables).not.toContain("transfers");
-    for (const t of ["accounts", "merchants", "files", "transactions", "questions"]) {
-      expect(tables, `missing table: ${t}`).toContain(t);
-    }
-    // questions carries transaction_id, not transfer_id.
-    const qcols = (db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    expect(qcols).toContain("transaction_id");
-    expect(qcols).not.toContain("transfer_id");
-    // files has the current shape.
-    const cols = filesCols(db);
-    expect(cols).toContain("source");
-    expect(cols).not.toContain("provider");
-  });
-
-  it("wipes all legacy data (fresh empty ledger, data loss is intended)", () => {
-    const db = v012Db();
-    migrate(db);
-
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM files`).get()).toMatchObject({ n: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
-    // The legacy single-table ledger no longer exists.
-    expect(tableNames(db)).not.toContain("transfers");
-  });
-
-  it("detects the pre-v0.12 two-table (postings) shape and rebuilds clean", () => {
-    const db = ancientLegacyDb();
-    expect(() => migrate(db)).not.toThrow();
-
-    const tables = tableNames(db);
-    expect(tables).not.toContain("postings");
-    expect(tables).not.toContain("conversation_history");
-    expect(tables).not.toContain("hints");
-    for (const t of ["accounts", "merchants", "files", "transactions", "questions"]) {
-      expect(tables, `missing table: ${t}`).toContain(t);
-    }
-    const cols = filesCols(db);
-    expect(cols).toContain("source");
-    expect(cols).not.toContain("provider");
-    expect(cols).not.toContain("model");
-  });
-
   /**
    * Otherwise-current shape, but `transactions` predates `void_of` (void was
-   * encoded as `code='void'` + `user_ref`). Isolates the missing column as
-   * the detection signal.
+   * encoded as `code='void'` + `user_ref`). Seeds the pre-void_of row.
    */
   function preVoidOfDb(): Database.Database {
     const db = freshDb();
@@ -415,23 +398,9 @@ describe("legacy DB migration (nuke + recreate)", () => {
     return db;
   }
 
-  it("detects a transactions table missing void_of and rebuilds clean (closes the code='void' footgun)", () => {
-    const db = preVoidOfDb();
-    expect(() => migrate(db)).not.toThrow();
-
-    const cols = (db.prepare(`PRAGMA table_info(transactions)`).all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    expect(cols).toContain("void_of");
-    // Nuke-and-recreate: the pre-void_of row (and its code='void' encoding) is gone.
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 0 });
-  });
-
   /**
-   * Immediately-previous shape: current except `files` is still
-   * `scanned_files` and questions still carry `scan_id`. Every other signal
-   * (`void_of`, `transaction_id`, no legacy tables) is absent, so
-   * `scanned_files`'s mere existence alone must drive detection.
+   * Immediately-previous shape: current except `files` is still `scanned_files`
+   * and questions still carry `scan_id`. Seeds a scanned_files row.
    */
   function previousShapeDb(): Database.Database {
     const db = freshDb();
@@ -497,43 +466,87 @@ describe("legacy DB migration (nuke + recreate)", () => {
     return db;
   }
 
-  it("detects the immediately-previous scanned_files/scan_id shape and rebuilds clean", () => {
-    const db = previousShapeDb();
-    expect(() => migrate(db)).not.toThrow();
-
-    const tables = tableNames(db);
-    // The old table name is gone; the renamed table is present.
-    expect(tables).not.toContain("scanned_files");
-    expect(tables).toContain("files");
-    // questions carries batch_id, not scan_id.
-    const qcols = (db.prepare(`PRAGMA table_info(questions)`).all() as { name: string }[]).map(
-      (c) => c.name,
-    );
-    expect(qcols).toContain("batch_id");
-    expect(qcols).not.toContain("scan_id");
-    // Nuke-and-recreate: the seeded row is gone.
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM files`).get()).toMatchObject({ n: 0 });
+  it("refuses a v0.12 transfers-table DB and leaves its rows intact", () => {
+    const db = v012Db();
+    expect(() => migrate(db)).toThrow(/unrecognized legacy schema/i);
+    // Nothing dropped: the legacy tables and their rows survive untouched.
+    expect(tableNames(db)).toContain("transfers");
+    expect(rowCount(db, "transfers")).toBe(1);
+    expect(rowCount(db, "accounts")).toBe(2);
+    expect(questionCols(db)).toContain("transfer_id");
   });
 
-  it("does NOT treat the current shape as legacy (idempotent; data preserved)", () => {
-    const db = freshDb();
-    migrate(db); // builds the current clean shape: transactions + questions.transaction_id
-    db.prepare(`INSERT INTO accounts (id, name, type) VALUES ('asset:a', 'A', 'asset'), ('asset:b', 'B', 'asset')`).run();
-    db.prepare(
-      `INSERT INTO transactions (id, date, description, debit_account_id, credit_account_id, amount, currency)
-       VALUES ('tx:1', '2026-07-01', 'Coffee', 'asset:a', 'asset:b', 100, 'THB')`,
-    ).run();
+  it("refuses the pre-v0.12 postings shape and leaves its rows intact", () => {
+    const db = ancientLegacyDb();
+    expect(() => migrate(db)).toThrow(/unrecognized legacy schema/i);
+    expect(tableNames(db)).toContain("conversation_history");
+    expect(tableNames(db)).toContain("postings");
+    expect(rowCount(db, "conversation_history")).toBe(1);
+    expect(rowCount(db, "transactions")).toBe(1);
+  });
 
-    /**
-     * A second migrate() must not mistake the `transactions` table (with
-     * debit_account_id) or questions.transaction_id for a legacy shape and
-     * wipe it — the seeded rows surviving proves no nuke happened.
-     */
-    expect(() => migrate(db)).not.toThrow();
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM transactions`).get()).toMatchObject({ n: 1 });
-    expect(db.prepare(`SELECT COUNT(*) AS n FROM accounts`).get()).toMatchObject({ n: 2 });
-    const cols = filesCols(db);
-    expect(cols).toContain("source");
-    expect(cols).not.toContain("provider");
+  it("refuses a transactions table missing void_of and leaves its rows intact", () => {
+    const db = preVoidOfDb();
+    expect(() => migrate(db)).toThrow(/unrecognized legacy schema/i);
+    expect(transactionCols(db)).not.toContain("void_of");
+    // The pre-void_of row (with its code='void' encoding) is preserved.
+    expect(rowCount(db, "transactions")).toBe(1);
+  });
+
+  it("refuses the immediately-previous scanned_files/scan_id shape and leaves its rows intact", () => {
+    const db = previousShapeDb();
+    expect(() => migrate(db)).toThrow(/unrecognized legacy schema/i);
+    expect(tableNames(db)).toContain("scanned_files");
+    expect(questionCols(db)).toContain("scan_id");
+    expect(rowCount(db, "scanned_files")).toBe(1);
+  });
+});
+
+describe("applyMigrations runner", () => {
+  const m1: Migration = { up: (db) => db.exec(`CREATE TABLE t1 (id INTEGER PRIMARY KEY)`) };
+  const m2: Migration = { up: (db) => db.exec(`CREATE TABLE t2 (id INTEGER PRIMARY KEY)`) };
+
+  it("applies every pending migration and records its version", () => {
+    const db = freshDb();
+    applyMigrations(db, [m1, m2]);
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["t1", "t2"]));
+    expect(versions(db)).toEqual([1, 2]);
+  });
+
+  it("is a no-op once the DB is at the latest version", () => {
+    const db = freshDb();
+    applyMigrations(db, [m1, m2]);
+    // m1/m2 use bare CREATE TABLE, so a re-apply would throw "table exists";
+    // not throwing proves the fast path returned before running anything.
+    expect(() => applyMigrations(db, [m1, m2])).not.toThrow();
+    expect(versions(db)).toEqual([1, 2]);
+  });
+
+  it("throws when the DB version is newer than the build", () => {
+    const db = freshDb();
+    applyMigrations(db, [m1, m2]);
+    expect(() => applyMigrations(db, [m1])).toThrow(/newer than this build/i);
+  });
+
+  it("backs up an on-disk DB that already holds user tables before applying", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plasalid-migrate-"));
+    try {
+      const dbPath = join(dir, "db.sqlite");
+      const db = new Database(dbPath);
+      db.exec(`CREATE TABLE preexisting (id INTEGER PRIMARY KEY)`);
+      db.prepare(`INSERT INTO preexisting (id) VALUES (1)`).run();
+
+      applyMigrations(db, [m1, m2], dbPath);
+
+      const baks = readdirSync(dir).filter(
+        (n) => n.startsWith("db.sqlite.") && n.endsWith(".bak"),
+      );
+      expect(baks.length).toBe(1);
+      expect(versions(db)).toEqual([1, 2]);
+      expect(rowCount(db, "preexisting")).toBe(1);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

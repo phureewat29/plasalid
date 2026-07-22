@@ -29,7 +29,7 @@ function openDb(dbPath: string, encryptionKey?: string): Database.Database {
   }
 
   db.pragma("foreign_keys = ON");
-  migrate(db);
+  migrate(db, dbPath);
   try { chmodSync(dbPath, 0o600); } catch {}
   return db;
 }

@@ -1,35 +1,46 @@
 /**
  * Two-stage integration test for the deterministic CLI harness.
  *
- * STAGE 1 spawns `node dist/cli/index.js <cmd> --json` for every read-only
- * command variant against a throwaway environment (temp HOME + temp
- * PLASALID_DB_PATH/DATA_DIR/CACHE_DIR), so nothing touches the real
- * ~/.plasalid. It runs against an empty ledger. For each case it asserts:
- *   - stdout is valid NDJSON (every non-empty line parses as JSON)
- *   - stderr JSON-parses when non-empty
- *   - the exit code matches what's expected
- *   - no ANSI escape bytes (\x1b) appear anywhere in stdout/stderr
+ * Stage 1 spawns `node dist/cli/index.js <cmd> --json` for every read-only
+ * command against a throwaway env (temp HOME + PLASALID_DB_PATH/DATA_DIR/
+ * CACHE_DIR) over an empty ledger, asserting NDJSON stdout/stderr, the
+ * expected exit code, and no ANSI escapes.
  *
- * STAGE 2 drives a full write-path lifecycle in its own isolated environment
- * (same HOME/DATA_DIR/CACHE_DIR convention, freshly minted): vault-unlock an
- * encrypted statement, ingest/commit transactions, answer questions, edit and
- * delete transactions, adjust/merge/delete accounts, drop a file, install the
- * agent skill pack, and update config — each a reported case, asserting on
- * the actual NDJSON shape at every step.
+ * Stage 2 drives a full write-path lifecycle in its own isolated env:
+ * vault-unlock an encrypted statement, ingest/commit, answer questions,
+ * edit/delete transactions, adjust/merge/delete accounts, drop a file,
+ * install the skill pack, update config — each step asserting on the
+ * actual NDJSON shape.
  *
- * Run via `npx tsx scripts/integration.ts` (also wired up as `npm run
- * integration`, which builds first). This file builds `dist/` itself too, so
- * a direct `tsx scripts/integration.ts` invocation is self-sufficient.
+ * Run via `npx tsx scripts/integration.ts` (or `npm run integration`, which
+ * builds first). This file builds `dist/` itself, so a direct invocation is
+ * self-sufficient.
  */
 import { execSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, existsSync, rmSync, copyFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, existsSync, rmSync, copyFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSandbox, registerProcessCleanup } from "../src/lib/sandbox.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(new URL(import.meta.url)));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const CLI_PATH = join(REPO_ROOT, "dist", "cli", "index.js");
+
+// Live sandbox roots, so Ctrl-C mid-run still cleans up the active one.
+const activeRoots = new Set<string>();
+registerProcessCleanup(() => {
+  for (const root of activeRoots) rmSync(root, { recursive: true, force: true });
+});
+
+/**
+ * Node only delivers signals like SIGINT between event loop turns, and
+ * back-to-back synchronous `spawnSync` calls never yield one. This gives
+ * registerProcessCleanup's handler a turn to run so Ctrl-C isn't stuck
+ * until the whole script finishes.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b/;
@@ -99,35 +110,6 @@ function checkNdjson(text: string): string | null {
     }
   }
   return null;
-}
-
-function setUpTempEnv(prefix: string): { env: NodeJS.ProcessEnv; root: string } {
-  const root = mkdtempSync(join(tmpdir(), prefix));
-  const home = join(root, "home");
-  const dataDir = join(root, "data");
-  const cacheDir = join(root, "cache");
-  const dbPath = join(root, "db.sqlite");
-  mkdirSync(home, { recursive: true });
-  mkdirSync(dataDir, { recursive: true });
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    // config.ts derives ~/.plasalid from os.homedir(); redirect that away
-    // from the real home so config.json/context.md are never touched.
-    HOME: home,
-    USERPROFILE: home,
-    PLASALID_DB_PATH: dbPath,
-    PLASALID_DATA_DIR: dataDir,
-    PLASALID_CACHE_DIR: cacheDir,
-    // Blank out any encryption key inherited from the real shell/.env so the
-    // throwaway db is always plain and reproducible. Falsy (not undefined),
-    // so once stage 2 writes a key into config.json, that file value wins
-    // (config.ts precedence is env > file > default) without us having to
-    // delete this var from the shared env object.
-    PLASALID_DB_ENCRYPTION_KEY: "",
-    NO_COLOR: "1",
-  };
-  return { env, root };
 }
 
 function runCase(c: Case, env: NodeJS.ProcessEnv, cwd: string): Result {
@@ -202,9 +184,8 @@ function parseNdjson(stdout: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
-/** Run the built CLI (always with --json) inside a stage-2 case, capturing the
- *  invocation on `ctx.last` so a thrown assertion can report the failing
- *  command + its captured stdout/stderr. */
+/** Runs the built CLI (--json) for a stage-2 step, stashing the invocation
+ *  in `ctx.last` so a thrown assertion can report the failing command. */
 function sh(ctx: Ctx, args: string[], opts: { stdin?: string } = {}): { stdout: string; stderr: string; code: number } {
   const res = spawnSync(process.execPath, [CLI_PATH, ...args, "--json"], {
     cwd: ctx.root,
@@ -225,10 +206,9 @@ function shOk(ctx: Ctx, args: string[], opts: { stdin?: string } = {}): { stdout
   return r;
 }
 
-/** The three rows committed in the main lifecycle batch (and re-committed
- *  verbatim to prove idempotency). The rows are hand-crafted — the fixture
- *  PDF's printed contents are never parsed by this test; the PDF exists only
- *  to exercise discovery, vault unlock, and prepare. */
+/** Rows for the main lifecycle batch (re-committed verbatim to prove
+ *  idempotency). Hand-crafted, not parsed from the fixture PDF — the PDF
+ *  only exercises discovery, vault unlock, and prepare. */
 function lifecycleItems(): Record<string, unknown>[] {
   return [
     {
@@ -254,7 +234,9 @@ function lifecycleItems(): Record<string, unknown>[] {
     {
       date: "2026-06-12",
       description: "Happy Paws Grooming",
-      debit_account: "expense:pet:grooming",
+      // Bare-leaf hint on purpose — colon paths auto-create silently; this
+      // row exercises the uncategorized-fallback question.
+      debit_account: "grooming",
       credit_account: "asset:bank:kasibank",
       amount: 850.0,
       row_index: 2,
@@ -289,14 +271,14 @@ function stepConfigShowEncrypted(ctx: Ctx): void {
   assert(cfg.dbEncryptionKey?.set === true, `config show did not reflect the generated key: ${JSON.stringify(cfg)}`);
 }
 
-/** Fixture: the committed demo statement (examples/corgi-agent/) — a real,
- *  AES-256 password-protected 4-page card statement. The integration test
- *  depends on that asset staying in the repo. */
+/** Committed demo statement (examples/corgi-agent/): a synthetic, AES-256
+ *  password-protected statement from a fictional bank. Must stay in the
+ *  repo for this test to run. */
 const FIXTURE_STATEMENT = join(REPO_ROOT, "examples", "corgi-agent", "card-statement-2026-05.pdf");
-const FIXTURE_PASSWORD = "corgimoho";
+const FIXTURE_PASSWORD = "password";
 
 function stepPlaceStatement(ctx: Ctx): void {
-  const outPath = join(ctx.dataDir, "ttb", "card-statement-2026-05.pdf");
+  const outPath = join(ctx.dataDir, "corgi-bank", "card-statement-2026-05.pdf");
   mkdirSync(dirname(outPath), { recursive: true });
   copyFileSync(FIXTURE_STATEMENT, outPath);
   ctx.last = { args: ["(copy fixture statement)", outPath], stdout: "", stderr: "", code: 0 };
@@ -325,7 +307,7 @@ function stepIngestPrepare(ctx: Ctx): void {
   const res = shOk(ctx, ["ingest", "prepare", ctx.statementPath]);
   const result = parseOne(res.stdout);
   assert(typeof result.file_id === "string" && result.file_id.startsWith("sf:"), `bad file_id: ${JSON.stringify(result)}`);
-  assert(result.page_count === 4, `expected page_count 4, got ${result.page_count}`);
+  assert(result.page_count === 6, `expected page_count 6, got ${result.page_count}`);
   const cacheDirResolved = resolve(ctx.cacheDir);
   assert(
     typeof result.document === "string" && result.document.startsWith(cacheDirResolved),
@@ -348,6 +330,11 @@ function stepIngestCommit(ctx: Ctx): void {
   assert(salary.ok === true, `salary row failed: ${JSON.stringify(salary)}`);
   assert(dogfood.ok === true, `dog food row failed: ${JSON.stringify(dogfood)}`);
   assert(grooming.ok === true, `grooming row failed: ${JSON.stringify(grooming)}`);
+  const groomingDebit = grooming.sides?.find((s: { side: string }) => s.side === "debit");
+  assert(
+    groomingDebit?.how === "uncategorized_fallback" && groomingDebit?.resolved === "expense:uncategorized",
+    `expected the bare-leaf grooming hint to fall back to expense:uncategorized: ${JSON.stringify(grooming.sides)}`,
+  );
   assert(dogfood.merchant?.how === "linked", `expected dog food merchant linked: ${JSON.stringify(dogfood.merchant)}`);
   assert(typeof dogfood.merchant.merchant_id === "string", "expected a merchant_id on the dog food row");
 
@@ -400,7 +387,7 @@ function stepQuestions(ctx: Ctx): void {
 function stepIngestDone(ctx: Ctx): void {
   const res = shOk(ctx, ["ingest", "done", ctx.fileId, "--agent", "integration"]);
   const result = parseOne(res.stdout);
-  assert(result.status === "scanned", `expected status scanned, got ${result.status}`);
+  assert(result.status === "ingested", `expected status ingested, got ${result.status}`);
   const cacheSubdir = join(ctx.cacheDir, ctx.fileId);
   assert(
     Array.isArray(result.cache_removed) && result.cache_removed.includes(cacheSubdir),
@@ -408,9 +395,9 @@ function stepIngestDone(ctx: Ctx): void {
   );
   assert(!existsSync(cacheSubdir), `cache subdir still exists: ${cacheSubdir}`);
 
-  const list = shOk(ctx, ["files", "list", "--status", "scanned"]);
+  const list = shOk(ctx, ["files", "list", "--status", "ingested"]);
   const rows = parseNdjson(list.stdout);
-  assert(rows.length === 1, `expected 1 scanned file, got ${rows.length}`);
+  assert(rows.length === 1, `expected 1 ingested file, got ${rows.length}`);
 }
 
 function stepTransactionsUpdateShow(ctx: Ctx): void {
@@ -429,20 +416,13 @@ function stepTransactionsUpdateShow(ctx: Ctx): void {
 /**
  * `transactions add` (strict, existing accounts) + `transactions dedupe --auto-merge`.
  *
- * Adapted from the literal spec: `autoMergeStrictDuplicateTransactions`
- * (src/scanner/dedup-transactions.ts) only merges a duplicate group whose
- * earliest member carries BOTH a non-null merchant_id AND a non-null
- * source_file_id (`if (!head.merchant_id || !head.source_file_id) return 0;`).
- * A hand-made `transactions add` row has neither field (the CLI never sets
- * source_file_id, and no --merchant-name is given here), so it can't
- * strict-match the file-sourced dog food row — and two copies of *itself*
- * wouldn't strict-merge either, for the same reason (still no source_file_id
- * on either copy). So the manual add below is still created (to cover the
- * literal "strict create with existing accounts" case), but the actual
- * auto-merge assertion instead exercises a *second*, file-sourced posting of
- * the dog food row (same date/amount/accounts/merchant as the original,
- * different row_index so it gets a distinct deterministic transaction id) via
- * the same source file — a case the merge logic is actually designed for.
+ * `autoMergeStrictDuplicateTransactions` (src/ingest/dedup-transactions.ts)
+ * only merges a group whose earliest member has both merchant_id AND
+ * source_file_id. A manual `transactions add` row has neither, so it can't
+ * strict-match anything — the manual add below only covers the "strict
+ * create" case. The auto-merge assertion instead posts a second file-sourced
+ * dog food row (same date/amount/accounts/merchant, different row_index) via
+ * the same source file.
  */
 function stepTransactionsAddAutoMerge(ctx: Ctx): void {
   const manual = shOk(ctx, [
@@ -543,8 +523,7 @@ function stepAccountsCreateMergeDelete(ctx: Ctx): void {
     `expected no self-transactions from an empty account merge: ${JSON.stringify(mergeResult)}`,
   );
 
-  // expense:pet:treats no longer exists post-merge (mergeAccounts deletes the
-  // source); exercise the delete path on a second, still-fresh empty account.
+  // mergeAccounts deletes the source account, so exercise delete on a fresh second one.
   shOk(ctx, [
     "accounts",
     "create",
@@ -647,25 +626,21 @@ const STAGE2_STEPS: { label: string; fn: (ctx: Ctx) => void }[] = [
 ];
 
 /**
- * Stage 2 runs in its OWN freshly-minted isolated environment (same
- * HOME/DATA_DIR/CACHE_DIR convention as stage 1, distinct temp dir) rather
- * than stage 1's — stage 1's read sweep already opens + migrates a plaintext
- * db at its PLASALID_DB_PATH, and `config --generate-key` cannot re-open an
- * existing plaintext file with an encryption key (db/connection.ts treats
- * that as "wrong encryption key or corrupt database"). All ~30 stage-2
- * subprocess calls below DO share this one env object end to end, so the
- * encryption key written into config.json by `config` is picked up
- * automatically by every later invocation (PLASALID_DB_ENCRYPTION_KEY stays
- * the blank string set in setUpTempEnv, which loses to the file value).
+ * Stage 2 uses its own fresh isolated env (distinct temp dir) rather than
+ * stage 1's, because stage 1's read sweep already migrates a plaintext db
+ * and `config --generate-key` refuses to key an existing db. All stage-2
+ * calls share this one env object, so the encryption key `config` writes
+ * into config.json is picked up by every later invocation.
  */
-function runStage2(): Result[] {
-  const { env, root } = setUpTempEnv("plasalid-integration-stage2-");
+async function runStage2(): Promise<Result[]> {
+  const sandbox = createSandbox("plasalid-integration-stage2-");
+  activeRoots.add(sandbox.root);
   const ctx: Ctx = {
-    env,
-    root,
-    dataDir: env.PLASALID_DATA_DIR!,
-    cacheDir: env.PLASALID_CACHE_DIR!,
-    dbPath: env.PLASALID_DB_PATH!,
+    env: sandbox.env,
+    root: sandbox.root,
+    dataDir: sandbox.dataDir,
+    cacheDir: sandbox.cacheDir,
+    dbPath: sandbox.dbPath,
     statementPath: "",
     fileId: "",
     salaryId: "",
@@ -691,35 +666,41 @@ function runStage2(): Result[] {
           console.error(`stdout:\n${ctx.last.stdout}`);
           console.error(`stderr:\n${ctx.last.stderr}`);
         }
-        // The lifecycle is stateful (each case builds on the last); stop
-        // rather than cascade into a wall of unrelated-looking failures.
+        // Stateful lifecycle — stop rather than cascade into unrelated failures.
         break;
       }
+      await yieldToEventLoop();
     }
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    sandbox.cleanup();
+    activeRoots.delete(sandbox.root);
   }
   return results;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   console.log("integration: building...");
   execSync("npm run build", { cwd: REPO_ROOT, stdio: "inherit" });
 
-  const { env, root } = setUpTempEnv("plasalid-integration-");
-  console.log(`integration: stage 1 temp env at ${root}`);
+  const sandbox = createSandbox("plasalid-integration-");
+  activeRoots.add(sandbox.root);
+  console.log(`integration: stage 1 temp env at ${sandbox.root}`);
 
-  let stage1Results: Result[] = [];
+  const stage1Results: Result[] = [];
   try {
-    stage1Results = READ_CASES.map((c) => runCase(c, env, root));
+    for (const c of READ_CASES) {
+      stage1Results.push(runCase(c, sandbox.env, sandbox.root));
+      await yieldToEventLoop();
+    }
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    sandbox.cleanup();
+    activeRoots.delete(sandbox.root);
   }
   console.log("\nSTAGE 1: read-surface sweep\n");
   printTable(stage1Results);
 
   console.log("\nintegration: stage 2 running in its own isolated env...");
-  const stage2Results = runStage2();
+  const stage2Results = await runStage2();
   console.log("\nSTAGE 2: write-path lifecycle\n");
   printTable(stage2Results);
 
@@ -733,4 +714,7 @@ function main(): void {
   console.log(`integration: all ${all.length} cases passed`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  process.exit(1);
+});

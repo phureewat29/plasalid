@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
@@ -9,11 +8,14 @@ import { migrate } from "../../db/schema.js";
 import { createAccount } from "../../db/queries/account-balance.js";
 import { insertTransaction } from "../../db/queries/transactions.js";
 import { recordQuestion } from "../../db/queries/questions.js";
+import { createSandbox, type Sandbox } from "../../lib/sandbox.js";
 
-// system.integration.test.ts lives in src/cli/commands/ -> repo root is three
-// levels up. Covers questions, report, notes, config, and doctor via
-// spawned CLI processes.
+/**
+ * Repo root is three levels up from src/cli/commands/. Covers questions,
+ * report, notes, config, and doctor via spawned CLI processes.
+ */
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
+const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
 
 interface CliResult {
   stdout: string;
@@ -21,44 +23,21 @@ interface CliResult {
   code: number;
 }
 
-let tmpDir: string;
+let sandbox: Sandbox;
 let dbPath: string;
-let dataDir: string;
-let baseEnv: NodeJS.ProcessEnv;
-
-function makeEnv(home: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.FORCE_COLOR;
-  delete env.NO_COLOR;
-  delete env.PLASALID_DB_PATH;
-  delete env.PLASALID_DATA_DIR;
-  delete env.PLASALID_CACHE_DIR;
-  delete env.PLASALID_DB_ENCRYPTION_KEY;
-  env.HOME = home;
-  env.USERPROFILE = home;
-  return env;
-}
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "plasalid-system-it-"));
-  dbPath = join(tmpDir, "db.sqlite");
-  dataDir = join(tmpDir, "data");
+  sandbox = createSandbox("plasalid-system-it-");
+  dbPath = sandbox.dbPath;
 
-  baseEnv = makeEnv(tmpDir);
-  baseEnv.PLASALID_DB_PATH = dbPath;
-  baseEnv.PLASALID_DATA_DIR = dataDir;
-  baseEnv.PLASALID_CACHE_DIR = join(tmpDir, "cache");
-
-  // Minimal config.json so `doctor`'s config_exists check is true and
-  // `config show` resolves against the redirected HOME.
-  mkdirSync(join(tmpDir, ".plasalid"), { recursive: true });
+  // Minimal config.json so `doctor`'s config_exists check is true and `config show` resolves.
+  mkdirSync(join(sandbox.home, ".plasalid"), { recursive: true });
   writeFileSync(
-    join(tmpDir, ".plasalid", "config.json"),
+    join(sandbox.home, ".plasalid", "config.json"),
     JSON.stringify({ displayCurrency: "THB", displayLocale: "th-TH", userName: "Test User" }, null, 2) + "\n",
   );
 
-  // Create + migrate the shared (unencrypted) db once up front; individual
-  // tests below seed their own rows directly against this same file.
+  // Create + migrate the shared (unencrypted) db once; tests below seed their own rows against it.
   const raw = new Database(dbPath);
   raw.pragma("foreign_keys = ON");
   migrate(raw);
@@ -66,17 +45,20 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  sandbox.cleanup();
 });
 
-function runCli(args: string[], opts: { env?: NodeJS.ProcessEnv } = {}): Promise<CliResult> {
+function runCli(
+  args: string[],
+  opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      ["tsx", "src/cli/index.ts", ...args],
+      ["tsx", cliEntry, ...args],
       {
-        cwd: repoRoot,
-        env: opts.env ?? baseEnv,
+        cwd: opts.cwd ?? sandbox.root,
+        env: opts.env ?? sandbox.env,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
       },
@@ -112,11 +94,10 @@ describe("system CLI integration (subprocess)", () => {
   it(
     "config --generate-key on a fresh env: config show reflects it redacted, never plaintext",
     async () => {
-      const isolatedHome = mkdtempSync(join(tmpdir(), "plasalid-system-setup-it-"));
+      const isolated = createSandbox("plasalid-system-setup-it-");
       try {
-        const env = makeEnv(isolatedHome);
-        const setupDataDir = join(isolatedHome, "pdata");
-        const setupDbPath = join(isolatedHome, "pledger.sqlite");
+        const setupDataDir = isolated.dataDir;
+        const setupDbPath = isolated.dbPath;
 
         const setup = await runCli(
           [
@@ -134,7 +115,7 @@ describe("system CLI integration (subprocess)", () => {
             "th-TH",
             "--json",
           ],
-          { env },
+          { env: isolated.env, cwd: isolated.root },
         );
         expect(setup.code).toBe(0);
         const setupResult = parseOne(setup.stdout);
@@ -144,7 +125,7 @@ describe("system CLI integration (subprocess)", () => {
         // The raw 64-hex-char generated key must never appear on stdout.
         expect(/[0-9a-f]{64}/i.test(setup.stdout)).toBe(false);
 
-        const show = await runCli(["config", "show", "--json"], { env });
+        const show = await runCli(["config", "show", "--json"], { env: isolated.env, cwd: isolated.root });
         expect(show.code).toBe(0);
         const cfg = parseOne(show.stdout);
         expect(cfg.dbEncryptionKey).toMatchObject({
@@ -155,7 +136,65 @@ describe("system CLI integration (subprocess)", () => {
         expect(cfg.dbPath).toBe(setupDbPath);
         expect(/[0-9a-f]{64}/i.test(show.stdout)).toBe(false);
       } finally {
-        rmSync(isolatedHome, { recursive: true, force: true });
+        isolated.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "config --generate-key re-run keeps the live key instead of orphaning the encrypted db",
+    async () => {
+      const isolated = createSandbox("plasalid-system-rekey-it-");
+      try {
+        const first = await runCli(
+          ["config", "--db", isolated.dbPath, "--data-dir", isolated.dataDir, "--generate-key", "--json"],
+          { env: isolated.env, cwd: isolated.root },
+        );
+        expect(first.code).toBe(0);
+        const fingerprint = parseOne(first.stdout).dbEncryptionKey.fingerprint;
+
+        const second = await runCli(["config", "--generate-key", "--json"], {
+          env: isolated.env,
+          cwd: isolated.root,
+        });
+        expect(second.code).toBe(0);
+        expect(parseOne(second.stdout).dbEncryptionKey).toMatchObject({ set: true, fingerprint });
+      } finally {
+        isolated.cleanup();
+      }
+    },
+    30000,
+  );
+
+  it(
+    "config --generate-key refuses to key an existing keyless db (INVALID) and leaves it usable",
+    async () => {
+      const isolated = createSandbox("plasalid-system-plain-db-it-");
+      try {
+        // Any db-touching command run with the sandbox's blank key creates a
+        // plain db first — the agent-bootstrap path the demo exercises.
+        const seed = await runCli(["status", "--json"], { env: isolated.env, cwd: isolated.root });
+        expect(seed.code).toBe(0);
+
+        const rekey = await runCli(["config", "--generate-key", "--json"], {
+          env: isolated.env,
+          cwd: isolated.root,
+        });
+        expect(rekey.code).toBe(6);
+        const err = JSON.parse(rekey.stderr.trim());
+        expect(err.error.code).toBe("E_INVALID");
+        expect(err.error.hint).toBeDefined();
+
+        // Nothing was persisted: the harness still opens the plain db, and
+        // status reports configured (a db is in place; no first-run needed).
+        const status = await runCli(["status", "--json"], { env: isolated.env, cwd: isolated.root });
+        expect(status.code).toBe(0);
+        const report = parseOne(status.stdout);
+        expect(report.db.reachable).toBe(true);
+        expect(report.configured).toBe(true);
+      } finally {
+        isolated.cleanup();
       }
     },
     30000,

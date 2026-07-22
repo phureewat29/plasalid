@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import {
   SkillPackVersionError,
 } from "./install.js";
 import { AGENTS_MD_BLOCK } from "./codex.js";
+import { createSandbox, type Sandbox } from "../lib/sandbox.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -111,7 +112,6 @@ describe("installSkillPack — claude", () => {
     const dir = tmp("plasalid-install-idem-");
     try {
       installSkillPack({ claude: true, dir });
-      // Second install must not throw and must leave VERSION intact.
       expect(() => installSkillPack({ claude: true, dir })).not.toThrow();
       expect(readFileSync(join(dir, "skills", "plasalid", "VERSION"), "utf8").trim()).toBe(getVersion());
     } finally {
@@ -136,7 +136,6 @@ describe("installSkillPack — claude", () => {
       expect((err as SkillPackVersionError).installedVersion).toBe("0.0.1");
       expect((err as SkillPackVersionError).cliVersion).toBe(getVersion());
 
-      // --force overwrites and re-stamps VERSION.
       expect(() => installSkillPack({ claude: true, dir, force: true })).not.toThrow();
       expect(readFileSync(versionPath, "utf8").trim()).toBe(getVersion());
     } finally {
@@ -194,6 +193,7 @@ describe("installSkillPack — codex", () => {
 
 // install.test.ts lives in src/setup/ -> repo root is two levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
+const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
 
 interface CliResult {
   stdout: string;
@@ -201,12 +201,22 @@ interface CliResult {
   code: number;
 }
 
+let sandbox: Sandbox;
+
+beforeAll(() => {
+  sandbox = createSandbox("plasalid-setup-cli-it-");
+});
+
+afterAll(() => {
+  sandbox.cleanup();
+});
+
 function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      ["tsx", "src/cli/index.ts", ...args],
-      { cwd: repoRoot, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      ["tsx", cliEntry, ...args],
+      { cwd: sandbox.root, env: sandbox.env, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         const code =
           error && typeof (error as { code?: unknown }).code === "number"

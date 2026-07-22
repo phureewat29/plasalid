@@ -19,14 +19,15 @@ export interface PlasalidConfig {
   userName: string;
 }
 
-const PLASALID_DIR = resolve(homedir(), ".plasalid");
+const PLASALID_DIR = process.env.PLASALID_DIR
+  ? resolve(process.env.PLASALID_DIR)
+  : resolve(homedir(), ".plasalid");
 
 /**
- * One declarative table drives both field resolution and the persisted-key
- * list. `envVar` (when present) is checked before the file value; `default`
- * is computed eagerly here, same as the values it replaces. Unknown keys on
- * disk are tolerated on read and dropped on the next write — saveConfig
- * writes ONLY the fields listed here.
+ * Drives both field resolution and the persisted-key list: `envVar` (when
+ * present) is checked before the file value. Unknown keys on disk are
+ * tolerated on read and dropped on the next write — saveConfig writes only
+ * the fields listed here.
  */
 const CONFIG_FIELDS: Record<keyof PlasalidConfig, { envVar?: string; default: string }> = {
   displayLocale: { default: "th-TH" },
@@ -51,16 +52,13 @@ export function getDataDir(): string {
   return config.dataDir;
 }
 
-// Scratch space for decrypted/rasterized artifacts handed to external agent CLIs.
-// Env override keeps it redirectable in tests without touching the real home dir.
+/** Scratch space for decrypted/rasterized artifacts; env-overridable for tests. */
 export function getCacheDir(): string {
   return process.env.PLASALID_CACHE_DIR || resolve(PLASALID_DIR, "cache");
 }
 
-/** A short, non-reversible fingerprint of the db encryption key (`sha256:` +
- *  first 8 hex of its SHA-256). Lets `config`/`status` prove a key is set — and
- *  which one — without ever printing the passphrase into shells, logs, or bug
- *  reports. */
+/** Non-reversible fingerprint (`sha256:` + first 8 hex) so `config`/`status`
+ *  can prove a key is set without ever printing the passphrase. */
 export function keyFingerprint(key: string): string {
   return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
 }
@@ -69,9 +67,6 @@ function loadFileConfig(): Partial<PlasalidConfig> {
   const configPath = getConfigPath();
   if (!existsSync(configPath)) return {};
   try {
-    // Unknown keys are tolerated on read and dropped on the next write —
-    // buildConfig only reads the surviving fields below, and pickConfigFields
-    // strips everything else on the next write.
     return JSON.parse(readFileSync(configPath, "utf-8"));
   } catch {
     return {};
@@ -90,10 +85,7 @@ function pickConfigFields(obj: Record<string, unknown>): Partial<PlasalidConfig>
 function buildConfig(): PlasalidConfig {
   const file = loadFileConfig();
   const out = {} as PlasalidConfig;
-  // Precedence: env > file > default. Env is checked first so a shell-exported
-  // override always wins over whatever is in ~/.plasalid/config.json. `||`
-  // (not `??`) so an empty-string file/env value falls through to the next
-  // source, matching every field's prior hand-written behavior.
+  // Precedence env > file > default. `||` (not `??`) so an empty-string value falls through too.
   for (const key of CONFIG_KEYS) {
     const { envVar, default: fallback } = CONFIG_FIELDS[key];
     out[key] = (envVar && process.env[envVar]) || file[key] || fallback;
@@ -108,8 +100,6 @@ export function saveConfig(partial: Partial<PlasalidConfig>): void {
   if (!existsSync(PLASALID_DIR)) mkdirSync(PLASALID_DIR, { recursive: true });
 
   const existing = loadFileConfig();
-  // Merge onto the existing file, then strip to the surviving keys so any
-  // unknown keys still on disk are dropped by this write.
   const merged = pickConfigFields({ ...existing, ...partial });
   writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", {
     mode: 0o600,

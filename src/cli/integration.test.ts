@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSandbox, type Sandbox } from "../lib/sandbox.js";
 
 // integration.test.ts lives in src/cli/ -> repo root is two levels up.
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
+const cliEntry = resolve(repoRoot, "src", "cli", "index.ts");
 
 interface CliResult {
   stdout: string;
@@ -14,26 +14,14 @@ interface CliResult {
   code: number;
 }
 
-let tmpDir: string;
-let baseEnv: NodeJS.ProcessEnv;
+let sandbox: Sandbox;
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "plasalid-it-"));
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // Force deterministic, isolated, no-forced-color runs.
-  delete env.FORCE_COLOR;
-  delete env.NO_COLOR;
-  // Redirect ~/.plasalid (config path derives from HOME) and all data paths.
-  env.HOME = tmpDir;
-  env.USERPROFILE = tmpDir;
-  env.PLASALID_DB_PATH = join(tmpDir, "db.sqlite");
-  env.PLASALID_DATA_DIR = join(tmpDir, "data");
-  env.PLASALID_CACHE_DIR = join(tmpDir, "cache");
-  baseEnv = env;
+  sandbox = createSandbox("plasalid-it-");
 });
 
 afterAll(() => {
-  if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  sandbox.cleanup();
 });
 
 function runCli(
@@ -43,10 +31,10 @@ function runCli(
   return new Promise((resolvePromise) => {
     const child = execFile(
       "npx",
-      ["tsx", "src/cli/index.ts", ...args],
+      ["tsx", cliEntry, ...args],
       {
-        cwd: repoRoot,
-        env: { ...baseEnv, ...(opts.env ?? {}) },
+        cwd: sandbox.root,
+        env: { ...sandbox.env, ...(opts.env ?? {}) },
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
       },

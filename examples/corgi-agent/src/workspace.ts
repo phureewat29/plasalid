@@ -1,6 +1,4 @@
-/**
- * Workspace setup/teardown for the corgi-agent demo.
- */
+/** Workspace setup/teardown for the corgi-agent demo. */
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -78,6 +76,7 @@ export function buildEnv(
     PATH: `${paths.bin}${base.PATH ? `:${base.PATH}` : ""}`,
     HOME: paths.home,
     USERPROFILE: paths.home,
+    PLASALID_DIR: join(paths.home, ".plasalid"),
     PLASALID_DB_PATH: paths.dbPath,
     PLASALID_DATA_DIR: paths.data,
     PLASALID_CACHE_DIR: paths.cache,
@@ -86,14 +85,14 @@ export function buildEnv(
   };
 }
 
-/** Copy the bundled card statement into the workspace data dir (data/ttb/),
- *  same relative layout `plasalid ingest list` expects to discover. Returns
- *  the destination path. */
+/** Copy the bundled card statement into the workspace data dir
+ *  (data/corgi-bank/), same relative layout `plasalid ingest list` expects to
+ *  discover. Returns the destination path. */
 export function placeStatement(
   paths: WorkspacePaths,
   sourcePdfPath: string,
 ): string {
-  const destDir = join(paths.data, "ttb");
+  const destDir = join(paths.data, "corgi-bank");
   mkdirSync(destDir, { recursive: true });
   const dest = join(destDir, "card-statement-2026-05.pdf");
   copyFileSync(sourcePdfPath, dest);
@@ -159,10 +158,8 @@ export function runPlasalid(
   return runCommand("plasalid", args, { cwd, env });
 }
 
-/**
- * Install the plasalid skill pack so `claude` can discover the harness, into
- * `paths.skillDir`. The root CLI's skill-pack installer is `plasalid setup`.
- */
+/** Installs the plasalid skill pack into `paths.skillDir` (via `plasalid
+ *  setup`) so `claude` can discover the harness. */
 export function installSkill(
   paths: WorkspacePaths,
   env: NodeJS.ProcessEnv,
@@ -209,9 +206,8 @@ export function parseNdjson(stdout: string): Record<string, unknown>[] {
   return out;
 }
 
-/** Best-effort check that the `claude` CLI resolves and runs at all (e.g.
- *  installed and on PATH), so the demo can fail with a friendly message up
- *  front instead of a raw ENOENT once a turn actually tries to spawn it. */
+/** Best-effort check that `claude` resolves and runs (installed, on PATH),
+ *  so the demo fails with a friendly message instead of a raw ENOENT later. */
 export function checkClaudeCli(
   env: NodeJS.ProcessEnv,
   timeoutMs = 5000,

@@ -9,9 +9,9 @@ import type { Dispatch } from "react";
 import type { UiAction } from "./ui-state.js";
 import type { WorkspacePaths } from "./workspace.js";
 import { runDemo, STEP_IDS, type DemoOptions } from "./orchestrate.js";
+import { parseMarkdown, renderPlain } from "./markdown.js";
 
-/** Full-width run divider - printed around each turn in plain mode and
- *  rendered dim in ink mode. */
+/** Full-width divider printed around each turn (dim in ink mode). */
 export const DIVIDER = "-".repeat(60);
 
 /** Plain-mode heartbeat cadence while a turn is running with no other output. */
@@ -51,10 +51,9 @@ export function formatSeconds(ms: number): string {
   return `${Math.max(0, Math.round(ms / 1000))}s`;
 }
 
-/** Shared turn-summary text for both renderers, e.g.
- *  "turn 1 done in 84s · 12 plasalid calls" (the "in Ns" clause is omitted
- *  when the duration is unknown). The ink renderer prefixes its own ✅/❌;
- *  plain mode prints this line as-is (ASCII). */
+/** Shared turn-summary text, e.g. "turn 1 done in 84s · 12 plasalid calls"
+ *  ("in Ns" omitted when duration is unknown). Ink prefixes its own ✅/❌;
+ *  plain mode prints this line as-is. */
 export function turnSummaryText(
   turn: number,
   ok: boolean,
@@ -76,9 +75,8 @@ export function makePlainReporter(): Reporter {
       heartbeatTimer = null;
     }
   }
-  /** (Re)arm the heartbeat: fires at most every HEARTBEAT_MS of silence, then
-   *  reschedules itself so a long-silent turn keeps reassuring the user it's
-   *  still alive. Any real output cancels/rearms this. */
+  /** (Re)arms the heartbeat: fires every HEARTBEAT_MS of silence and
+   *  reschedules itself. Any real output cancels/rearms it. */
   function scheduleHeartbeat(): void {
     clearHeartbeat();
     heartbeatTimer = setTimeout(() => {
@@ -90,9 +88,8 @@ export function makePlainReporter(): Reporter {
 
   return {
     stepStart(id, _label) {
-      // Piped output is a linear log: only completed steps print a line, except
-      // for a single blank-line separator ahead of the final assertions step,
-      // which otherwise would butt straight up against the last turn's divider.
+      // Piped mode only logs completed steps; this blank line keeps the
+      // assertions step from butting against the last turn's divider.
       if (id === STEP_IDS.assertions) console.log("");
     },
     stepDone(_id, label, ok, detail) {
@@ -110,14 +107,14 @@ export function makePlainReporter(): Reporter {
       console.log(line);
     },
     turnDelta(_turn, _text) {
-      // Plain mode is a flat ASCII log; live streaming text is an ink-only
-      // affordance (see the TTY renderer in ui.tsx).
+      // No-op in plain mode - live streaming text is an ink-only affordance.
     },
     turnAnswer(_turn, text) {
-      // No heartbeat rearm here: turnDone clears it immediately after.
+      // No heartbeat rearm - turnDone clears it right after. Markdown is
+      // flattened to plain ASCII rather than dumped raw.
       console.log("");
       console.log("answer:");
-      console.log(text);
+      console.log(renderPlain(parseMarkdown(text)));
     },
     turnStderr(_turn, lines) {
       for (const line of lines) console.log(`stderr: ${line}`);
@@ -141,8 +138,8 @@ export function makeInkReporter(
     stepStart(id, label) {
       dispatch({ type: "STEP_START", id, label, at: Date.now() });
     },
-    stepDone(id, _label, ok, detail) {
-      dispatch({ type: "STEP_DONE", id, ok, detail });
+    stepDone(id, label, ok, detail) {
+      dispatch({ type: "STEP_DONE", id, label, ok, detail });
     },
     turnStart(turn, total, prompt) {
       dispatch({ type: "TURN_START", turn, total, prompt, at: Date.now() });
@@ -151,10 +148,8 @@ export function makeInkReporter(
       dispatch({ type: "TURN_ACTIVITY", turn, line });
     },
     turnDelta(turn, text) {
-      // Buffered outside React state (see App's pendingDeltaRef and the
-      // render-clock note in ui-state.ts). Never dispatched directly, so
-      // however fast/often deltas arrive, no re-render fires until the next
-      // TICK merges the buffer in.
+      // Buffered outside React state (see App's pendingDeltaRef); never
+      // dispatched, so no re-render fires until the next TICK.
       appendPendingDelta(turn, text);
     },
     turnAnswer(turn, text) {
@@ -178,8 +173,7 @@ export function makeInkReporter(
   };
 }
 
-/** Run the demo with the plain (piped/non-TTY) reporter, returning the process
- *  exit code. */
+/** Run the demo with the plain (piped/non-TTY) reporter, returning the exit code. */
 export async function runPlain(
   opts: DemoOptions,
   onWorkspaceReady: (paths: WorkspacePaths) => void,

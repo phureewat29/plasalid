@@ -1,21 +1,20 @@
 /**
  * corgi-agent demo entry point.
  *
- * An external `claude` CLI agent drives the plasalid harness end to end over a
- * real, password-protected Thai credit-card statement, using only the
- * documented `plasalid` CLI surface. See README.md for the full run story.
+ * An external `claude` CLI agent drives the plasalid harness end to end over
+ * a real, password-protected Thai credit-card statement, using only the
+ * documented `plasalid` CLI surface. See README.md for the full story.
  *
  * Usage:
  *   npm start --                          full demo (requires the `claude` CLI)
  *   npm start -- --skip-claude            plumbing-only check, no `claude` required
  *   npm start -- --keep-workspace         leave the isolated workspace on disk
- *   npm start -- --turn-timeout <seconds> per-turn timeout (default 600)
+ *   npm start -- --turn-timeout <seconds> per-turn timeout (default 900)
  *
- * A TTY stdout gets the live ink dashboard (ui.tsx); a piped/non-TTY stdout
- * gets flat, sequential plain-text lines (reporters.ts). Both run the identical
- * runDemo orchestration (orchestrate.ts) - only how its Reporter callbacks are
- * rendered differs. This file only parses args, picks the renderer, and wires
- * process-level workspace cleanup.
+ * TTY stdout gets the live ink dashboard (ui.tsx); piped/non-TTY stdout gets
+ * flat, sequential plain-text lines (reporters.ts). Both run the same runDemo
+ * orchestration (orchestrate.ts) - only how Reporter callbacks render differs.
+ * This file just parses args, picks the renderer, and wires cleanup.
  */
 import { parseArgs, USAGE } from "./args.js";
 import { runPlain } from "./reporters.js";
@@ -31,10 +30,9 @@ interface WorkspaceGuard {
 }
 
 /**
- * Owns workspace cleanup for the whole run: installs exit/SIGINT/SIGTERM
- * handlers once, removes the registered workspace on exit unless
- * --keep-workspace was passed, and prints the kept path on a signal. There's
- * nothing to clean until runDemo calls register().
+ * Owns workspace cleanup: installs exit/SIGINT/SIGTERM handlers once, removes
+ * the registered workspace on exit unless --keep-workspace was passed, and
+ * prints the kept path on a signal. Nothing to clean until register() runs.
  */
 function createWorkspaceGuard(keepWorkspace: boolean): WorkspaceGuard {
   let paths: WorkspacePaths | null = null;

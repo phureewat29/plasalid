@@ -28,7 +28,7 @@ import type { Reporter } from "./reporters.js";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..", "..");
 const STATEMENT_SOURCE = resolve(SCRIPT_DIR, "..", "card-statement-2026-05.pdf");
-const STATEMENT_PASSWORD = "corgimoho";
+const STATEMENT_PASSWORD = "password";
 const VAULT_PATTERN = "^card-statement";
 const DEMO_TOOLS = "Bash(plasalid:*),Read,Write,Skill";
 
@@ -85,10 +85,9 @@ interface PreStep {
 }
 
 /**
- * Runs the full demo sequence, reporting progress through `report` and
- * returning whether it passed. `onWorkspaceReady` fires the moment the
- * workspace directory exists, so a caller can register it for cleanup before
- * the (potentially long-running) claude turns even start.
+ * Runs the full demo sequence, reporting progress through `report`, and
+ * returns whether it passed. `onWorkspaceReady` fires once the workspace
+ * exists, so callers can register cleanup before the long claude turns start.
  */
 export async function runDemo(
   opts: DemoOptions,
@@ -111,8 +110,8 @@ export async function runDemo(
     return result.ok;
   };
 
-  // ws/env are produced by the workspace step and consumed by every step after
-  // it; safe because those later steps never run until it has succeeded.
+  // ws/env come from the workspace step; safe since later steps only run
+  // after it succeeds.
   let ws: WorkspacePaths | null = null;
   let env: NodeJS.ProcessEnv = process.env;
 
@@ -129,9 +128,8 @@ export async function runDemo(
       id: STEP_IDS.workspace,
       label: "create workspace",
       run: async () => {
-        // Make the workspace dirs, register them for cleanup the moment they
-        // exist, then write the bin shim and build the isolation env - all one
-        // can't-fail step. Detail is the workspace root.
+        // One can't-fail step: create the workspace, register it for
+        // cleanup, then write the bin shim and build the isolation env.
         ws = createWorkspace();
         onWorkspaceReady(ws);
         writeBinShim(ws, REPO_ROOT);
@@ -193,8 +191,8 @@ export async function runDemo(
     return { pass: plumbingOk, paths: wsReady };
   }
 
-  // Fail fast with a friendly message instead of a raw ENOENT deep inside the
-  // first turn's spawn() if `claude` isn't installed/authenticated.
+  // Fail fast with a friendly message if `claude` isn't installed/authenticated,
+  // instead of a raw ENOENT once the first turn's spawn() runs.
   const preflightOk = await step(STEP_IDS.preflight, "check claude CLI", async () => {
     const ok = checkClaudeCli(env);
     return {
@@ -244,18 +242,18 @@ export async function runDemo(
     if (!res.ok) return { ok: false, detail: `exit ${res.code}: ${truncateDetail(res.stderr)}` };
 
     const [status] = parseNdjson(res.stdout);
-    const scanned = numberField(status, "files", "scanned");
+    const ingested = numberField(status, "files", "ingested");
     const transactions = numberField(status, "counts", "transactions");
-    if (!(scanned >= 1 && transactions > 0)) {
+    if (!(ingested >= 1 && transactions > 0)) {
       return {
         ok: false,
-        detail: `expected files.scanned >= 1 and counts.transactions > 0, got scanned=${scanned} transactions=${transactions}`,
+        detail: `expected files.ingested >= 1 and counts.transactions > 0, got ingested=${ingested} transactions=${transactions}`,
       };
     }
 
     const openQuestions = numberField(status, "questions", "open");
     report.info(`${openQuestions} open question(s) after the demo (informational)`);
-    return { ok: true, detail: `files.scanned=${scanned}, counts.transactions=${transactions}` };
+    return { ok: true, detail: `files.ingested=${ingested}, counts.transactions=${transactions}` };
   });
 
   return { pass: assertionsOk, paths: wsReady };

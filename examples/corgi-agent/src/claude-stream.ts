@@ -1,46 +1,40 @@
 /**
- * Spawns the `claude` CLI in `-p --output-format stream-json
- * --include-partial-messages --verbose` mode and turns its NDJSON event
- * stream into what the demo UI needs: activity lines ("> plasalid ..." /
- * "> Read ..." / "> Write ...") for each tool_use the agent makes, coalesced
- * live-streaming answer text, skill/plasalid-call usage signals, and the
- * turn's final answer/duration.
+ * Spawns `claude -p --output-format stream-json --include-partial-messages
+ * --verbose` and turns its NDJSON event stream into what the demo UI needs:
+ * activity lines ("> plasalid ..." / "> Read ..." / "> Write ...") per
+ * tool_use, coalesced live-streaming answer text, skill/plasalid-call usage
+ * signals, and the turn's final answer/duration.
  *
- * Event shapes observed from a real `claude -p ... --output-format
- * stream-json --include-partial-messages --verbose` run (claude_code_version
- * 2.1.211):
+ * Event shapes observed from a real run (claude_code_version 2.1.211):
  *
- *   {"type":"system","subtype":"init",...}                      -- ignored
- *   {"type":"system","subtype":"status","status":"requesting"}  -- ignored
+ *   {"type":"system","subtype":"init",...}                      — ignored
+ *   {"type":"system","subtype":"status","status":"requesting"}  — ignored
  *   {"type":"stream_event","event":{"type":"message_start",...}}
  *   {"type":"stream_event","event":{"type":"content_block_start",...}}
  *   {"type":"stream_event","event":{"type":"content_block_delta",
- *      "delta":{"type":"text_delta","text":"O"}}}                -- live text
+ *      "delta":{"type":"text_delta","text":"O"}}}                — live text
  *   {"type":"stream_event","event":{"type":"content_block_delta",
- *      "delta":{"type":"input_json_delta","partial_json":"..."}}} -- ignored
- *      (partial tool-call JSON fragments; too fragile to reassemble, see
- *      below - the complete "assistant" event carries the parsed input)
+ *      "delta":{"type":"input_json_delta","partial_json":"..."}}} — ignored
+ *      (too fragile to reassemble; the complete "assistant" event below
+ *      carries the parsed input instead)
  *   {"type":"stream_event","event":{"type":"content_block_stop"|"message_delta"|"message_stop"}}
  *   {"type":"assistant","message":{"content":[{"type":"thinking",...}|
  *      {"type":"tool_use","name":"Bash","input":{"command":"..."}}|
  *      {"type":"tool_use","name":"Read","input":{"file_path":"..."}}|
  *      {"type":"tool_use","name":"Skill","input":{"command":"<skill-name>"}}|
- *      {"type":"text","text":"..."}]}}                           -- tool_use
- *      blocks here have the FULL parsed input already, so activity lines are
- *      built from this event, not the partial input_json_delta fragments.
- *   {"type":"user","message":{"content":[{"type":"tool_result",...}]}}  -- ignored
+ *      {"type":"text","text":"..."}]}}                           — tool_use
+ *      blocks carry the FULL parsed input, so activity lines are built from
+ *      this event, not the partial input_json_delta fragments above.
+ *   {"type":"user","message":{"content":[{"type":"tool_result",...}]}}  — ignored
  *   {"type":"result","subtype":"success","result":"<final answer text>",
  *      "duration_ms":84213,"total_cost_usd":0.1234,"usage":{...},...}
- *      -- the authoritative final answer for the whole turn (matches what a
- *      plain `claude -p "<prompt>"` would have printed to stdout), plus an
- *      informational duration field. `total_cost_usd` is present on the real
- *      event but not surfaced by this demo's UI.
+ *      — the turn's authoritative final answer and duration. `total_cost_usd`
+ *      is present but not surfaced by this demo's UI.
  *
- * Any event type/shape not listed above (and any field access below) is
- * treated defensively: unknown types are ignored, and missing/mistyped
- * fields degrade to empty/no-op rather than throwing, since this is a best
- * effort live view - the turn's real outcome is the process exit code plus
- * the "result" event's answer text.
+ * Anything else (and any field access below) is handled defensively: unknown
+ * types are ignored, missing/mistyped fields degrade to empty/no-op rather
+ * than throw - this is a best-effort live view; the turn's real outcome is
+ * the exit code plus the "result" event's answer text.
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -83,8 +77,7 @@ export interface ClaudeTurnResult {
 }
 
 /** How long to buffer text_delta chunks before flushing a coalesced "delta"
- *  event - keeps the live-streaming UI update rate sane without waiting for
- *  the whole answer. */
+ *  event - caps the UI update rate without waiting for the full answer. */
 const DELTA_FLUSH_MS = 80;
 
 const ACTIVITY_LINE_MAX = 120;
@@ -103,17 +96,15 @@ function lastLines(s: string, n: number): string[] {
   return lines.slice(-n);
 }
 
-/** Read a string-valued field off a tool_use's parsed input, or "" if absent
- *  or not a string. */
+/** String field off a tool_use's parsed input, or "" if absent/wrong type. */
 function stringField(input: unknown, key: string): string {
   if (!input || typeof input !== "object") return "";
   const v = (input as Record<string, unknown>)[key];
   return typeof v === "string" ? v : "";
 }
 
-/** Best-effort skill name out of a Skill tool_use's input - the exact field
- *  name isn't documented, so try the likely candidates and fall back to null
- *  rather than throwing or guessing wrong. */
+/** Best-effort skill name from a Skill tool_use's input: the field name
+ *  isn't documented, so try likely candidates and fall back to null. */
 function skillNameFromInput(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
@@ -124,11 +115,10 @@ function skillNameFromInput(input: unknown): string | null {
   return null;
 }
 
-/** Build the "> ..." activity line for a non-Bash tool_use content block
- *  (Bash is handled inline so its command string is derived only once - see
- *  the "assistant" case below). Read/Write/Skill are expected (the demo's
- *  --allowedTools grants nothing else), but any other tool name still gets a
- *  bare "> ToolName" line instead of being silently dropped. */
+/** Builds the "> ..." activity line for a non-Bash tool_use (Bash is
+ *  handled inline in the "assistant" case below, so its command is derived
+ *  once). Read/Write/Skill are expected; any other tool still gets a bare
+ *  "> ToolName" line rather than being silently dropped. */
 function activityLineForNonBashToolUse(name: unknown, input: unknown): string | null {
   if (name === "Read") {
     return `> Read ${stringField(input, "file_path")}`;
@@ -276,10 +266,10 @@ export function runClaudeTurn(
     if (opts.continueSession) args.push("--continue");
     args.push(opts.prompt, "--allowedTools", opts.allowedTools, "--output-format", "stream-json");
     args.push("--include-partial-messages", "--verbose");
+    args.push("--model", "sonnet");
 
-    // detached puts claude in its own process group so a timeout can kill the
-    // whole tree (claude spawns helpers that share our stdout pipe; killing
-    // only the parent leaves them holding the pipe and "close" never fires).
+    // detached: own process group, so a timeout kills the whole tree (helpers
+    // share our stdout pipe; killing just the parent means "close" never fires).
     const child = spawn("claude", args, {
       cwd: opts.cwd,
       env: opts.env,

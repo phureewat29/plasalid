@@ -19,13 +19,13 @@
 
 <br />
 
-In the US and Europe, most financial apps are powered by aggregators like Plaid. You can link your bank accounts once and see your entire financial life in one place. But for most of the world, Thailand included, that infrastructure simply does not exist.
+In the US and Europe, aggregators like Plaid link your bank accounts once and show your whole financial life in one place. For most of the world — Thailand included — that infrastructure doesn't exist.
 
-Your data is locked in bank silos. Tracking your net worth means logging into half a dozen apps and crunching the numbers manually. This fragmentation creates massive blind spots. Subscriptions are forgotten, strange charges go unnoticed, and planning for big financial goals becomes a guessing game.
+Your data sits scattered across separate bank apps. Tracking your net worth means logging into half a dozen of them and doing the math by hand. You forget subscriptions, miss strange charges, and can't plan big financial goals with any confidence.
 
-**Plasalid is built to fix this.**
+**Plasalid fixes that.**
 
-You drop your raw financial documents (bank statements, credit card bills, payslips) into a folder on your machine. Any agent you already use — a coding agent in your terminal, or an assistant in a chat app that accepts skills — picks up one skill file and takes it from there, keeping your books on a deterministic, auditable, double-entry ledger that lives encrypted on your machine.
+Drop your raw financial documents — bank statements, credit card bills, payslips — into a folder on your machine. Any agent you already use can pick up one skill file and take it from there: a coding agent in your terminal, or an assistant in a chat app that accepts skills. It keeps your books on a deterministic, auditable, double-entry ledger. That ledger lives encrypted on your machine.
 
 Plasalid itself has no built-in AI model, no API key to configure, no chat window. It is the harness underneath. Setting an agent up is one step — see [Give it to your agent](#give-it-to-your-agent).
 
@@ -34,12 +34,12 @@ Plasalid itself has no built-in AI model, no API key to configure, no chat windo
 ### Unified ledger from any financial document
 
 * **Drop PDFs, get a pipeline.** `plasalid ingest list` discovers new statements, `plasalid ingest prepare` hands back a readable statement document (unlocking encrypted PDFs via a stored password vault), and `plasalid ingest commit` posts the transactions an agent extracted straight into a double-entry ledger.
-* **No aggregators or per-bank logins.** The big picture builds itself from the documents you already get every month. Zero manual data entry and no fragile bank connectors to maintain.
+* **No aggregators or per-bank logins.** It builds the big picture from the documents you already get every month — zero manual data entry, no fragile bank connectors to maintain.
 
 ### A local-first, encrypted, and inspectable financial harness
 
 * **Full manual control when you want it.** Every step of the pipeline — accounts, transactions, merchants — is also a plain CLI command. Drive it by hand, script it, or hand the whole thing to an agent.
-* **Everything runs on your machine.** Your ledger is stored in an AES-256 encrypted SQLite database (via libsql). There are no cloud aggregators or upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
+* **Everything runs on your machine.** Plasalid stores your ledger in an AES-256 encrypted SQLite database (via libsql). No cloud aggregators, no upstream accounts. Nothing leaves your machine unless you pipe it somewhere yourself.
 * **PII redaction by default.** Read commands that touch free text (`status`, `accounts list`, `transactions list`, `transactions show`, `questions list`) mask PII automatically before output reaches an agent or a paste buffer; pass `--no-redact` for verbatim text.
 * **No telemetry, no analytics.** The only thing Plasalid writes to disk is your own data, under `~/.plasalid/`.
 
@@ -67,7 +67,7 @@ plasalid data          # opens ~/.plasalid/data in Finder/Explorer — drag PDFs
 
 ## Give it to your agent
 
-The entire skill is one markdown file checked into this repo: [`skills/SKILL.md`](./skills/SKILL.md). There is no build step — what you see at that link is exactly what every agent gets (`plasalid setup --print` prints the same bytes).
+The entire skill is one markdown file checked into this repo: [`skills/SKILL.md`](./skills/SKILL.md). No build step — what you see at that link is exactly what every agent gets (`plasalid setup --print` prints the same bytes).
 
 **Chat apps with a skill UI** (Claude Desktop, Kimi, and the like): add the skill by URL or file upload:
 
@@ -88,7 +88,7 @@ Then ask your agent: *"ingest my new statements."* It will discover, prepare, an
 
 ## Example Agent with Plasalid
 
-**Corgi Agent** — a demo personal-finance tracker agent for daily life using Plasalid as harness. The example ships a sample, password-protected credit-card statement; the agent unlocks it through the vault, reads it, posts every transaction into the ledger, and answers spending questions - a three-turn continued `claude -p` session rendered in a live terminal UI, all in an isolated workspace.
+**Corgi Agent** — a demo personal-finance tracker built on Plasalid. It ships a sample, password-protected credit-card statement: the agent unlocks it through the vault, reads it, posts every transaction to the ledger, and answers spending questions. One `claude -p` session, continued across three turns and rendered in a live terminal UI, drives the whole demo in an isolated workspace.
 
 ```bash
 cd examples/corgi-agent
@@ -121,7 +121,7 @@ plasalid setup          # Install the skill for an agent CLI (--claude | --codex
 plasalid config         # Configure the harness (converge/init) and show configuration
 
 plasalid ingest         # Ingest pipeline: list / prepare / commit / done / fail
-plasalid files          # Browse scanned files (list / show / drop)
+plasalid files          # Browse ingested files (list / show / drop)
 plasalid vault          # Manage file-password patterns for encrypted statements
 
 plasalid transactions   # Transactions: list / show / add / update / delete / recategorize / dedupe
@@ -137,11 +137,11 @@ plasalid data           # Open the data folder in your OS file explorer (alias: 
 
 ## Security & Privacy
 
-- All financial data stored locally, encrypted with AES-256 (libsql), default `~/.plasalid/db.sqlite`.
-- Config file (`~/.plasalid/config.json`) written with `0600` permissions; the only secret it holds is the database encryption key, and `config`/`status` only ever surface a fingerprint of it, never the plaintext.
-- Encrypted-PDF passwords are stored AES-GCM-encrypted in `db.sqlite` under a filename pattern; never written to disk in plaintext.
+- All financial data stays on your machine, encrypted with AES-256 (libsql); default `~/.plasalid/db.sqlite`.
+- The config file (`~/.plasalid/config.json`) carries `0600` permissions; the only secret it holds is the database encryption key, and `config`/`status` only ever surface a fingerprint of it, never the plaintext.
+- Encrypted-PDF passwords sit AES-GCM-encrypted in `db.sqlite` under a filename pattern; plaintext never touches disk.
 - Read commands mask PII in free-text fields by default; `--no-redact` returns verbatim text.
-- No telemetry, no analytics, no network calls made by Plasalid itself.
+- No telemetry, no analytics — Plasalid makes no network calls of its own.
 
 ## Configuration
 
@@ -158,9 +158,12 @@ Plasalid stores everything in `~/.plasalid/`:
 
 ### Environment variables
 
-See `.env.example` for the full, current list. As of this release:
+See `.env.example` for the current list:
 
 ```bash
+# Relocates the entire ~/.plasalid directory, including config.json.
+PLASALID_DIR=
+
 # Passphrase used to encrypt the local SQLite database (AES-256).
 # `plasalid config --generate-key` generates one if left blank.
 PLASALID_DB_ENCRYPTION_KEY=
@@ -190,6 +193,6 @@ npm link # makes 'plasalid' available globally
 
 ## License
 
-Plasalid is released under the [Apache License 2.0 with the Commons Clause](./LICENSE).
+Plasalid uses the [Apache License 2.0 with the Commons Clause](./LICENSE).
 
 You're free to use, copy, modify, distribute, and fork it. The Commons Clause adds one restriction: **you may not Sell the Software** — that is, you may not provide a paid product or service whose value derives entirely or substantially from Plasalid's functionality (including paid hosting or support). For commercial-resale rights, contact the copyright holder to negotiate a separate license.

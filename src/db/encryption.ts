@@ -13,11 +13,9 @@ function deriveSecretKey(dbKey: string): Buffer {
 }
 
 /**
- * Encrypt a secret (e.g. PDF password) at the application layer using AES-256-GCM.
- * Key is derived from the DB encryption key via scrypt. When `dbKey` is empty
- * (user opted out of DB encryption), this is a passthrough.
- *
- * Output format: `gcm:<iv-hex>:<tag-hex>:<ciphertext-hex>`
+ * Encrypts a secret (e.g. PDF password) with AES-256-GCM, key derived from
+ * `dbKey` via scrypt; a passthrough when `dbKey` is empty. Output format:
+ * `gcm:<iv-hex>:<tag-hex>:<ciphertext-hex>`.
  */
 export function encryptSecret(plaintext: string, dbKey: string): string {
   if (!dbKey) return plaintext;

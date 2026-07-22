@@ -16,7 +16,7 @@ export function banner(): string {
 }
 
 const DISCLAIMER =
-  "Plasalid is an assistant, not a financial advisor. It only summarizes financial statements — verify amounts against your statements before relying on them.";
+  "Plasalid is an assistant, it only summarizes financial statements — verify amounts against your statements before relying on them.";
 
 function section(label: string, lines: string[]): string {
   return [chalk.bold.yellow(label), ...lines.map((l) => `  ${l}`)].join("\n");
@@ -39,7 +39,7 @@ export function helpScreen(
     `${chalk.cyan(name.padEnd(nameWidth))}    ${chalk.dim(desc)}`;
 
   const usageLines = [
-    `${chalk.cyan("plasalid")} ${chalk.dim("<command> [OPTIONS]")}`,
+    row("plasalid", "<command> [OPTIONS]"),
     row("plasalid", "Show harness status (default)"),
   ];
 

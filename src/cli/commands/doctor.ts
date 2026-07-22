@@ -79,11 +79,8 @@ async function runChecks(): Promise<Check[]> {
   return checks;
 }
 
-/**
- * Informational (never a HARD_CHECK): report whether the skill pack is installed
- * and whether its VERSION matches this CLI. Prefers the cwd install (./.claude)
- * over the global one (~/.claude), matching the install precedence.
- */
+/** Informational (never a HARD_CHECK): whether the skill pack is installed
+ *  and its VERSION matches this CLI. Prefers cwd (./.claude) over global. */
 function skillPackCheck(): Check {
   const candidates = [
     join(process.cwd(), ".claude", "skills", "plasalid", "VERSION"),

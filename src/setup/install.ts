@@ -6,12 +6,9 @@ import { AGENTS_MD_BLOCK, CODEX_BLOCK_RE } from "./codex.js";
 
 /**
  * Installs the skill pack that lets external agent CLIs (Claude Code, codex)
- * drive the plasalid harness. Pure filesystem work — the CLI command wraps this
- * and maps thrown errors onto exit codes.
- *
- * The Claude skill is a checked-in file (skills/SKILL.md at the package root),
- * copied verbatim to the install target — there is no template rendering.
- * The installed VERSION file records which CLI version wrote that copy.
+ * drive the plasalid harness. Pure filesystem work; the CLI command wraps
+ * this and maps thrown errors onto exit codes. The Claude skill is a
+ * checked-in file (skills/SKILL.md) copied verbatim — no template rendering.
  */
 
 type InstallKind = "claude" | "codex";
@@ -139,11 +136,8 @@ function installCodex(opts: InstallOptions, version: string): InstalledTarget {
   return { kind: "codex", path: agentsPath, version };
 }
 
-/**
- * Install the skill pack. Defaults to Claude when neither target is requested.
- * Returns every target written. Throws SkillPackVersionError on a version clash
- * without --force.
- */
+/** Installs the skill pack (defaults to Claude when neither target is
+ *  requested); throws SkillPackVersionError on a version clash without --force. */
 export function installSkillPack(opts: InstallOptions = {}): InstallResult {
   const version = getVersion();
 

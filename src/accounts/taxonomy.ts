@@ -1,7 +1,3 @@
-import type { AccountType } from "../db/queries/account-balance.js";
-
-export type { AccountType };
-
 type InstitutionKind =
   | "bank"
   | "card_issuer"
@@ -150,60 +146,4 @@ export const ALL_THAI_INSTITUTIONS: ThaiInstitution[] = [
   ...THAI_GOV,
   ...THAI_TELCOS,
   ...THAI_UTILITIES,
-];
-
-export const ACCOUNT_TYPE_DESCRIPTIONS: Record<AccountType, string> = {
-  asset: "Bank accounts, cash, prepaid wallets, receivables.",
-  liability: "Credit cards, loans, mortgages, money the user owes.",
-  income: "Salary, side income, dividends, refunds.",
-  expense: "Spending categories (food, transport, utilities, etc.).",
-  equity: "Owner's equity / opening balance equity (for ledger adjustments).",
-};
-
-export const SUGGESTED_ASSET_SUBTYPES = [
-  "bank",
-  "cash",
-  "wallet",
-  "prepaid_card",
-  "brokerage",
-  "crypto",
-  "receivable",
-];
-
-export const SUGGESTED_LIABILITY_SUBTYPES = [
-  "credit_card",
-  "home_loan",
-  "auto_loan",
-  "personal_loan",
-  "student_loan",
-  "revolving",
-  "deferred_income",
-];
-
-export const SUGGESTED_EXPENSE_SUBTYPES = [
-  "food",
-  "transport",
-  "utilities",
-  "rent",
-  "housing",
-  "healthcare",
-  "entertainment",
-  "shopping",
-  "subscriptions",
-  "education",
-  "travel",
-  "fees_and_interest",
-  "tax",
-  "insurance",
-  "other",
-];
-
-export const SUGGESTED_INCOME_SUBTYPES = [
-  "salary",
-  "bonus",
-  "freelance",
-  "interest",
-  "dividend",
-  "refund",
-  "other",
 ];

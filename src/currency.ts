@@ -39,22 +39,17 @@ export function formatAmount(amount: number, currency?: string): string {
 }
 
 /**
- * Minor-unit (integer) money helpers.
- *
- * The TigerBeetle-style `transactions` table stores amounts as integers in the
- * currency's smallest indivisible unit ("minor units"): THB satang, USD cents,
- * JPY yen (no minor unit), KWD fils (three places). Storing money as integers
- * removes float drift from balance math. Decimal <-> minor-unit conversion
- * happens at the CLI/pipeline boundary; the DB query layer only ever sees
- * integers.
+ * Minor-unit (integer) money helpers: `transactions` stores amounts as
+ * integers in the currency's smallest unit (THB satang, JPY has none, KWD has
+ * three) to avoid float drift. Decimal <-> minor-unit conversion happens only
+ * at the CLI/pipeline boundary.
  */
 
 const exponentCache = new Map<string, number>();
 
 /**
- * Number of fractional digits the currency's minor unit carries (THB=2, JPY=0,
- * KWD=3). Resolved from the ICU currency data via Intl and memoized. Falls back
- * to 2 for a malformed/unresolvable code so callers never throw on bad input.
+ * Fractional digits the currency's minor unit carries (THB=2, JPY=0, KWD=3),
+ * resolved via Intl and memoized. Falls back to 2 on an unresolvable code.
  */
 export function minorUnitExponent(currency: string): number {
   const code = (currency || DEFAULT_CURRENCY).toUpperCase();

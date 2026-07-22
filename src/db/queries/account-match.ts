@@ -10,12 +10,8 @@ export interface FuzzyAccountMatch {
 // number (`470686XXXXXX9483`, `••7652`, `**1234`, `…9483`).
 const MASK_CHARS = "Xx•*…";
 
-/**
- * Everything after the LAST mask character in `s`, or `s` unchanged when it
- * contains none. Anchoring on the last mask char (rather than e.g. splitting
- * on all non-digits) means a masked run like `XXXXXX` isn't confused with the
- * separators (`-`, ` `) a plain check-digit suffix uses.
- */
+/** Everything after the last mask char in `s` (or `s` unchanged if none), so a
+ *  masked run like `XXXXXX` isn't confused with a check-digit separator. */
 function tailAfterMask(s: string): string {
   let lastAt = -1;
   for (const ch of MASK_CHARS) {
@@ -26,19 +22,14 @@ function tailAfterMask(s: string): string {
 }
 
 /**
- * Canonical key for an account number, tolerant of a trailing check digit.
- * Statements sometimes print the same account with or without a trailing check
- * digit (`xxx-7652-0` vs `xxx-7652`); both should resolve to one account.
- * Masked numbers are first reduced to the tail after their last mask
- * character — this matters when real digits precede the mask
- * (`470686XXXXXX9483`), which would otherwise get concatenated with the
- * trailing digits and corrupt the check-digit heuristic below. From that
- * tail, keep digits only, drop the final digit when the run is long enough
- * to carry a separate check digit, and return the last 4.
+ * Canonical key for an account number, tolerant of a trailing check digit
+ * (`xxx-7652-0` and `xxx-7652` both resolve to one account). Masked digits
+ * before the mask are stripped first via `tailAfterMask` so they can't
+ * corrupt the check-digit heuristic.
  *
  *   "••7652"           -> "7652"
  *   "••7652-0"         -> "76520" -> "7652"
- *   "470686XXXXXX9483" -> "9483" (tail after the mask; no check digit to drop)
+ *   "470686XXXXXX9483" -> "9483"
  *   "1234"             -> "1234"
  */
 export function accountNumberKey(raw: string | null | undefined): string {
@@ -50,11 +41,9 @@ export function accountNumberKey(raw: string | null | undefined): string {
 }
 
 /**
- * Normalize a masked account number for storage so a trailing check digit
- * doesn't split one account into two: `••7652-0` and `••76520` both store as
- * `••7652`. Preserves the leading bullet mask; defaults to `••` when absent
- * (including when the input's own mask is a literal digit run with nothing
- * to preserve, e.g. `470686XXXXXX9483` -> `••9483`).
+ * Normalizes for storage so a trailing check digit can't split one account
+ * into two (`••7652-0` and `••76520` both store as `••7652`). Preserves the
+ * leading mask prefix, defaulting to `••` when there isn't one to preserve.
  */
 export function normalizeMaskedAccountNumber(
   masked: string | null | undefined,
@@ -68,12 +57,10 @@ export function normalizeMaskedAccountNumber(
 }
 
 /**
- * Account-number key for a free-text query. When the text itself carries a
- * mask (a bank hint like `470686XXXXXX9483`), the tail after the mask is
- * authoritative — skip the "longest digit run" heuristic below, which would
- * otherwise pick the longer, unmasked prefix instead of the visible trailing
- * digits. Otherwise, fall back to the longest digit run in the text (e.g. a
- * plain check-digit-suffixed number typed alongside other words).
+ * Account-number key for a free-text query. A mask in the text (e.g.
+ * `470686XXXXXX9483`) is authoritative — the tail after it wins over the
+ * "longest digit run" fallback, which would otherwise prefer the longer
+ * unmasked prefix over the visible trailing digits.
  */
 function queryNumberKey(text: string): string {
   const tail = tailAfterMask(text);
@@ -86,13 +73,11 @@ function queryNumberKey(text: string): string {
 }
 
 /**
- * Rank the chart of accounts by name similarity to a free-text query. Returns
- * matches at or above `threshold`, highest first. Bonus weight when the query
- * is a substring of the name so "ttb saving" still finds "TTB Savings ••1234"
- * even though pure Levenshtein on the full strings is mediocre. A query that
- * carries an account number also matches check-digit-tolerantly against each
- * row's masked number (so "7652-0" still finds the account stored as ••7652);
- * callers still confirm before acting on a fuzzy hit, so a rare same-last-4
+ * Ranks accounts by name similarity, matches >= `threshold` first. Bonus
+ * weight when the query is a substring of the name (so "ttb saving" finds
+ * "TTB Savings ••1234" despite mediocre full-string Levenshtein). A query
+ * carrying an account number also matches check-digit-tolerantly against the
+ * row's masked number — callers confirm before acting, so a rare same-last-4
  * collision across banks stays recoverable.
  */
 export function findAccountsByFuzzyName(

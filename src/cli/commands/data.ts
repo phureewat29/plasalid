@@ -14,10 +14,8 @@ function openerCommand(): string | null {
 }
 
 /**
- * Spawn the OS file-manager opener, detached. Resolves with an error message
- * when the spawn itself failed (e.g. ENOENT for a missing opener binary) or
- * undefined on success. Never rejects — a failed opener is not fatal, it just
- * gets surfaced as `spawn_error` alongside the path.
+ * Spawns the OS file-manager opener, detached. Never rejects: resolves with
+ * an error message on spawn failure (e.g. missing binary), else undefined.
  */
 function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> {
   return new Promise((resolvePromise) => {
@@ -29,11 +27,9 @@ function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> 
 }
 
 /**
- * Open the Plasalid data folder in the OS file explorer. Honors the --json
- * contract: `{"path": <dataDir>}` (plus `spawn_error` when the opener failed
- * to launch) under --json, a bare path line when piped, and the original
- * human-friendly TTY output otherwise. A missing/failed opener is reported,
- * never thrown — the data dir still exists and its path is still useful.
+ * Opens the data folder in the OS file explorer. `--json` emits
+ * `{"path": <dataDir>}` (plus `spawn_error` on failure); piped emits a bare
+ * path. An opener failure is reported, never thrown — the path is still useful.
  */
 export async function runDataCommand(): Promise<void> {
   const dataDir = getDataDir();

@@ -7,11 +7,8 @@ interface VaultPasswordRow {
   last_used_at: string | null;
 }
 
-/**
- * List stored file passwords for display. Never selects `password_encrypted`
- * — this is a vault browser, not a decrypt path (see `scanner/pdf.ts`'s
- * `findCandidates` for the decrypting reader used at scan time).
- */
+/** Never selects `password_encrypted` — a vault browser, not a decrypt path
+ *  (see `ingest/pdf.ts`'s `findCandidates` for that). */
 export function listPasswords(db: Database.Database): VaultPasswordRow[] {
   return db
     .prepare(
@@ -22,10 +19,7 @@ export function listPasswords(db: Database.Database): VaultPasswordRow[] {
     .all() as VaultPasswordRow[];
 }
 
-/**
- * Delete a stored password by id or by exact pattern match. Returns whether a
- * row was deleted.
- */
+/** Deletes a stored password by id or by exact pattern match. */
 export function deletePassword(db: Database.Database, patternOrId: string): boolean {
   const result = db
     .prepare(`DELETE FROM file_passwords WHERE id = ? OR pattern = ?`)

@@ -18,7 +18,6 @@ function openDb(dbPath: string, encryptionKey?: string): Database.Database {
 
   const db = new Database(dbPath, opts);
 
-  // Verify the database is accessible
   try {
     db.pragma("journal_mode = WAL");
   } catch (err: any) {
@@ -35,7 +34,6 @@ function openDb(dbPath: string, encryptionKey?: string): Database.Database {
   return db;
 }
 
-/** Get the single DB instance */
 export function getDb(): Database.Database {
   if (!singleDb) {
     singleDb = openDb(config.dbPath, config.dbEncryptionKey || undefined);

@@ -114,10 +114,8 @@ function buildRedactions(): RedactionEntry[] {
 }
 
 /**
- * Compile a redactor once (reads config.userName + context.md a single time to
- * build the name rules) and return a reusable string→string masker. Prefer this
- * over calling `redact()` in a loop: `redact()` rebuilds the rule set on every
- * call, whereas a compiled redactor amortises that work across many values.
+ * Reads config.userName + context.md once to build the name rules, returning
+ * a reusable string→string masker — amortizes that work across many values.
  */
 function createRedactor(): (text: string) => string {
   const redactions = buildRedactions();
@@ -134,13 +132,10 @@ function createRedactor(): (text: string) => string {
 }
 
 /**
- * Opt-in PII masking for emitted query results. Deep-walks `data` (objects and
- * arrays) and passes a string value through the redactor ONLY when its key is
- * in `fields`. This is a per-command allowlist of free-text value fields
- * (description, memo, merchant names, prompts, …) so that ids/enums/amounts —
- * which the agent needs verbatim — are never touched. Returns a fresh structure
- * and does not mutate the input; a no-op (returns `data` as-is) when disabled.
- * The redactor is compiled once per call, then reused for every matched string.
+ * Deep-walks `data` and redacts a string value only when its key is in
+ * `fields` — a per-command allowlist of free-text fields, so ids/enums/amounts
+ * the agent needs verbatim are never touched. Returns a fresh structure
+ * (input untouched); a no-op when `enabled` is false.
  */
 export function applyRedaction<T>(data: T, enabled: boolean, fields: readonly string[]): T {
   if (!enabled) return data;

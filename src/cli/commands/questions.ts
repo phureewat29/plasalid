@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { QuestionRow } from "../../db/queries/questions.js";
 import { emitList, fail, runAction, type Column } from "../output.js";
+import { parseInput, str, int } from "../../lib/validate.js";
 
 interface QuestionListRow {
   id: string;
@@ -37,9 +38,8 @@ function toListRow(row: QuestionRow): QuestionListRow {
   };
 }
 
-// The question `prompt` is the free-text field. options/context are structured
-// JSON that can embed account/transaction ids the agent needs verbatim (and
-// bare-string option arrays with no key to allowlist), so they are left intact.
+// `prompt` is the only free-text field; options/context are structured JSON
+// carrying ids the agent needs verbatim, so they're left intact.
 const QUESTION_REDACT_FIELDS = ["prompt"] as const;
 
 const LIST_COLUMNS: Column<QuestionListRow>[] = [
@@ -68,6 +68,21 @@ const ANSWERED_COLUMNS: Column<AnsweredRow>[] = [
   { header: "rule_key", value: (r) => r.rule_key ?? "" },
 ];
 
+interface ListQuestionsOpts {
+  batch?: string;
+  includeDeferred?: boolean;
+  redact?: boolean;
+}
+
+const ANSWER_SPEC = {
+  answer: str().required(),
+  also: str().optional(),
+};
+
+const DEFER_SPEC = {
+  days: int().default(7),
+};
+
 export function registerQuestions(program: Command): void {
   const questions = program.command("questions").description("Manage open questions");
 
@@ -78,12 +93,12 @@ export function registerQuestions(program: Command): void {
     .option("--include-deferred", "include deferred questions")
     .option("--no-redact", "skip PII redaction (on by default)")
     .action(
-      runAction(async (opts: any) => {
+      runAction(async (opts: ListQuestionsOpts) => {
         const { getDb } = await import("../../db/connection.js");
         const { listQuestions } = await import("../../db/queries/questions.js");
         const db = getDb();
         const rows = listQuestions(db, {
-          scanId: opts.batch,
+          batchId: opts.batch,
           includeDeferred: !!opts.includeDeferred,
         });
         let listRows = rows.map(toListRow);
@@ -101,13 +116,10 @@ export function registerQuestions(program: Command): void {
     .option("--answer <text>", "the answer text")
     .option("--also <ids>", "additional question ids to answer")
     .action(
-      runAction(async (id: string, opts: any) => {
-        if (!opts.answer) fail("USAGE", "--answer is required");
-        const also: string[] = opts.also
-          ? String(opts.also)
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean)
+      runAction(async (id: string, opts: Record<string, unknown>) => {
+        const parsed = parseInput(ANSWER_SPEC, opts);
+        const also: string[] = parsed.also
+          ? parsed.also.split(",").map((s) => s.trim()).filter(Boolean)
           : [];
         const ids = [id, ...also];
 
@@ -117,7 +129,7 @@ export function registerQuestions(program: Command): void {
 
         const results: AnsweredRow[] = [];
         for (const qid of ids) {
-          const closed = closeQuestion(db, qid, opts.answer);
+          const closed = closeQuestion(db, qid, parsed.answer);
           if (!closed) fail("NOT_FOUND", `question "${qid}" not found`);
           results.push({ id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key });
         }
@@ -130,18 +142,14 @@ export function registerQuestions(program: Command): void {
     .description("Defer a question")
     .option("--days <n>", "number of days to defer")
     .action(
-      runAction(async (id: string, opts: any) => {
-        let days = 7;
-        if (opts.days !== undefined) {
-          days = Number(opts.days);
-          if (!Number.isFinite(days)) fail("USAGE", `--days must be a number, got "${opts.days}"`);
-        }
+      runAction(async (id: string, opts: Record<string, unknown>) => {
+        const parsed = parseInput(DEFER_SPEC, opts);
         const { getDb } = await import("../../db/connection.js");
         const { deferQuestion } = await import("../../db/queries/questions.js");
         const db = getDb();
-        const ok = deferQuestion(db, id, days);
+        const ok = deferQuestion(db, id, parsed.days);
         if (!ok) fail("NOT_FOUND", `question "${id}" not found`);
-        emitList([{ id, days }], [
+        emitList([{ id, days: parsed.days }], [
           { header: "id", value: (r: { id: string; days: number }) => r.id },
           { header: "days", value: (r: { id: string; days: number }) => String(r.days) },
         ]);

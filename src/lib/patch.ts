@@ -22,18 +22,12 @@ export interface PatchResult {
 }
 
 /**
- * Build the `SET` fragments, bound params, and before/after audit snapshots
- * for every `spec` key present in `patch`.
- *
- * A key participates only when `patch[key] !== undefined`; an absent key
- * leaves its column untouched, while an explicit `null` participates and
- * binds SQL NULL. `column` defaults to the key itself. `before[key]` reads
- * the column off `current` untouched; when `transform` is given, its return
- * value is used for both the bound param and `after[key]`.
- *
- * Deliberately has no `changed` flag: callers append any exceptional
- * hand-written fields to the returned arrays/objects, then test
- * `sets.length` themselves to decide whether anything actually changed.
+ * Builds `SET` fragments, params, and before/after snapshots for every `spec`
+ * key present in `patch`. A key participates only when `patch[key] !==
+ * undefined` (absent leaves the column untouched; explicit `null` binds SQL
+ * NULL). `transform`'s return value becomes both the bound param and
+ * `after[key]`. No `changed` flag: callers test `sets.length` themselves
+ * after appending any hand-written fields.
  */
 export function buildPatch<Row extends object>(
   spec: Record<string, PatchField>,

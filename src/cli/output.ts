@@ -2,23 +2,20 @@ import chalk from "chalk";
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { visibleLength, ANSI_RE } from "./format.js";
+import { ValidationError } from "../lib/validate.js";
 
 /**
  * Shared output + error layer for the deterministic CLI harness.
  *
- * Output modes (resolved once per action from the global flags + stdout TTY):
- *   --json           → NDJSON. Streaming commands call emit() per record and
- *                      close with emitSummary(); single-result commands call emit()
- *                      exactly once. Errors are one object on stderr.
- *   TTY, no --json   → human tables (chalk, aligned columns).
- *   piped, no --json → stable plain text: one record per line, tab-separated,
- *                      ZERO ANSI escape codes.
+ * Output modes (resolved once per action, from flags + stdout TTY):
+ *   --json           → NDJSON: emit() per record, emitSummary() to close a
+ *                      stream; single-result commands call emit() once.
+ *   TTY, no --json   → aligned human tables (chalk).
+ *   piped, no --json → tab-separated plain text, zero ANSI.
  *
- * The emit and emitList writers read the *current* mode, which runAction() resolves
- * and caches before invoking the wrapped action. Callers that render their own
- * human layout (e.g. status) branch on currentMode() and call emit() only on the
- * --json path; emit/emitSummary are no-ops outside --json so a stray
- * call never corrupts human output.
+ * runAction() resolves and caches the mode before the action runs. emit/
+ * emitSummary read it and no-op outside --json, so a stray call from a
+ * command rendering its own human layout can't corrupt that output.
  */
 
 export const EXIT = {
@@ -72,11 +69,9 @@ export interface OutputMode {
 }
 
 /**
- * Resolve the mode from a command by OR-ing the boolean flags across the whole
- * ancestor chain. commander leaves a global flag on whichever command level it
- * was declared/consumed on, so `plasalid --json vault list` and
- * `plasalid vault list --json` both land the flag somewhere in the chain — the
- * OR walk sees it regardless of placement.
+ * ORs the boolean flags across the whole ancestor chain: commander leaves a
+ * global flag on whichever command level declared/consumed it, so walking up
+ * finds it regardless of where in the chain it was passed.
  */
 function resolveMode(cmd?: Command): OutputMode {
   let json = false;
@@ -97,7 +92,7 @@ function resolveMode(cmd?: Command): OutputMode {
 let current: OutputMode | null = null;
 
 /** Resolve, cache, and return the mode for a command (called by runAction). */
-export function getOutputMode(cmd?: Command): OutputMode {
+function getOutputMode(cmd?: Command): OutputMode {
   current = resolveMode(cmd);
   return current;
 }
@@ -200,13 +195,12 @@ export async function readSecretFromStdin(): Promise<string> {
 }
 
 /**
- * Read transactions from stdin or a file, auto-detecting a JSON array (first
- * non-ws char is `[`) vs NDJSON (one object per line). Parse failures raise
- * CliError USAGE with the offending 1-based line number in the message and
- * details. `inputPath` lets agents stage the batch with their file tools and
- * pass a path instead of piping through a shell.
+ * Reads a batch of JSON rows from stdin or a file, auto-detecting a JSON
+ * array (first non-ws char is `[`) vs NDJSON. Parse failures raise CliError
+ * USAGE with the offending 1-based line number. `inputPath` lets agents pass
+ * a file instead of piping through a shell. Row validation is the caller's job.
  */
-export async function readStdinTransactions(inputPath?: string): Promise<unknown[]> {
+export async function readStdinBatch(inputPath?: string): Promise<unknown[]> {
   let source: string;
   if (inputPath) {
     try {
@@ -251,6 +245,15 @@ export async function readStdinTransactions(inputPath?: string): Promise<unknown
   return out;
 }
 
+/** Narrow an unknown batch item (from `readStdinBatch`) to a plain JSON
+ *  object, or null if it isn't one. Shared by every batch-loop command
+ *  (`ingest commit`, `accounts create --input`, …). */
+export function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 const NOT_READY_PATTERNS = [
   "failed to open database",
   "wrong encryption key",
@@ -265,9 +268,11 @@ function isNotReadyError(err: unknown): boolean {
   return NOT_READY_PATTERNS.some((p) => msg.includes(p));
 }
 
-/** Normalise any thrown value into a CliError (mapping DB-open failures to NOT_READY). */
+/** Normalise any thrown value into a CliError (mapping DB-open failures to NOT_READY,
+ *  and src/lib/validate.ts's ValidationError to USAGE). */
 function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
+  if (err instanceof ValidationError) return new CliError("USAGE", err.message);
   if (isNotReadyError(err)) {
     return new CliError("NOT_READY", (err as Error).message, {
       hint: "run `plasalid config --generate-key` to configure the harness",
@@ -295,10 +300,9 @@ function reportError(err: unknown): number {
 }
 
 /**
- * Wrap a commander `.action()` handler. Resolves the output mode from the action
- * command (always the last positional arg commander passes), then runs the
- * handler; CliError → its mapped exit code, DB-open failures → NOT_READY,
- * anything else → GENERIC. We set process.exitCode (rather than process.exit) so
+ * Wraps a commander `.action()` handler: resolves the output mode from the
+ * command (commander's last positional arg), then maps a thrown error to its
+ * exit code. Sets `process.exitCode` rather than calling `process.exit` so
  * buffered stdout/stderr flush before the process ends.
  */
 export function runAction<A extends unknown[]>(

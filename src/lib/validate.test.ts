@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { str, num, int, bool, json, parseInput, safeParse } from "./validate.js";
-import { CliError } from "../cli/output.js";
+import { str, num, int, bool, json, parseInput, safeParse, ValidationError } from "./validate.js";
 
 describe("validate — defaults", () => {
   it("uses the default when the key is absent", () => {
@@ -169,15 +168,14 @@ describe("validate — entry-point shapes", () => {
     });
   });
 
-  it("parseInput throws a CliError with code USAGE listing all failures", () => {
+  it("parseInput throws a ValidationError listing all failures", () => {
     const spec = { id: str().required(), name: str().required(), type: str().required() };
     try {
       parseInput(spec, {});
       expect.unreachable("parseInput should have thrown");
     } catch (err) {
-      expect(err).toBeInstanceOf(CliError);
-      expect((err as CliError).code).toBe("USAGE");
-      expect((err as CliError).message).toBe("--id, --name, --type required");
+      expect(err).toBeInstanceOf(ValidationError);
+      expect((err as ValidationError).message).toBe("--id, --name, --type required");
     }
   });
 });

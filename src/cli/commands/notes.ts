@@ -1,8 +1,9 @@
 import type { Command } from "commander";
 import type { Memory } from "../../db/queries/notes.js";
 import { emitList, fail, requireYes, runAction, type Column } from "../output.js";
+import { parseInput, str, num } from "../../lib/validate.js";
 
-const VALID_CATEGORIES = ["general", "preference", "life_event"];
+const VALID_CATEGORIES = ["general", "preference", "life_event"] as const;
 
 const NOTE_COLUMNS: Column<Memory>[] = [
   { header: "id", value: (r) => String(r.id), align: "right" },
@@ -10,6 +11,15 @@ const NOTE_COLUMNS: Column<Memory>[] = [
   { header: "content", value: (r) => r.content },
   { header: "created_at", value: (r) => r.created_at },
 ];
+
+const ADD_NOTE_SPEC = {
+  content: str().required(),
+  category: str().oneOf(VALID_CATEGORIES).default("general"),
+};
+
+/** Positional `<id>` args aren't commander opts; parsed through the same spec
+ *  API with an ad hoc raw object so the coercion message stays consistent. */
+const NOTE_ID_SPEC = { id: num().required("note id") };
 
 export function registerNotes(program: Command): void {
   const notes = program.command("notes").description("Manage notes");
@@ -32,19 +42,15 @@ export function registerNotes(program: Command): void {
     .option("--content <text>", "note content")
     .option("--category <cat>", "note category")
     .action(
-      runAction(async (opts: any) => {
-        if (!opts.content) fail("USAGE", "--content is required");
-        const category = opts.category ?? "general";
-        if (!VALID_CATEGORIES.includes(category)) {
-          fail("USAGE", `--category must be one of ${VALID_CATEGORIES.join(", ")}, got "${category}"`);
-        }
+      runAction(async (opts: Record<string, unknown>) => {
+        const parsed = parseInput(ADD_NOTE_SPEC, opts);
 
         const { getDb } = await import("../../db/connection.js");
         const { getMemories, saveMemory } = await import("../../db/queries/notes.js");
         const db = getDb();
-        saveMemory(db, opts.content, category);
+        saveMemory(db, parsed.content, parsed.category);
         const saved = getMemories(db)
-          .filter((m) => m.content === opts.content && m.category === category)
+          .filter((m) => m.content === parsed.content && m.category === parsed.category)
           .sort((a, b) => b.id - a.id)[0];
         emitList(saved ? [saved] : [], NOTE_COLUMNS);
       }),
@@ -55,15 +61,14 @@ export function registerNotes(program: Command): void {
     .description("Remove a note")
     .option("--yes", "skip confirmation")
     .action(
-      runAction(async (id: string, opts: any) => {
+      runAction(async (id: string, opts: { yes?: boolean }) => {
         requireYes(opts, "removing this note");
-        const noteId = Number(id);
-        if (!Number.isFinite(noteId)) fail("USAGE", `note id must be a number, got "${id}"`);
+        const parsed = parseInput(NOTE_ID_SPEC, { id });
 
         const { getDb } = await import("../../db/connection.js");
         const { deleteMemory } = await import("../../db/queries/notes.js");
         const db = getDb();
-        const deleted = deleteMemory(db, noteId);
+        const deleted = deleteMemory(db, parsed.id);
         if (!deleted) fail("NOT_FOUND", `note "${id}" not found`);
         emitList([deleted], NOTE_COLUMNS);
       }),

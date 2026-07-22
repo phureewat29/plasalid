@@ -1,16 +1,13 @@
-import { CliError } from "../cli/output.js";
 import type { Result } from "./result.js";
 
-/**
- * Zero-dependency fluent field-spec builder with static output inference.
- *
- * A spec is a plain object mapping output keys to `Field` builders; `parseInput`
- * / `safeParse` read a raw record (commander opts or a parsed stdin object),
- * resolve each field's value, coerce it, accumulate every error, and return an
- * object whose type is inferred from the spec via `Infer`. This replaces the
- * hand-rolled `parseOptionalNumber` + `missing[]` accumulation + field-by-field
- * patch assembly at the CLI call sites.
- */
+/** Thrown by `parseInput` on a failed parse. `src/lib/` has no dependency on
+ *  `src/cli/`, so the CLI layer maps this to its own error/exit-code type. */
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ValidationError";
+  }
+}
 
 declare const OUT: unique symbol;
 
@@ -92,11 +89,8 @@ export class Field<T> implements FieldSpec<T> {
     return new Field(this.with({ absence: { type: "default", value } }));
   }
 
-  /**
-   * Absent input accumulates a `<label> required` error. `label` is the display
-   * name (e.g. "--reason") and defaults to `--` + the key with underscores
-   * replaced by dashes.
-   */
+  /** Absent input accumulates a `<label> required` error; `label` defaults to
+   *  `--` + the key with underscores replaced by dashes. */
   required(label?: string): Field<Exclude<T, undefined>> {
     return new Field(this.with({ absence: { type: "required" }, label }));
   }
@@ -111,11 +105,8 @@ export class Field<T> implements FieldSpec<T> {
     return new Field(this.with({ oneOf: values }));
   }
 
-  /**
-   * Transform present, non-null values. `null`/`undefined` never reach `fn`:
-   * `null` passes through when nullable, and `undefined` means the key is absent.
-   * Chained maps compose left-to-right.
-   */
+  /** Transforms present, non-null values (`null` passes through when nullable,
+   *  `undefined` means absent). Chained maps compose left-to-right. */
   map<U>(fn: (value: NonNullable<T>) => U): Field<U | Extract<T, null | undefined>> {
     const prev = this.config.map;
     const next = prev
@@ -172,10 +163,9 @@ function toSnakeCase(key: string): string {
 }
 
 /**
- * Resolve a spec key's raw value: try the key verbatim, its mechanical camelCase
- * and snake_case forms, then explicit aliases. The first candidate whose value
- * is not `undefined` wins. This auto-bridges commander's camelCase opts to the
- * snake_case DB names specs are written in, removing per-field alias noise.
+ * Tries the key verbatim, its camelCase/snake_case forms, then aliases; first
+ * non-`undefined` value wins. Auto-bridges commander's camelCase opts to the
+ * snake_case names specs are written in, without per-field alias noise.
  */
 function resolveRaw(
   raw: Record<string, unknown>,
@@ -225,10 +215,8 @@ function coerce(config: FieldConfig, value: unknown, label: string): Coerced {
 type AccError = { kind: "missing"; label: string } | { kind: "other"; message: string };
 
 /**
- * Collapse accumulated errors into one message. When every error is a missing
- * required field, group the labels into the codebase's `--a, --b required`
- * form; otherwise join each error string (missing rendered as `<label>
- * required`) with "; ", preserving spec-key order.
+ * When every error is a missing field, groups labels into `--a, --b required`;
+ * otherwise joins each error (missing rendered as `<label> required`) with "; ".
  */
 function combineErrors(errors: AccError[]): string {
   const missing: string[] = [];
@@ -292,10 +280,9 @@ function runParse<S extends Record<string, FieldSpec<unknown>>>(
 }
 
 /**
- * Parse `raw` against `spec`, accumulating every missing-required and coercion
- * error before throwing `CliError("USAGE", ...)` with all of them. With
- * `opts.atLeastOne`, a fully successful parse that produced zero output keys
- * fails with that message (mirrors the CLI's "at least one flag" guard).
+ * Accumulates every missing-required and coercion error before throwing one
+ * `ValidationError`. With `opts.atLeastOne`, a parse that produced zero output
+ * keys fails with that message (the CLI's "at least one flag" guard).
  */
 export function parseInput<S extends Record<string, FieldSpec<unknown>>>(
   spec: S,
@@ -303,21 +290,18 @@ export function parseInput<S extends Record<string, FieldSpec<unknown>>>(
   opts?: { atLeastOne?: string },
 ): Infer<S> {
   const result = runParse(spec, raw);
-  if (!result.ok) throw new CliError("USAGE", result.error);
+  if (!result.ok) throw new ValidationError(result.error);
   if (
     opts?.atLeastOne &&
     Object.keys(result.value as Record<string, unknown>).length === 0
   ) {
-    throw new CliError("USAGE", opts.atLeastOne);
+    throw new ValidationError(opts.atLeastOne);
   }
   return result.value;
 }
 
-/**
- * Non-throwing counterpart of `parseInput`: returns the accumulated error
- * message as a `Result` instead of throwing, for batch row-validation paths that
- * must keep the PARTIAL exit-code contract.
- */
+/** Non-throwing counterpart of `parseInput`, for batch row-validation paths
+ *  that must keep the PARTIAL exit-code contract. */
 export function safeParse<S extends Record<string, FieldSpec<unknown>>>(
   spec: S,
   raw: Record<string, unknown>,

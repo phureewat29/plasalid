@@ -13,6 +13,7 @@ import {
   type MerchantUpsertInput,
 } from "../../db/queries/merchants.js";
 import { findAccountById } from "../../db/queries/account-balance.js";
+import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
 
 /** For merge: a missing-merchant message maps to NOT_FOUND, everything else
@@ -35,7 +36,7 @@ function listMerchantsAction(): void {
   emitList(listMerchants(db), MERCHANT_COLUMNS);
 }
 
-const RESOLVE_MERCHANT_SPEC = { descriptor: str().required() };
+const RESOLVE_MERCHANT_SPEC = z.object({ descriptor: str() });
 
 function resolveMerchantAction(opts: Record<string, unknown>): void {
   const parsed = parseInput(RESOLVE_MERCHANT_SPEC, opts);
@@ -53,11 +54,11 @@ function resolveMerchantAction(opts: Record<string, unknown>): void {
   });
 }
 
-const UPSERT_MERCHANT_SPEC = {
-  name: str().required(),
+const UPSERT_MERCHANT_SPEC = z.object({
+  name: str(),
   alias: str().optional(),
   default_account: str().optional(),
-};
+});
 
 function upsertMerchantAction(opts: Record<string, unknown>): void {
   const parsed = parseInput(UPSERT_MERCHANT_SPEC, opts);
@@ -72,11 +73,11 @@ function upsertMerchantAction(opts: Record<string, unknown>): void {
   emit(merchant);
 }
 
-const SET_DEFAULT_SPEC = {
-  merchant: str().required(),
+const SET_DEFAULT_SPEC = z.object({
+  merchant: str(),
   account: str().optional(),
   clear: bool().optional(),
-};
+});
 
 function setDefaultAction(opts: Record<string, unknown>): void {
   const parsed = parseInput(SET_DEFAULT_SPEC, opts);
@@ -103,10 +104,10 @@ function setDefaultAction(opts: Record<string, unknown>): void {
   emit({ merchant_id: parsed.merchant, ...result });
 }
 
-const MERGE_MERCHANTS_SPEC = {
-  from: str().required("--from"),
-  to: str().required("--to"),
-};
+const MERGE_MERCHANTS_SPEC = z.object({
+  from: str(),
+  to: str(),
+});
 
 function mergeMerchantsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
   const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts as Record<string, unknown>);

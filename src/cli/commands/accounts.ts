@@ -34,7 +34,8 @@ import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "../../db/querie
 import { ensureAccountAncestors } from "../../ingest/resolve.js";
 import { fromMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
-import { parseInput, safeParse, str, num, int, json, type Infer } from "../../lib/validate.js";
+import * as z from "zod";
+import { parseInput, safeParse, str, num, int, json } from "../../lib/validate.js";
 
 // The account display `name` is the only free-text field; id/parent_id/type/
 // currency and the numeric balances are structured data left verbatim.
@@ -192,18 +193,24 @@ function showAccount(id: string): void {
   });
 }
 
-const CREATE_ACCOUNT_SPEC = {
-  id: str().required("--id"),
-  name: str().required("--name"),
-  type: str().required("--type").oneOf(TOP_LEVEL_TYPES),
-  parent_id: str().optional().alias("parent"),
+const CREATE_ACCOUNT_SPEC = z.object({
+  id: str(),
+  name: str(),
+  type: z.enum(TOP_LEVEL_TYPES as unknown as [AccountType, ...AccountType[]]),
+  parent_id: str().optional(),
   subtype: str().optional(),
-  bank_name: str().optional().alias("bank"),
-  account_number_masked: str().optional().alias("masked"),
+  bank_name: str().optional(),
+  account_number_masked: str().optional(),
   currency: str().optional(),
   due_day: int().optional(),
   statement_day: int().optional(),
   metadata: json<Record<string, unknown>>().optional(),
+});
+
+const CREATE_ACCOUNT_ALIASES = {
+  parent_id: ["parent"],
+  bank_name: ["bank"],
+  account_number_masked: ["masked"],
 };
 
 interface CreateOneAccountResult {
@@ -221,7 +228,7 @@ interface CreateOneAccountResult {
  */
 function createOneAccount(
   db: Database.Database,
-  parsed: Infer<typeof CREATE_ACCOUNT_SPEC>,
+  parsed: z.infer<typeof CREATE_ACCOUNT_SPEC>,
 ): CreateOneAccountResult {
   let parentId = parsed.parent_id ?? null;
   let createdParents: string[] = [];
@@ -266,7 +273,7 @@ function maskedResultField(result: CreateOneAccountResult): Record<string, unkno
 }
 
 function createSingleAccount(opts: Record<string, unknown>): void {
-  const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts);
+  const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts, { aliases: CREATE_ACCOUNT_ALIASES });
   const db = getDb();
   let result: CreateOneAccountResult;
   try {
@@ -309,7 +316,7 @@ async function createAccountsBatch(inputPath: string | undefined): Promise<void>
       continue;
     }
 
-    const parsed = safeParse(CREATE_ACCOUNT_SPEC, record);
+    const parsed = safeParse(CREATE_ACCOUNT_SPEC, record, { aliases: CREATE_ACCOUNT_ALIASES });
     if (!parsed.ok) {
       failed++;
       results.push({ type: "result", index, ok: false, message: parsed.error });
@@ -364,10 +371,10 @@ async function createAccountAction(opts: Record<string, unknown>): Promise<void>
   createSingleAccount(opts);
 }
 
-const MERGE_ACCOUNTS_SPEC = {
-  from: str().required("--from"),
-  to: str().required("--to"),
-};
+const MERGE_ACCOUNTS_SPEC = z.object({
+  from: str(),
+  to: str(),
+});
 
 function mergeAccountsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
   const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
@@ -399,11 +406,11 @@ function deleteAccountAction(id: string, opts: { yes?: boolean }): void {
   emit({ id, deleted: true });
 }
 
-const ADJUST_ACCOUNT_SPEC = {
-  to: num().required("--to"),
-  reason: str().required("--reason"),
+const ADJUST_ACCOUNT_SPEC = z.object({
+  to: num(),
+  reason: str(),
   date: str().optional(),
-};
+});
 
 function adjustAccountAction(
   id: string,
@@ -426,9 +433,9 @@ function adjustAccountAction(
   emit({ transaction_id: result.transactionId, delta: result.delta });
 }
 
-const MATCH_ACCOUNTS_SPEC = {
-  query: str().required("--query"),
-};
+const MATCH_ACCOUNTS_SPEC = z.object({
+  query: str(),
+});
 
 function matchAccounts(opts: { query?: string }): void {
   const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts as Record<string, unknown>);
@@ -437,18 +444,25 @@ function matchAccounts(opts: { query?: string }): void {
   emitList(matches, MATCH_COLUMNS);
 }
 
-const UPDATE_ACCOUNT_SPEC = {
+const UPDATE_ACCOUNT_SPEC = z.object({
   name: str().optional(),
   due_day: int().optional().nullable(),
   statement_day: int().optional().nullable(),
-  points_balance: int().optional().nullable().alias("points"),
-  account_number_masked: str().optional().nullable().alias("masked"),
-  bank_name: str().optional().nullable().alias("bank"),
+  points_balance: int().optional().nullable(),
+  account_number_masked: str().optional().nullable(),
+  bank_name: str().optional().nullable(),
   metadata: json<Record<string, unknown>>().optional(),
+});
+
+const UPDATE_ACCOUNT_ALIASES = {
+  points_balance: ["points"],
+  account_number_masked: ["masked"],
+  bank_name: ["bank"],
 };
 
 function updateAccountAction(id: string, opts: Record<string, unknown>): void {
   const parsed = parseInput(UPDATE_ACCOUNT_SPEC, opts, {
+    aliases: UPDATE_ACCOUNT_ALIASES,
     atLeastOne:
       "at least one of --name, --due-day, --statement-day, --points, --masked, --bank, --metadata is required",
   });

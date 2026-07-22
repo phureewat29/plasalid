@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { QuestionRow } from "../../db/queries/questions.js";
 import { emitList, fail, runAction, type Column } from "../output.js";
+import * as z from "zod";
 import { parseInput, str, int } from "../../lib/validate.js";
 
 interface QuestionListRow {
@@ -74,14 +75,14 @@ interface ListQuestionsOpts {
   redact?: boolean;
 }
 
-const ANSWER_SPEC = {
-  answer: str().required(),
+const ANSWER_SPEC = z.object({
+  answer: str(),
   also: str().optional(),
-};
+});
 
-const DEFER_SPEC = {
+const DEFER_SPEC = z.object({
   days: int().default(7),
-};
+});
 
 export function registerQuestions(program: Command): void {
   const questions = program.command("questions").description("Manage open questions");

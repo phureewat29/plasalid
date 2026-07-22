@@ -10,7 +10,8 @@ import {
 import { generateKey } from "../../db/encryption.js";
 import { getContextPath } from "../../context.js";
 import { currentMode, emit, fail, readSecretFromStdin, runAction, type OutputMode } from "../output.js";
-import { parseInput, str, bool, type Infer } from "../../lib/validate.js";
+import * as z from "zod";
+import { parseInput, str, bool } from "../../lib/validate.js";
 
 type RedactedConfig = Omit<PlasalidConfig, "dbEncryptionKey"> & {
   dbEncryptionKey: { set: boolean; fingerprint?: string };
@@ -62,7 +63,7 @@ function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
 
 /** Every flag the bare `config` action accepts, keyed to auto-bridge commander's
  *  camelCase opts (parseInput tries each key's camelCase/snake_case form). */
-const CONVERGE_FLAGS_SPEC = {
+const CONVERGE_FLAGS_SPEC = z.object({
   data_dir: str().optional(),
   db: str().optional(),
   generate_key: bool().optional(),
@@ -70,9 +71,9 @@ const CONVERGE_FLAGS_SPEC = {
   locale: str().optional(),
   currency: str().optional(),
   user_name: str().optional(),
-};
+});
 
-type ConvergeFlags = Infer<typeof CONVERGE_FLAGS_SPEC>;
+type ConvergeFlags = z.infer<typeof CONVERGE_FLAGS_SPEC>;
 
 /**
  * Idempotent configure: ensures the data dir, persists settings, migrates the

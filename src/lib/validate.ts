@@ -1,3 +1,4 @@
+import * as z from "zod";
 import type { Result } from "./result.js";
 
 /** Thrown by `parseInput` on a failed parse. `src/lib/` has no dependency on
@@ -9,145 +10,71 @@ export class ValidationError extends Error {
   }
 }
 
-declare const OUT: unique symbol;
+// Coercion helpers: standard zod schemas that keep the harness's pre-zod
+// coercion semantics. Each preprocess passes undefined through so an absent
+// required key surfaces as a missing-required issue rather than a coerced value.
 
-/**
- * Phantom carrier of a field's inferred output type. `[OUT]` is never read at
- * runtime; it exists only so `Infer` can recover `T` from a spec entry.
- */
-export interface FieldSpec<T> {
-  readonly [OUT]: T;
-}
+const toStringInput = (value: unknown): unknown =>
+  typeof value === "string" || value === undefined ? value : String(value);
 
-type OutputOf<F> = F extends FieldSpec<infer T> ? T : never;
+// Non-finite results (NaN from "abc", etc.) pass the raw value through so
+// z.number rejects it and the formatter can echo the original in `got "…"`.
+// "" and null coerce to 0 via Number(), matching the old behaviour.
+const toNumberInput = (value: unknown): unknown => {
+  if (typeof value === "number") return value;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : value;
+};
 
-type OptionalKeys<S> = {
-  [K in keyof S]: undefined extends OutputOf<S[K]> ? K : never;
-}[keyof S];
+// Only the literal strings "true"/"false" map to booleans; anything else
+// (including real booleans, which pass straight through) is left for z.boolean.
+const toBooleanInput = (value: unknown): unknown => {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
+};
 
-type Flatten<T> = { [K in keyof T]: T[K] } & {};
-
-/**
- * The object type a spec parses into: a key whose field output includes
- * `undefined` becomes optional (`key?:`) with `undefined` stripped from the
- * value type; every other key is required.
- */
-export type Infer<S extends Record<string, FieldSpec<unknown>>> = Flatten<
-  { [K in Exclude<keyof S, OptionalKeys<S>>]: OutputOf<S[K]> } & {
-    [K in OptionalKeys<S>]?: Exclude<OutputOf<S[K]>, undefined>;
-  }
->;
-
-type Kind = "str" | "num" | "bool" | "json";
-
-/** How a field behaves when its raw value resolves to `undefined` (absent). */
-type Absence =
-  | { type: "required" }
-  | { type: "optional" }
-  | { type: "default"; value: unknown };
-
-interface FieldConfig {
-  kind: Kind;
-  integer: boolean;
-  nullable: boolean;
-  absence: Absence;
-  label?: string;
-  oneOf?: readonly unknown[];
-  map?: (value: unknown) => unknown;
-  aliases: readonly string[];
-}
-
-/**
- * Immutable field builder. Every modifier returns a fresh `Field` with a cloned
- * config, so a base builder can be reused across specs without one chain's
- * modifiers leaking into another. `config` is internal to this module.
- */
-export class Field<T> implements FieldSpec<T> {
-  declare readonly [OUT]: T;
-  readonly config: FieldConfig;
-
-  constructor(config: FieldConfig) {
-    this.config = config;
-  }
-
-  private with(patch: Partial<FieldConfig>): FieldConfig {
-    return { ...this.config, ...patch };
-  }
-
-  /** Absent input omits the key from the output entirely. */
-  optional(): Field<T | undefined> {
-    return new Field(this.with({ absence: { type: "optional" } }));
-  }
-
-  /** Explicit `null` passes through untouched (coerce/oneOf/map are skipped). */
-  nullable(): Field<T | null> {
-    return new Field(this.with({ nullable: true }));
-  }
-
-  /** Absent input yields `value`; the key is always present in the output. */
-  default(value: Exclude<T, undefined>): Field<Exclude<T, undefined>> {
-    return new Field(this.with({ absence: { type: "default", value } }));
-  }
-
-  /** Absent input accumulates a `<label> required` error; `label` defaults to
-   *  `--` + the key with underscores replaced by dashes. */
-  required(label?: string): Field<Exclude<T, undefined>> {
-    return new Field(this.with({ absence: { type: "required" }, label }));
-  }
-
-  /** Require an integer after numeric coercion. Meaningful only after `num()`. */
-  int(): Field<T> {
-    return new Field(this.with({ integer: true }));
-  }
-
-  /** Restrict to a literal set, narrowing the output type to those members. */
-  oneOf<const V extends readonly T[]>(values: V): Field<V[number]> {
-    return new Field(this.with({ oneOf: values }));
-  }
-
-  /** Transforms present, non-null values (`null` passes through when nullable,
-   *  `undefined` means absent). Chained maps compose left-to-right. */
-  map<U>(fn: (value: NonNullable<T>) => U): Field<U | Extract<T, null | undefined>> {
-    const prev = this.config.map;
-    const next = prev
-      ? (value: unknown): unknown => fn(prev(value) as NonNullable<T>)
-      : (value: unknown): unknown => fn(value as NonNullable<T>);
-    return new Field(this.with({ map: next }));
-  }
-
-  /** Extra raw-input keys to read for this field (genuine synonyms). */
-  alias(...names: string[]): Field<T> {
-    return new Field(this.with({ aliases: [...this.config.aliases, ...names] }));
-  }
-}
-
-function base(kind: Kind, integer = false): FieldConfig {
-  return { kind, integer, nullable: false, absence: { type: "required" }, aliases: [] };
-}
-
-/** A string field. */
-export function str(): Field<string> {
-  return new Field<string>(base("str"));
+/** A string field. Non-strings are stringified; absent stays absent. */
+export function str() {
+  return z.preprocess(toStringInput, z.string());
 }
 
 /** A number field (any finite number). */
-export function num(): Field<number> {
-  return new Field<number>(base("num"));
+export function num() {
+  return z.preprocess(toNumberInput, z.number());
 }
 
 /** A number field constrained to integers. */
-export function int(): Field<number> {
-  return new Field<number>(base("num", true));
+export function int() {
+  return z.preprocess(toNumberInput, z.number().int());
 }
 
 /** A boolean field (real booleans, or the strings "true"/"false"). */
-export function bool(): Field<boolean> {
-  return new Field<boolean>(base("bool"));
+export function bool() {
+  return z.preprocess(toBooleanInput, z.boolean());
 }
 
-/** A JSON field, parsed from a string (or passed through if already parsed). */
-export function json<T = unknown>(): Field<T> {
-  return new Field<T>(base("json"));
+/** A JSON field, parsed from a string (or passed through if already parsed).
+ *  A parse failure raises a custom issue carrying the JSON.parse message. */
+export function json<T = unknown>() {
+  return z.unknown().transform((value, ctx): T => {
+    if (typeof value !== "string") return value as T;
+    try {
+      return JSON.parse(value) as T;
+    } catch (err) {
+      ctx.addIssue({ code: "custom", message: (err as Error).message });
+      return z.NEVER;
+    }
+  });
+}
+
+export interface ParseOptions {
+  /** Extra raw-input keys to read per spec key (genuine synonyms). */
+  aliases?: Record<string, string[]>;
+  /** Override the default `--key-with-dashes` label per spec key. */
+  labels?: Record<string, string>;
+  /** Fail with this message when the parse produces zero output keys. */
+  atLeastOne?: string;
 }
 
 function defaultLabel(key: string): string {
@@ -180,103 +107,94 @@ function resolveRaw(
   return undefined;
 }
 
-type Coerced = { ok: true; value: unknown } | { ok: false; message: string };
-
-function coerce(config: FieldConfig, value: unknown, label: string): Coerced {
-  const { kind } = config;
-  if (kind === "str") {
-    return { ok: true, value: typeof value === "string" ? value : String(value) };
+/** Resolve each spec key against the raw record before zod runs; absent keys
+ *  are omitted so zod's optional/default/required handling stays authoritative. */
+function normalizeRaw(
+  shape: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  aliases: Record<string, string[]> = {},
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(shape)) {
+    const value = resolveRaw(raw, key, aliases[key] ?? []);
+    if (value !== undefined) out[key] = value;
   }
-  if (kind === "num") {
-    const n = typeof value === "number" ? value : Number(value);
-    if (!Number.isFinite(n)) {
-      return { ok: false, message: `${label} must be a number, got "${value}"` };
-    }
-    if (config.integer && !Number.isInteger(n)) {
-      return { ok: false, message: `${label} must be an integer, got "${value}"` };
-    }
-    return { ok: true, value: n };
-  }
-  if (kind === "bool") {
-    if (typeof value === "boolean") return { ok: true, value };
-    if (value === "true") return { ok: true, value: true };
-    if (value === "false") return { ok: true, value: false };
-    return { ok: false, message: `${label} must be a boolean, got "${value}"` };
-  }
-  // kind === "json": commander passes the raw text; stdin may pass a parsed value.
-  if (typeof value !== "string") return { ok: true, value };
-  try {
-    return { ok: true, value: JSON.parse(value) };
-  } catch (err) {
-    return { ok: false, message: `${label} must be valid JSON: ${(err as Error).message}` };
-  }
+  return out;
 }
 
-type AccError = { kind: "missing"; label: string } | { kind: "other"; message: string };
+interface Issue {
+  code: string;
+  message: string;
+  path: PropertyKey[];
+  expected?: string;
+  values?: unknown[];
+}
+
+/** Render one non-missing issue into the pinned `<label> <constraint>` clause,
+ *  echoing the raw pre-coercion value in `got "…"`. */
+function constraintClause(label: string, issue: Issue, raw: unknown): string {
+  if (issue.code === "custom") return `${label} must be valid JSON: ${issue.message}`;
+  if (issue.code === "invalid_value") {
+    return `${label} must be one of ${(issue.values ?? []).join(", ")}, got "${String(raw)}"`;
+  }
+  if (issue.expected === "int") return `${label} must be an integer, got "${String(raw)}"`;
+  if (issue.expected === "number") return `${label} must be a number, got "${String(raw)}"`;
+  if (issue.expected === "boolean") return `${label} must be a boolean, got "${String(raw)}"`;
+  return `${label} ${issue.message}`;
+}
 
 /**
- * When every error is a missing field, groups labels into `--a, --b required`;
- * otherwise joins each error (missing rendered as `<label> required`) with "; ".
+ * Formats zod issues into the harness's pinned message contract. Issues are
+ * ordered by spec-key order; an issue whose normalized value is `undefined` is
+ * a missing-required field. When every issue is missing, labels group into
+ * `--a, --b required`; otherwise each clause (missing rendered `<label>
+ * required`) joins with "; ".
  */
-function combineErrors(errors: AccError[]): string {
-  const missing: string[] = [];
-  const others: string[] = [];
-  for (const e of errors) {
-    if (e.kind === "missing") missing.push(e.label);
-    else others.push(e.message);
+function formatError(
+  shape: Record<string, unknown>,
+  normalized: Record<string, unknown>,
+  issues: Issue[],
+  opts?: ParseOptions,
+): string {
+  const first = new Map<string, Issue>();
+  for (const issue of issues) {
+    const key = String(issue.path[0]);
+    if (!first.has(key)) first.set(key, issue);
   }
-  if (others.length === 0) return `${missing.join(", ")} required`;
-  return errors
-    .map((e) => (e.kind === "missing" ? `${e.label} required` : e.message))
-    .join("; ");
+
+  const missing: string[] = [];
+  const clauses: string[] = [];
+  let hasConstraint = false;
+  for (const key of Object.keys(shape)) {
+    const issue = first.get(key);
+    if (!issue) continue;
+    const label = opts?.labels?.[key] ?? defaultLabel(key);
+    if (normalized[key] === undefined) {
+      missing.push(label);
+      clauses.push(`${label} required`);
+    } else {
+      hasConstraint = true;
+      clauses.push(constraintClause(label, issue, normalized[key]));
+    }
+  }
+
+  if (!hasConstraint) return `${missing.join(", ")} required`;
+  return clauses.join("; ");
 }
 
-function runParse<S extends Record<string, FieldSpec<unknown>>>(
-  spec: S,
+function parse<S extends z.ZodObject>(
+  schema: S,
   raw: Record<string, unknown>,
-): Result<Infer<S>> {
-  const fields = spec as unknown as Record<string, Field<unknown>>;
-  const output: Record<string, unknown> = {};
-  const errors: AccError[] = [];
-
-  for (const key of Object.keys(fields)) {
-    const config = fields[key].config;
-    const label = config.label ?? defaultLabel(key);
-    const value = resolveRaw(raw, key, config.aliases);
-
-    if (value === undefined) {
-      if (config.absence.type === "default") output[key] = config.absence.value;
-      else if (config.absence.type === "required") errors.push({ kind: "missing", label });
-      // optional → key omitted
-      continue;
-    }
-
-    if (value === null && config.nullable) {
-      output[key] = null;
-      continue;
-    }
-
-    const coerced = coerce(config, value, label);
-    if (!coerced.ok) {
-      errors.push({ kind: "other", message: coerced.message });
-      continue;
-    }
-    let result = coerced.value;
-
-    if (config.oneOf && !config.oneOf.includes(result)) {
-      errors.push({
-        kind: "other",
-        message: `${label} must be one of ${config.oneOf.join(", ")}, got "${result}"`,
-      });
-      continue;
-    }
-
-    if (config.map) result = config.map(result);
-    output[key] = result;
-  }
-
-  if (errors.length > 0) return { ok: false, error: combineErrors(errors) };
-  return { ok: true, value: output as Infer<S> };
+  opts?: ParseOptions,
+): Result<z.infer<S>> {
+  const shape = schema.shape as Record<string, unknown>;
+  const normalized = normalizeRaw(shape, raw, opts?.aliases);
+  const parsed = schema.safeParse(normalized);
+  if (parsed.success) return { ok: true, value: parsed.data as z.infer<S> };
+  return {
+    ok: false,
+    error: formatError(shape, normalized, parsed.error.issues as unknown as Issue[], opts),
+  };
 }
 
 /**
@@ -284,17 +202,14 @@ function runParse<S extends Record<string, FieldSpec<unknown>>>(
  * `ValidationError`. With `opts.atLeastOne`, a parse that produced zero output
  * keys fails with that message (the CLI's "at least one flag" guard).
  */
-export function parseInput<S extends Record<string, FieldSpec<unknown>>>(
-  spec: S,
+export function parseInput<S extends z.ZodObject>(
+  schema: S,
   raw: Record<string, unknown>,
-  opts?: { atLeastOne?: string },
-): Infer<S> {
-  const result = runParse(spec, raw);
+  opts?: ParseOptions,
+): z.infer<S> {
+  const result = parse(schema, raw, opts);
   if (!result.ok) throw new ValidationError(result.error);
-  if (
-    opts?.atLeastOne &&
-    Object.keys(result.value as Record<string, unknown>).length === 0
-  ) {
+  if (opts?.atLeastOne && Object.keys(result.value as object).length === 0) {
     throw new ValidationError(opts.atLeastOne);
   }
   return result.value;
@@ -302,9 +217,10 @@ export function parseInput<S extends Record<string, FieldSpec<unknown>>>(
 
 /** Non-throwing counterpart of `parseInput`, for batch row-validation paths
  *  that must keep the PARTIAL exit-code contract. */
-export function safeParse<S extends Record<string, FieldSpec<unknown>>>(
-  spec: S,
+export function safeParse<S extends z.ZodObject>(
+  schema: S,
   raw: Record<string, unknown>,
-): Result<Infer<S>> {
-  return runParse(spec, raw);
+  opts?: ParseOptions,
+): Result<z.infer<S>> {
+  return parse(schema, raw, opts);
 }

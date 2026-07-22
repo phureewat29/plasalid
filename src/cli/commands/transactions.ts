@@ -42,6 +42,7 @@ import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup-transac
 import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
+import * as z from "zod";
 import { parseInput, str, num, json } from "../../lib/validate.js";
 
 // `transactions`: list/show/add/update/delete/recategorize/dedupe over the
@@ -81,7 +82,7 @@ interface ListOpts {
   redact?: boolean;
 }
 
-const LIST_TRANSACTIONS_SPEC = {
+const LIST_TRANSACTIONS_SPEC = z.object({
   account: str().optional(),
   from: str().optional(),
   to: str().optional(),
@@ -89,7 +90,7 @@ const LIST_TRANSACTIONS_SPEC = {
   amount: num().optional(),
   currency: str().optional(),
   limit: num().optional(),
-};
+});
 
 function runList(opts: ListOpts): void {
   const db = getDb();
@@ -207,10 +208,10 @@ function runDedupe(opts: { autoMerge?: boolean }): void {
 
 // Merge (void a mirror into its surviving twin)
 
-const MERGE_TRANSACTIONS_SPEC = {
-  from: str().required("--from"),
-  to: str().required("--to"),
-};
+const MERGE_TRANSACTIONS_SPEC = z.object({
+  from: str(),
+  to: str(),
+});
 
 function mergeTransactionsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
   const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
@@ -245,28 +246,38 @@ interface AddTransactionOpts {
   merchantName?: string;
 }
 
-const ADD_TRANSACTION_FLAGS_SPEC = {
-  debit_account_id: str().required("--debit-account").alias("debitAccount"),
-  credit_account_id: str().required("--credit-account").alias("creditAccount"),
-  amount: num().required("--amount"),
+const ADD_TRANSACTION_FLAGS_SPEC = z.object({
+  debit_account_id: str(),
+  credit_account_id: str(),
+  amount: num(),
   date: str().optional(),
   description: str().optional(),
+});
+
+const ADD_TRANSACTION_FLAGS_OPTS = {
+  labels: { debit_account_id: "--debit-account", credit_account_id: "--credit-account" },
+  aliases: { debit_account_id: ["debitAccount"], credit_account_id: ["creditAccount"] },
 };
 
 // Loose on required fields (debit/credit default to "", amount passes through
 // unchecked): the strict/resolve checks in `addTransaction` stay the authority
 // for exit codes and messages.
-const ADD_TRANSACTION_STDIN_SPEC = {
+const ADD_TRANSACTION_STDIN_SPEC = z.object({
   date: str().default(""),
   description: str().optional(),
-  debit_account_id: str().default("").alias("debit_account"),
-  credit_account_id: str().default("").alias("credit_account"),
+  debit_account_id: str().default(""),
+  credit_account_id: str().default(""),
   currency: str().nullable().default(null),
   merchant: json<MerchantUpsertInput>().nullable().default(null),
   merchant_id: str().nullable().default(null),
   raw_descriptor: str().nullable().default(null),
   source_page: num().nullable().default(null),
   code: str().nullable().default(null),
+});
+
+const ADD_TRANSACTION_STDIN_ALIASES = {
+  debit_account_id: ["debit_account"],
+  credit_account_id: ["credit_account"],
 };
 
 // Builds a raw (decimal-amount) transaction from flags or stdin JSON; does not validate accounts.
@@ -275,7 +286,11 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
     opts.debitAccount !== undefined || opts.creditAccount !== undefined || opts.amount !== undefined;
 
   if (anyFlag) {
-    const parsed = parseInput(ADD_TRANSACTION_FLAGS_SPEC, opts as Record<string, unknown>);
+    const parsed = parseInput(
+      ADD_TRANSACTION_FLAGS_SPEC,
+      opts as Record<string, unknown>,
+      ADD_TRANSACTION_FLAGS_OPTS,
+    );
 
     const raw: RawTransactionInput = {
       date: parsed.date ?? todayIso(),
@@ -306,7 +321,9 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
     fail("USAGE", "stdin must contain a single JSON transaction object (not an array)");
   }
   const record = decoded as Record<string, unknown>;
-  const parsed = parseInput(ADD_TRANSACTION_STDIN_SPEC, record);
+  const parsed = parseInput(ADD_TRANSACTION_STDIN_SPEC, record, {
+    aliases: ADD_TRANSACTION_STDIN_ALIASES,
+  });
   return {
     ...parsed,
     // Description prefers an explicit value, then the merchant's canonical name.
@@ -393,17 +410,23 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
   emit({ transaction_id: result.id, duplicate: result.duplicate });
 }
 
-const UPDATE_TRANSACTION_SPEC = {
+const UPDATE_TRANSACTION_SPEC = z.object({
   date: str().optional(),
   description: str().optional(),
-  merchant_id: str().optional().alias("merchant"),
-};
+  merchant_id: str().optional(),
+});
 
-// The `--filter-account` clarification is folded into the required label so a
-// missing flag still explains what that account controls.
-const RECATEGORIZE_SPEC = {
-  set_account: str().required("--set-account"),
-  filter_account: str().required("--filter-account (recategorize moves that account's transactions)"),
+const UPDATE_TRANSACTION_ALIASES = { merchant_id: ["merchant"] };
+
+const RECATEGORIZE_SPEC = z.object({
+  set_account: str(),
+  filter_account: str(),
+});
+
+// The `--filter-account` clarification is folded into the label so a missing
+// flag still explains what that account controls.
+const RECATEGORIZE_LABELS = {
+  filter_account: "--filter-account (recategorize moves that account's transactions)",
 };
 
 export function registerTransactions(program: Command): void {
@@ -452,6 +475,7 @@ export function registerTransactions(program: Command): void {
     .action(
       runAction((id: string, opts: Record<string, unknown>) => {
         const fields: UpdateTransactionMetaFields = parseInput(UPDATE_TRANSACTION_SPEC, opts, {
+          aliases: UPDATE_TRANSACTION_ALIASES,
           atLeastOne: "at least one of --date, --description, --merchant is required",
         });
         const db = getDb();
@@ -482,7 +506,7 @@ export function registerTransactions(program: Command): void {
     .action(
       runAction(
         (opts: Record<string, unknown>) => {
-          const parsed = parseInput(RECATEGORIZE_SPEC, opts);
+          const parsed = parseInput(RECATEGORIZE_SPEC, opts, { labels: RECATEGORIZE_LABELS });
           const db = getDb();
           const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
 

@@ -9,6 +9,7 @@ import type {
 } from "../../ingest/commit-transaction.js";
 import { EXIT, asRecord, currentMode, emit, emitSummary, fail, readStdinBatch } from "../output.js";
 import { emitObject, openDb } from "./ingest.js";
+import * as z from "zod";
 import { safeParse, str, num, json } from "../../lib/validate.js";
 import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
 
@@ -102,7 +103,7 @@ function classifyMerchant(
 // stays the authority on validity, so missing required fields default to ""
 // and surface there as `dirty_input`. `amount` is excluded so its raw type
 // reaches the validator's `typeof` check unconverted by `num()`.
-const LINKED_HEADER_SPEC = {
+const LINKED_HEADER_SPEC = z.object({
   date: str().default(""),
   description: str().default(""),
   raw_descriptor: str().nullable().default(null),
@@ -111,17 +112,17 @@ const LINKED_HEADER_SPEC = {
   merchant_id: str().nullable().default(null),
   group_id: str().nullable().default(null),
   row_index: num().nullable().default(null),
-};
+});
 
-const LINKED_LEG_SPEC = {
-  debit_account_id: str().default("").alias("debit_account"),
-  credit_account_id: str().default("").alias("credit_account"),
+const LINKED_LEG_SPEC = z.object({
+  debit_account_id: str().default(""),
+  credit_account_id: str().default(""),
   currency: str().nullable().default(null),
   description: str().optional(),
   code: str().nullable().default(null),
-};
+});
 
-const STANDALONE_SPEC = {
+const STANDALONE_SPEC = z.object({
   id: str().optional(),
   date: str().default(""),
   description: str().default(""),
@@ -130,10 +131,16 @@ const STANDALONE_SPEC = {
   row_index: num().nullable().default(null),
   merchant: json<MerchantUpsertInput>().nullable().default(null),
   merchant_id: str().nullable().default(null),
-  debit_account_id: str().default("").alias("debit_account"),
-  credit_account_id: str().default("").alias("credit_account"),
+  debit_account_id: str().default(""),
+  credit_account_id: str().default(""),
   currency: str().nullable().default(null),
   code: str().nullable().default(null),
+});
+
+// debit/credit accept a snake_case synonym that isn't the camelCase auto-bridge.
+const LEG_ALIASES = {
+  debit_account_id: ["debit_account"],
+  credit_account_id: ["credit_account"],
 };
 
 export async function ingestCommit(opts: CommitOpts): Promise<void> {
@@ -210,7 +217,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
           legError = "each linked leg must be a JSON object.";
           break;
         }
-        const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord);
+        const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord, { aliases: LEG_ALIASES });
         if (!parsedLeg.ok) {
           legError = parsedLeg.error;
           break;
@@ -259,7 +266,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
     }
 
     // Standalone transaction.
-    const parsed = safeParse(STANDALONE_SPEC, record);
+    const parsed = safeParse(STANDALONE_SPEC, record, { aliases: LEG_ALIASES });
     if (!parsed.ok) {
       failRow(index, parsed.error);
       continue;

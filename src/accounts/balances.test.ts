@@ -62,6 +62,12 @@ describe("getAccountBalancesFromTransactions", () => {
     expect(expenses.every((b) => b.type === "expense")).toBe(true);
     expect(expenses.some((b) => b.id === "asset:cash")).toBe(false);
   });
+
+  it("filters to self + direct children by idOrParent", () => {
+    const rows = getAccountBalancesFromTransactions(db, { idOrParent: "expense" });
+    // self and direct children only — grandchildren (expense:food:*) stay out.
+    expect(rows.map((b) => b.id).sort()).toEqual(["expense", "expense:food"]);
+  });
 });
 
 describe("getNetWorthFromTransactions", () => {

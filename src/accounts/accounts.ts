@@ -25,6 +25,11 @@ export function findAccountById(db: Database.Database, id: string): AccountRow |
   return (db.prepare(`SELECT * FROM accounts WHERE id = ?`).get(id) as AccountRow | undefined) ?? null;
 }
 
+export function countAccounts(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM accounts`).get() as { n: number };
+  return row.n;
+}
+
 export function renameAccount(db: Database.Database, id: string, name: string): number {
   return db.prepare(`UPDATE accounts SET name = ? WHERE id = ?`).run(name, id).changes;
 }

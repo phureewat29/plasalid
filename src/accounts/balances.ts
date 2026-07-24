@@ -38,13 +38,17 @@ const TRANSACTION_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS
 /** Per-account balance from the `transactions` table (normal-balance rule above). */
 export function getAccountBalancesFromTransactions(
   db: Database.Database,
-  opts: { type?: AccountType } = {},
+  opts: { type?: AccountType; idOrParent?: string } = {},
 ): AccountBalanceMinor[] {
   const params: any[] = [];
   const where: string[] = [];
   if (opts.type) {
     where.push("a.type = ?");
     params.push(opts.type);
+  }
+  if (opts.idOrParent) {
+    where.push("(a.id = ? OR a.parent_id = ?)");
+    params.push(opts.idOrParent, opts.idOrParent);
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -180,7 +184,8 @@ export function adjustAccountBalanceViaTransaction(
 
   const currency = account.currency || config.displayCurrency;
   const currentMinor =
-    getAccountBalancesFromTransactions(db).find((b) => b.id === account.id)?.balance_minor ?? 0;
+    getAccountBalancesFromTransactions(db, { idOrParent: account.id }).find((b) => b.id === account.id)
+      ?.balance_minor ?? 0;
   const targetMinor = toMinorUnits(target, currency);
   const deltaMinor = targetMinor - currentMinor;
   if (deltaMinor === 0) return { transactionId: null, delta: 0 };

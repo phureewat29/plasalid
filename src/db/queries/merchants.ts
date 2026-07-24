@@ -157,6 +157,11 @@ export function listMerchants(
   ).all(limit) as (MerchantRow & { alias_count: number })[];
 }
 
+export function countMerchants(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM merchants`).get() as { n: number };
+  return row.n;
+}
+
 export function findMerchantById(
   db: Database.Database,
   id: string,

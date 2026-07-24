@@ -108,15 +108,32 @@ function buildAccountTree(
       roots.push(r);
     }
   }
-  const build = (row: AccountBalanceMinor): AccountTreeNode => ({
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    balance: row.balance,
-    rollup: getRollupBalanceFromTransactions(db, row.id),
-    children: (childrenMap.get(row.id) ?? []).map(build),
-  });
-  return roots.map(build);
+  // Roll up in one post-order pass instead of a per-node subtree query: sum each
+  // subtree's balance_minor by currency, then convert per currency in ascending
+  // order and add. Subtrees are single-type by the hierarchy invariant, so this
+  // reproduces getRollupBalanceFromTransactions's GROUP BY (type, currency) ->
+  // fromMinorUnits-per-group -> cross-group sum, with no float-order drift.
+  const build = (row: AccountBalanceMinor): { node: AccountTreeNode; sums: Map<string, number> } => {
+    const sums = new Map<string, number>();
+    const children = (childrenMap.get(row.id) ?? []).map((childRow) => {
+      const built = build(childRow);
+      for (const [currency, minor] of built.sums) {
+        sums.set(currency, (sums.get(currency) ?? 0) + minor);
+      }
+      return built.node;
+    });
+    sums.set(row.currency, (sums.get(row.currency) ?? 0) + row.balance_minor);
+
+    let rollup = 0;
+    for (const currency of [...sums.keys()].sort()) {
+      rollup += fromMinorUnits(sums.get(currency)!, currency);
+    }
+    return {
+      node: { id: row.id, name: row.name, type: row.type, balance: row.balance, rollup, children },
+      sums,
+    };
+  };
+  return roots.map((row) => build(row).node);
 }
 
 function renderTreeTty(nodes: AccountTreeNode[], depth = 0): void {
@@ -198,7 +215,7 @@ async function showAccount(id: string, opts: { redact?: boolean } = {}): Promise
   const db = await openDb();
   const account = findAccountById(db, id);
   if (!account) fail("NOT_FOUND", `account "${id}" not found`);
-  const balances = getAccountBalancesFromTransactions(db);
+  const balances = getAccountBalancesFromTransactions(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
   const children = balances
     .filter((b) => b.parent_id === id)

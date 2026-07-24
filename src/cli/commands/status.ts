@@ -59,13 +59,12 @@ async function buildReport(): Promise<StatusReport> {
   };
 
   // Deferred so non-db commands skip the libsql cost at startup.
-  const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
-    "../../accounts/balances.js"
-  );
+  const { getNetWorthFromTransactions } = await import("../../accounts/balances.js");
+  const { countAccounts } = await import("../../accounts/accounts.js");
   const { countTransactions } = await import("../../db/queries/transactions.js");
   const { countFiles } = await import("../../db/queries/files.js");
   const { countQuestions } = await import("../../db/queries/questions.js");
-  const { listMerchants } = await import("../../db/queries/merchants.js");
+  const { countMerchants } = await import("../../db/queries/merchants.js");
   const { countMemories } = await import("../../db/queries/notes.js");
 
   // The only reachability probe is opening the db: an unconfigured/wrong-key/
@@ -81,9 +80,9 @@ async function buildReport(): Promise<StatusReport> {
   report.db.reachable = true;
 
   report.counts = {
-    accounts: getAccountBalancesFromTransactions(db).length,
+    accounts: countAccounts(db),
     transactions: countTransactions(db),
-    merchants: listMerchants(db, { limit: 1000 }).length,
+    merchants: countMerchants(db),
     notes: countMemories(db),
   };
   report.files = countFiles(db);

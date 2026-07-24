@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { config, getConfigPath, getDataDir, keyFingerprint } from "../../config.js";
 import { existsSync } from "fs";
-import { formatAmount } from "../../currency.js";
-import { banner, visibleLength, ANSI_RE } from "../format.js";
+import { formatAmount } from "../currency.js";
+import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
 import { currentMode, emit, runAction } from "../output.js";
 import { tryExecute } from "../../lib/result.js";
 
@@ -235,10 +235,6 @@ function renderTty(r: StatusReport, color: boolean): void {
 
 function stripBanner(): string {
   return banner().replace(ANSI_RE, "");
-}
-
-function formatInt(n: number): string {
-  return n.toLocaleString("en-US");
 }
 
 export function registerStatus(program: Command): void {

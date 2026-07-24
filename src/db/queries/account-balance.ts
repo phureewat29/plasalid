@@ -1,6 +1,6 @@
 import type Database from "libsql";
 import { insertTransaction, accountHasTransactions } from "./transactions.js";
-import { fromMinorUnits, toMinorUnits } from "../../currency.js";
+import { fromMinorUnits, toMinorUnits } from "../../lib/money.js";
 import { todayIso } from "../../lib/date.js";
 import { normalizeMaskedAccountNumber } from "./account-match.js";
 import { buildPatch, type PatchField } from "../../lib/patch.js";

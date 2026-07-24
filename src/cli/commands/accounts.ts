@@ -34,7 +34,7 @@ import {
 } from "../../db/queries/account-balance.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "../../db/queries/account-match.js";
 import { ensureAccountAncestors } from "../../ingest/resolve.js";
-import { fromMinorUnits } from "../../currency.js";
+import { fromMinorUnits } from "../../lib/money.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, safeParse, str, num, int, json } from "../../lib/validate.js";

@@ -9,6 +9,7 @@ import {
 } from "../../config.js";
 import { generateKey } from "../../db/encryption.js";
 import { getContextPath } from "../../context.js";
+import { padLabel } from "../format.js";
 import { currentMode, emit, fail, readSecretFromStdin, runAction, type OutputMode } from "../output.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
@@ -58,7 +59,7 @@ function printConfig(mode: OutputMode, data: Record<string, unknown>): void {
     return;
   }
   const width = Math.max(...rows.map(([k]) => k.length));
-  for (const [k, v] of rows) process.stdout.write(`${k.padEnd(width)}  ${v}\n`);
+  for (const [k, v] of rows) process.stdout.write(`${padLabel(k, width)}  ${v}\n`);
 }
 
 /** Every flag the bare `config` action accepts, keyed to auto-bridge commander's

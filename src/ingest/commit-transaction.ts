@@ -15,7 +15,7 @@ import {
   type TransactionInput,
   type ValidateTransactionResult,
 } from "../db/queries/transactions.js";
-import { toMinorUnits } from "../currency.js";
+import { toMinorUnits } from "../lib/money.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import type { MerchantUpsertInput } from "../db/queries/merchants.js";
 

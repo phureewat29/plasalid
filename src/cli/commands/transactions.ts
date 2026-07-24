@@ -39,7 +39,7 @@ import {
   type RawTransactionInput,
 } from "../../ingest/commit-transaction.js";
 import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup-transactions.js";
-import { fromMinorUnits, toMinorUnits } from "../../currency.js";
+import { fromMinorUnits, toMinorUnits } from "../../lib/money.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
 import * as z from "zod";

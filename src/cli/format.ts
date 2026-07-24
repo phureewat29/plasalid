@@ -7,6 +7,16 @@ export function visibleLength(s: string): number {
   return s.replace(ANSI_RE, "").length;
 }
 
+export function formatInt(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+/** Left-pad a key/value label to `width`, optionally bold (padding first so the ANSI codes don't count toward the width). */
+export function padLabel(label: string, width: number, opts: { bold?: boolean } = {}): string {
+  const padded = label.padEnd(width);
+  return opts.bold ? chalk.bold(padded) : padded;
+}
+
 export function banner(): string {
   return (
     chalk.cyan("<°(((><  ") +

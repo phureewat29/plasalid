@@ -1,49 +1,11 @@
-import { config } from "./config.js";
-
-const DEFAULT_LOCALE = "th-TH";
-const DEFAULT_CURRENCY = "THB";
-
-export function getDisplayLocale(): string {
-  return config.displayLocale || DEFAULT_LOCALE;
-}
-
-export function getDisplayCurrency(): string {
-  return config.displayCurrency || DEFAULT_CURRENCY;
-}
-
-export function formatCurrencyAmount(
-  amount: number,
-  options: {
-    minimumFractionDigits?: number;
-    maximumFractionDigits?: number;
-    currency?: string;
-  } = {},
-): string {
-  const locale = getDisplayLocale();
-  const currency = options.currency || getDisplayCurrency();
-
-  return new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency,
-    minimumFractionDigits: options.minimumFractionDigits,
-    maximumFractionDigits: options.maximumFractionDigits,
-  }).format(Math.abs(amount));
-}
-
-export function formatAmount(amount: number, currency?: string): string {
-  return formatCurrencyAmount(amount, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    currency,
-  });
-}
-
 /**
  * Minor-unit (integer) money helpers: `transactions` stores amounts as
  * integers in the currency's smallest unit (THB satang, JPY has none, KWD has
  * three) to avoid float drift. Decimal <-> minor-unit conversion happens only
  * at the CLI/pipeline boundary.
  */
+
+const DEFAULT_CURRENCY = "THB";
 
 const exponentCache = new Map<string, number>();
 
@@ -79,4 +41,3 @@ export function toMinorUnits(decimal: number, currency: string): number {
 export function fromMinorUnits(minor: number, currency: string): number {
   return minor / 10 ** minorUnitExponent(currency);
 }
-

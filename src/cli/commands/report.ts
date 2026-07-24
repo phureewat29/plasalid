@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import chalk from "chalk";
+import { padLabel } from "../format.js";
 import { currentMode, emit, fail, runAction, type OutputMode } from "../output.js";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -12,8 +12,7 @@ function printKeyValues(mode: OutputMode, rows: [string, string | number][]): vo
   }
   const width = Math.max(...rows.map(([k]) => k.length));
   for (const [k, v] of rows) {
-    const label = mode.color ? chalk.bold(k.padEnd(width)) : k.padEnd(width);
-    process.stdout.write(`${label}  ${v}\n`);
+    process.stdout.write(`${padLabel(k, width, { bold: mode.color })}  ${v}\n`);
   }
 }
 

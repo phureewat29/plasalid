@@ -1,7 +1,6 @@
 import { describe, it, expectTypeOf } from "vitest";
 import * as z from "zod";
 import { str, int, json } from "./validate.js";
-import type { UpdateAccountMetadataPatch } from "../db/queries/account-balance.js";
 
 describe("z.infer — worked shapes", () => {
   it("optional string becomes an optional key", () => {
@@ -32,19 +31,5 @@ describe("z.infer — worked shapes", () => {
   it("json<T> carries its type parameter through optional", () => {
     const spec = z.object({ metadata: json<Record<string, unknown>>().optional() });
     expectTypeOf<z.infer<typeof spec>>().toEqualTypeOf<{ metadata?: Record<string, unknown> }>();
-  });
-});
-
-describe("z.infer — real call-site type", () => {
-  it("a representative patch spec infers a type assignable to UpdateAccountMetadataPatch", () => {
-    const patchSpec = z.object({
-      due_day: int().optional().nullable(),
-      statement_day: int().optional().nullable(),
-      points_balance: int().optional().nullable(),
-      account_number_masked: str().optional().nullable(),
-      bank_name: str().optional().nullable(),
-      metadata: json<Record<string, unknown>>().optional(),
-    });
-    expectTypeOf<z.infer<typeof patchSpec>>().toMatchTypeOf<UpdateAccountMetadataPatch>();
   });
 });

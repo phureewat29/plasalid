@@ -18,6 +18,7 @@ import { registerMerchants } from "./commands/merchants.js";
 import { registerQuestions } from "./commands/questions.js";
 import { registerReport } from "./commands/report.js";
 import { registerNotes } from "./commands/notes.js";
+import { registerDatasets } from "./commands/datasets.js";
 import { registerData } from "./commands/data.js";
 
 export const COMMANDS = [
@@ -34,6 +35,7 @@ export const COMMANDS = [
   { name: "questions", desc: "List, answer, and defer open questions" },
   { name: "report", desc: "Income/expenses/net over a date range (net worth: plasalid status)" },
   { name: "notes", desc: "Manage freeform notes" },
+  { name: "datasets", desc: "Reference datasets: plasalid datasets [name] (institutions, defaults)" },
   { name: "data", desc: "Open the data folder in your OS file explorer (alias: open)" },
 ];
 
@@ -81,6 +83,7 @@ export function buildProgram(): Command {
   registerQuestions(program);
   registerReport(program);
   registerNotes(program);
+  registerDatasets(program);
 
   // On every command so --json/--no-color work before or after the subcommand
   // name; getOutputMode() OR-walks the chain to find them wherever they land.

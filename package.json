@@ -29,7 +29,7 @@
   "files": [
     "dist/",
     "skills/",
-    "taxonomy/"
+    "datasets/"
   ],
   "scripts": {
     "build": "tsc",

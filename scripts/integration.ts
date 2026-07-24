@@ -87,6 +87,11 @@ const READ_CASES: Case[] = [
     args: ["report", "--from", "2026-01-01", "--to", "2026-01-31"],
   },
   { label: "notes list", args: ["notes", "list"] },
+  { label: "datasets", args: ["datasets"] },
+  {
+    label: "datasets institutions --country th",
+    args: ["datasets", "institutions", "--country", "th"],
+  },
   {
     label: "transactions show tx:nonexistent",
     args: ["transactions", "show", "tx:nonexistent"],

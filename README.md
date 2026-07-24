@@ -132,6 +132,7 @@ plasalid questions      # List, answer, and defer open questions
 
 plasalid report         # Income / expenses / net over a date range (net worth: plasalid status)
 plasalid notes          # Manage freeform notes
+plasalid datasets       # Reference datasets: `plasalid datasets [name]` (institutions, defaults)
 
 plasalid data           # Open the data folder in your OS file explorer (alias: open)
 ```

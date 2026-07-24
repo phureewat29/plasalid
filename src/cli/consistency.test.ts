@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram, COMMANDS } from "./program.js";
 import { AGENTS_MD_BLOCK } from "../setup/codex.js";
-import { findInstitutions } from "../accounts/taxonomy.js";
+import { findInstitutions } from "../datasets/institutions.js";
 
 /**
  * Drift-prevention test: no subprocesses, pure import + string parsing. Keeps

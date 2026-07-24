@@ -1,6 +1,6 @@
 ---
 name: plasalid
-description: Drive plasalid, a local double-entry personal-finance harness, via the CLI. Use for anything about the ledger, bank or credit-card statements, Thai bank PDFs, net worth, spending, accounts, transactions, or merchants — or whenever the user names plasalid, asks to install it, or wants tracking set up from statement PDFs. Ingests, categorizes, and reports on it; installs the CLI from npm on first use.
+description: A local double-entry personal-finance harness, via the CLI. Use for anything about the ledger, bank or credit-card statements, bank PDFs, net worth, spending, accounts, transactions, or merchants — or whenever the user names plasalid, asks to install it, or wants tracking set up from statement PDFs. Ingests, categorizes, and reports on it; installs the CLI from npm on first use.
 ---
 
 # plasalid
@@ -91,6 +91,7 @@ Degrade in this order when your *environment* fights you — never silently brea
 - **Reporting** — net worth: `plasalid status --json` (`net_worth`); `plasalid report --from <date> --to <date> --json`; `plasalid accounts show <id> --json` and `plasalid accounts tree --json` (`balance`/`debits_posted`/`credits_posted`, rollups); `plasalid transactions list --json` (+ `show <tx:id> --json`; 50 rows default, 500 max via `--limit`, summary has `has_more`); `plasalid transactions dedupe --json`.
 - **Cross-statement mirrors** — same payment on two statements: ingest both, find the pair with `plasalid transactions dedupe --json` (or `list --amount <decimal> [--currency <code>]`), then `plasalid transactions merge --from <tx:id> --to <tx:id> --yes --json` voids `--from` into `--to` (kept; idempotent re-ingest). Match amount, currency, and both accounts.
 - **Source files** — inspect or drop the statement files backing the ledger: `plasalid files list --json`, `plasalid files show <sf:id> --json`, `plasalid files drop <sf:id> --yes --json` (cascades its transactions + questions).
+- **Reference data** — the institution codes + country defaults behind account leaves: `plasalid datasets --json` lists the datasets; `plasalid datasets institutions --country th --kind bank --json` filters a country's institutions; `plasalid datasets defaults --json` gives per-country locale/currency.
 
 ## Ingest items
 

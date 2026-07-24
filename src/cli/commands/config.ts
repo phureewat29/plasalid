@@ -5,9 +5,11 @@ import {
   config as appConfig,
   getConfigPath,
   keyFingerprint,
+  loadPersistedConfig,
   saveConfig,
   type PlasalidConfig,
 } from "../../config.js";
+import { findCountryDefaults, availableCountries } from "../../datasets/defaults.js";
 import { generateKey } from "../../db/encryption.js";
 import { getContextPath } from "../../context.js";
 import { printKeyValues } from "../format.js";
@@ -67,6 +69,7 @@ const CONVERGE_FLAGS_SPEC = z.object({
   locale: str().optional(),
   currency: str().optional(),
   user_name: str().optional(),
+  country: str().optional(),
 });
 
 type ConvergeFlags = z.infer<typeof CONVERGE_FLAGS_SPEC>;
@@ -83,8 +86,25 @@ async function convergeConfig(flags: ConvergeFlags): Promise<void> {
 
   const dataDir: string = flags.data_dir ?? appConfig.dataDir;
   const dbPath: string = flags.db ?? appConfig.dbPath;
-  const displayLocale: string = flags.locale ?? appConfig.displayLocale;
-  const displayCurrency: string = flags.currency ?? appConfig.displayCurrency;
+
+  // Seed locale/currency from the chosen country's dataset defaults, but only
+  // where the user hasn't already spoken. Precedence: explicit flag > env var >
+  // persisted file value > dataset default > code default. displayLocale/
+  // displayCurrency have no env var today, so that tier is currently a no-op; a
+  // persisted value still wins over the dataset, and the dataset default replaces
+  // the code default as the last resort (country defaults to "th", whose dataset
+  // matches the old hardcoded th-TH/THB).
+  const country = flags.country ?? "th";
+  const defaults = findCountryDefaults(country);
+  if (!defaults) {
+    fail("USAGE", `unknown country "${country}"`, {
+      hint: `available: ${availableCountries().join(", ")}`,
+    });
+  }
+  const persisted = loadPersistedConfig();
+  const displayLocale: string = flags.locale || persisted.displayLocale || defaults.locale;
+  const displayCurrency: string = flags.currency || persisted.displayCurrency || defaults.currency;
+
   const userName: string = flags.user_name ?? appConfig.userName;
 
   mkdirSync(dataDir, { recursive: true });
@@ -165,6 +185,7 @@ export function registerConfig(program: Command): void {
     .option("--encryption-key-stdin", "read an encryption key from stdin")
     .option("--locale <locale>", "locale")
     .option("--currency <code>", "default currency code")
+    .option("--country <code>", "seed locale/currency from a country's defaults (default: th)")
     .option("--user-name <name>", "user display name")
     .action(runAction(configureHarness));
 

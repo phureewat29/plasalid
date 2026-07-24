@@ -103,6 +103,16 @@ function buildConfig(): PlasalidConfig {
 
 export const config = buildConfig();
 
+/**
+ * The persisted config, projected to known keys — file values only, with neither
+ * env overrides nor the hardcoded defaults folded in. Converge uses this to tell
+ * an explicitly-persisted value apart from a defaulted one, so it can slot a
+ * dataset-derived default between the two.
+ */
+export function loadPersistedConfig(): Partial<PlasalidConfig> {
+  return pickConfigFields(loadFileConfig() as Record<string, unknown>);
+}
+
 export function saveConfig(partial: Partial<PlasalidConfig>): void {
   const configPath = getConfigPath();
   if (!existsSync(PLASALID_DIR)) mkdirSync(PLASALID_DIR, { recursive: true });

@@ -6,6 +6,7 @@ import { formatAmount } from "../currency.js";
 import { banner, visibleLength, ANSI_RE, formatInt } from "../format.js";
 import { currentMode, emit, runAction } from "../output.js";
 import { tryExecute } from "../../lib/result.js";
+import { openDb } from "../db.js";
 
 interface Counts {
   accounts: number;
@@ -58,7 +59,6 @@ async function buildReport(): Promise<StatusReport> {
   };
 
   // Deferred so non-db commands skip the libsql cost at startup.
-  const { getDb } = await import("../../db/connection.js");
   const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
     "../../accounts/balances.js"
   );
@@ -72,7 +72,7 @@ async function buildReport(): Promise<StatusReport> {
   // unreadable db degrades to not-ready here. Counts run AFTER, outside the
   // probe, so a bug in a query surfaces as a real error (via runAction) rather
   // than masquerading as an unreachable database.
-  const opened = tryExecute(() => getDb());
+  const opened = await tryExecute(() => openDb());
   if (!opened.ok) {
     report.db.error = opened.error;
     return report;
@@ -99,7 +99,7 @@ async function buildReport(): Promise<StatusReport> {
 // home directory. Counts, booleans, and net-worth numbers are left verbatim.
 const STATUS_REDACT_FIELDS = ["config_path", "data_dir", "path", "error", "user_name"] as const;
 
-export async function runStatus(opts: { redact?: boolean } = {}): Promise<void> {
+export async function showStatus(opts: { redact?: boolean } = {}): Promise<void> {
   let report = await buildReport();
   if (opts.redact) {
     const { applyRedaction } = await import("../../privacy/redactor.js");
@@ -242,5 +242,5 @@ export function registerStatus(program: Command): void {
     .command("status")
     .description("Show harness status: config, database, ledger counts, net worth")
     .option("--no-redact", "skip PII redaction (on by default)")
-    .action(runAction(async (opts: { redact?: boolean }) => runStatus(opts)));
+    .action(runAction(showStatus));
 }

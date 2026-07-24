@@ -5,7 +5,7 @@ import { helpScreen } from "./format.js";
 import { runAction } from "./output.js";
 
 // Harness command modules. Each registers its own noun + subcommand tree.
-import { registerStatus, runStatus } from "./commands/status.js";
+import { registerStatus, showStatus } from "./commands/status.js";
 import { registerDoctor } from "./commands/doctor.js";
 import { registerSetup } from "./commands/setup.js";
 import { registerConfig } from "./commands/config.js";
@@ -18,6 +18,7 @@ import { registerMerchants } from "./commands/merchants.js";
 import { registerQuestions } from "./commands/questions.js";
 import { registerReport } from "./commands/report.js";
 import { registerNotes } from "./commands/notes.js";
+import { registerData } from "./commands/data.js";
 
 export const COMMANDS = [
   { name: "status", desc: "Harness status: config, database, ledger counts, net worth (default)" },
@@ -62,22 +63,11 @@ export function buildProgram(): Command {
     // Bare `plasalid` reports harness status (same implementation as `status`).
     .action(
       runAction(async () => {
-        await runStatus();
+        await showStatus();
       }),
     );
 
-  // `data` opens the OS file explorer at the data dir; a thin, db-free command.
-  program
-    .command("data")
-    .alias("open")
-    .description("Open the Plasalid data folder in your OS file explorer")
-    .action(
-      runAction(async () => {
-        const { runDataCommand } = await import("./commands/data.js");
-        await runDataCommand();
-      }),
-    );
-
+  registerData(program);
   registerStatus(program);
   registerDoctor(program);
   registerSetup(program);

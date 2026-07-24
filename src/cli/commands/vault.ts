@@ -17,11 +17,22 @@ import { openDb } from "../db.js";
  * savePassword); this surface never prints plaintext.
  */
 
-interface AddOpts {
+// Erased type query: the stored-password row shape without pulling the db
+// module onto the startup path.
+type VaultRow = ReturnType<typeof import("../../db/queries/vault.js").listPasswords>[number];
+
+const VAULT_COLUMNS: Column<VaultRow>[] = [
+  { header: "ID", value: (r) => r.id },
+  { header: "Pattern", value: (r) => r.pattern },
+  { header: "Uses", value: (r) => String(r.use_count), align: "right" },
+  { header: "Last Used", value: (r) => r.last_used_at ?? "-" },
+];
+
+interface AddVaultEntryOpts {
   passwordStdin?: boolean;
 }
 
-async function vaultAdd(pattern: string, _opts: AddOpts): Promise<void> {
+async function addVaultEntry(pattern: string, _opts: AddVaultEntryOpts): Promise<void> {
   try {
     // eslint-disable-next-line no-new
     new RegExp(pattern);
@@ -42,25 +53,18 @@ async function vaultAdd(pattern: string, _opts: AddOpts): Promise<void> {
   emitObject({ id, pattern });
 }
 
-async function vaultList(): Promise<void> {
+async function listVaultEntries(): Promise<void> {
   const db = await openDb();
   const { listPasswords } = await import("../../db/queries/vault.js");
   const rows = listPasswords(db);
-
-  const columns: Column<(typeof rows)[number]>[] = [
-    { header: "ID", value: (r) => r.id },
-    { header: "PATTERN", value: (r) => r.pattern },
-    { header: "USES", value: (r) => String(r.use_count), align: "right" },
-    { header: "LAST_USED", value: (r) => r.last_used_at ?? "-" },
-  ];
-  emitList(rows, columns);
+  emitList(rows, VAULT_COLUMNS);
 }
 
-interface RmOpts {
+interface RemoveVaultEntryOpts {
   yes?: boolean;
 }
 
-async function vaultRm(patternOrId: string, opts: RmOpts): Promise<void> {
+async function removeVaultEntry(patternOrId: string, opts: RemoveVaultEntryOpts): Promise<void> {
   requireYes(opts, `removing vault entry "${patternOrId}"`);
   const db = await openDb();
   const { deletePassword } = await import("../../db/queries/vault.js");
@@ -77,16 +81,16 @@ export function registerVault(program: Command): void {
     .command("add <pattern>")
     .description("Add a vault entry for a file pattern (password read from stdin)")
     .option("--password-stdin", "read a password from stdin")
-    .action(runAction(vaultAdd));
+    .action(runAction(addVaultEntry));
 
   vault
     .command("list")
     .description("List vault entries (never prints stored passwords)")
-    .action(runAction(vaultList));
+    .action(runAction(listVaultEntries));
 
   vault
     .command("rm <patternOrId>")
     .description("Remove a vault entry")
     .option("--yes", "skip confirmation")
-    .action(runAction(vaultRm));
+    .action(runAction(removeVaultEntry));
 }

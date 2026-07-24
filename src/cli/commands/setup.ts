@@ -7,13 +7,58 @@ import {
   type InstallOptions,
 } from "../../setup/install.js";
 
-interface SetupOptions {
+interface SetupOpts {
   claude?: boolean;
   codex?: boolean;
   global?: boolean;
   dir?: string;
   force?: boolean;
   print?: boolean;
+}
+
+async function setupSkillPack(opts: SetupOpts): Promise<void> {
+  // --print dumps the checked-in SKILL.md so a human/agent can inspect it
+  // without touching the filesystem. It is markdown, not NDJSON, even under --json.
+  if (opts.print) {
+    const md = skillMd();
+    process.stdout.write(md);
+    if (!md.endsWith("\n")) process.stdout.write("\n");
+    return;
+  }
+
+  const installOpts: InstallOptions = {
+    claude: opts.claude,
+    codex: opts.codex,
+    global: opts.global,
+    dir: opts.dir,
+    force: opts.force,
+  };
+
+  let result;
+  try {
+    result = installSkillPack(installOpts);
+  } catch (err) {
+    if (err instanceof SkillPackVersionError) {
+      fail("INVALID", err.message, {
+        hint: "re-run with --force to overwrite the installed skill pack",
+        details: {
+          installed_version: err.installedVersion,
+          cli_version: err.cliVersion,
+          path: err.path,
+        },
+      });
+    }
+    throw err;
+  }
+
+  const mode = currentMode();
+  if (mode.json) {
+    emit({ installed: result.installed });
+  } else {
+    for (const t of result.installed) {
+      process.stdout.write(`${t.kind}\t${t.path}\t${t.version}\n`);
+    }
+  }
 }
 
 export function registerSetup(program: Command): void {
@@ -26,50 +71,5 @@ export function registerSetup(program: Command): void {
     .option("--dir <path>", "override the install base directory")
     .option("--force", "overwrite an installed skill dir whose version differs")
     .option("--print", "print SKILL.md to stdout as raw markdown and exit (ignores --json)")
-    .action(
-      runAction(async (opts: SetupOptions) => {
-        // --print dumps the checked-in SKILL.md so a human/agent can inspect it
-        // without touching the filesystem. It is markdown, not NDJSON, even under --json.
-        if (opts.print) {
-          const md = skillMd();
-          process.stdout.write(md);
-          if (!md.endsWith("\n")) process.stdout.write("\n");
-          return;
-        }
-
-        const installOpts: InstallOptions = {
-          claude: opts.claude,
-          codex: opts.codex,
-          global: opts.global,
-          dir: opts.dir,
-          force: opts.force,
-        };
-
-        let result;
-        try {
-          result = installSkillPack(installOpts);
-        } catch (err) {
-          if (err instanceof SkillPackVersionError) {
-            fail("INVALID", err.message, {
-              hint: "re-run with --force to overwrite the installed skill pack",
-              details: {
-                installed_version: err.installedVersion,
-                cli_version: err.cliVersion,
-                path: err.path,
-              },
-            });
-          }
-          throw err;
-        }
-
-        const mode = currentMode();
-        if (mode.json) {
-          emit({ installed: result.installed });
-        } else {
-          for (const t of result.installed) {
-            process.stdout.write(`${t.kind}\t${t.path}\t${t.version}\n`);
-          }
-        }
-      }),
-    );
+    .action(runAction(setupSkillPack));
 }

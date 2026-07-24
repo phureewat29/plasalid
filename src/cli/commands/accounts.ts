@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { getDb } from "../../db/connection.js";
 import {
   EXIT,
   asRecord,
@@ -16,12 +15,13 @@ import {
   runAction,
   type Column,
 } from "../output.js";
+import { openDb } from "../db.js";
 import { errorMessage } from "../../lib/result.js";
 import {
-  createAccount,
+  createAccount as createAccountRow,
   renameAccount,
-  mergeAccounts,
-  deleteAccount,
+  mergeAccounts as mergeAccountRows,
+  deleteAccount as deleteAccountRow,
   updateAccountMetadata,
   findAccountById,
 } from "../../accounts/accounts.js";
@@ -55,7 +55,7 @@ type PresentedAccount = Omit<
   "balance_minor" | "debits_posted" | "credits_posted"
 > & { debits_posted: number; credits_posted: number };
 
-function present(a: AccountBalanceMinor): PresentedAccount {
+function presentAccount(a: AccountBalanceMinor): PresentedAccount {
   const { balance_minor: _bm, debits_posted, credits_posted, ...rest } = a;
   return {
     ...rest,
@@ -92,7 +92,7 @@ interface AccountTreeNode {
 }
 
 function buildAccountTree(
-  db: ReturnType<typeof getDb>,
+  db: Database.Database,
   type: AccountType | undefined,
 ): AccountTreeNode[] {
   const rows = getAccountBalancesFromTransactions(db, type ? { type } : {});
@@ -146,11 +146,16 @@ function renderTreePlain(nodes: AccountTreeNode[]): void {
 
 // Per-subcommand actions (registered by registerAccounts below).
 
-function listAccounts(opts: { type?: string; redact?: boolean }): void {
-  const db = getDb();
+interface ListAccountsOpts {
+  type?: string;
+  redact?: boolean;
+}
+
+async function listAccounts(opts: ListAccountsOpts): Promise<void> {
+  const db = await openDb();
   const rows = applyRedaction(
     getAccountBalancesFromTransactions(db, opts.type ? { type: opts.type as AccountType } : {}).map(
-      present,
+      presentAccount,
     ),
     !!opts.redact,
     ACCOUNT_REDACT_FIELDS,
@@ -158,8 +163,12 @@ function listAccounts(opts: { type?: string; redact?: boolean }): void {
   emitList(rows, ACCOUNT_COLUMNS);
 }
 
-function treeAccounts(opts: { type?: string }): void {
-  const db = getDb();
+interface TreeAccountsOpts {
+  type?: string;
+}
+
+async function treeAccounts(opts: TreeAccountsOpts): Promise<void> {
+  const db = await openDb();
   const roots = buildAccountTree(db, opts.type as AccountType | undefined);
   const mode = currentMode();
   if (mode.json) {
@@ -173,8 +182,8 @@ function treeAccounts(opts: { type?: string }): void {
   renderTreePlain(roots);
 }
 
-function showAccount(id: string): void {
-  const db = getDb();
+async function showAccount(id: string): Promise<void> {
+  const db = await openDb();
   const account = findAccountById(db, id);
   if (!account) fail("NOT_FOUND", `account "${id}" not found`);
   const balances = getAccountBalancesFromTransactions(db);
@@ -221,7 +230,7 @@ interface CreateOneAccountResult {
 /**
  * Shared by the single-flag action and the `--input` batch loop. Auto-creates
  * missing ancestors from the id's colon segments when no explicit parent was
- * given (skipped for an unrecognized type, so `createAccount` reports a clean
+ * given (skipped for an unrecognized type, so `createAccountRow` reports a clean
  * INVALID instead of failing deeper in the ancestor walk). Throws on failure,
  * including the `ACCOUNT_EXISTS`-coded duplicate.
  */
@@ -252,7 +261,7 @@ function createOneAccount(
     statement_day: parsed.statement_day ?? null,
     metadata: parsed.metadata ?? null,
   };
-  createAccount(db, input);
+  createAccountRow(db, input);
 
   const result: CreateOneAccountResult = { id: input.id, created_parents: createdParents };
   // Only echo the masked number back when the caller actually provided one —
@@ -271,9 +280,9 @@ function maskedResultField(result: CreateOneAccountResult): Record<string, unkno
     : {};
 }
 
-function createSingleAccount(opts: Record<string, unknown>): void {
+async function createSingleAccount(opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(CREATE_ACCOUNT_SPEC, opts, { aliases: CREATE_ACCOUNT_ALIASES });
-  const db = getDb();
+  const db = await openDb();
   let result: CreateOneAccountResult;
   try {
     result = createOneAccount(db, parsed);
@@ -301,7 +310,7 @@ async function createAccountsBatch(inputPath: string | undefined): Promise<void>
   const items = await readStdinBatch(inputPath);
   if (items.length === 0) fail("USAGE", "no account data provided");
 
-  const db = getDb();
+  const db = await openDb();
   const results: Record<string, unknown>[] = [];
   let created = 0;
   let duplicates = 0;
@@ -358,7 +367,7 @@ async function createAccountsBatch(inputPath: string | undefined): Promise<void>
   if (failed > 0) process.exitCode = EXIT.PARTIAL;
 }
 
-async function createAccountAction(opts: Record<string, unknown>): Promise<void> {
+async function createAccount(opts: Record<string, unknown>): Promise<void> {
   if (opts.input !== undefined) {
     if (Object.keys(opts).some((k) => opts[k] !== undefined && !NON_ACCOUNT_FLAG_KEYS.has(k))) {
       fail("USAGE", "--input and per-account flags are mutually exclusive");
@@ -366,7 +375,7 @@ async function createAccountAction(opts: Record<string, unknown>): Promise<void>
     await createAccountsBatch(opts.input as string);
     return;
   }
-  createSingleAccount(opts);
+  await createSingleAccount(opts);
 }
 
 const MERGE_ACCOUNTS_SPEC = z.object({
@@ -374,13 +383,19 @@ const MERGE_ACCOUNTS_SPEC = z.object({
   to: str(),
 });
 
-function mergeAccountsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
+interface MergeAccountsOpts {
+  from?: string;
+  to?: string;
+  yes?: boolean;
+}
+
+async function mergeAccounts(opts: MergeAccountsOpts): Promise<void> {
   const parsed = parseInput(MERGE_ACCOUNTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging accounts");
-  const db = getDb();
+  const db = await openDb();
   let result;
   try {
-    result = mergeAccounts(db, parsed.from, parsed.to);
+    result = mergeAccountRows(db, parsed.from, parsed.to);
   } catch (err) {
     mapNotFoundError(err, /does not exist/i);
   }
@@ -392,12 +407,12 @@ function mergeAccountsAction(opts: { from?: string; to?: string; yes?: boolean }
   });
 }
 
-function deleteAccountAction(id: string, opts: { yes?: boolean }): void {
-  const db = getDb();
+async function deleteAccount(id: string, opts: { yes?: boolean }): Promise<void> {
+  const db = await openDb();
   if (!findAccountById(db, id)) fail("NOT_FOUND", `account "${id}" not found`);
   requireYes(opts, "deleting this account");
   try {
-    deleteAccount(db, id);
+    deleteAccountRow(db, id);
   } catch (err) {
     mapNotFoundError(err, /does not exist/i);
   }
@@ -410,13 +425,10 @@ const ADJUST_ACCOUNT_SPEC = z.object({
   date: str().optional(),
 });
 
-function adjustAccountAction(
-  id: string,
-  opts: { to?: string; reason?: string; date?: string },
-): void {
-  const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts as Record<string, unknown>);
+async function adjustAccount(id: string, opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(ADJUST_ACCOUNT_SPEC, opts);
 
-  const db = getDb();
+  const db = await openDb();
   let result;
   try {
     result = adjustAccountBalanceViaTransaction(db, {
@@ -435,9 +447,9 @@ const MATCH_ACCOUNTS_SPEC = z.object({
   query: str(),
 });
 
-function matchAccounts(opts: { query?: string }): void {
-  const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts as Record<string, unknown>);
-  const db = getDb();
+async function matchAccounts(opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(MATCH_ACCOUNTS_SPEC, opts);
+  const db = await openDb();
   const matches = findAccountsByFuzzyName(db, parsed.query);
   emitList(matches, MATCH_COLUMNS);
 }
@@ -458,7 +470,7 @@ const UPDATE_ACCOUNT_ALIASES = {
   bank_name: ["bank"],
 };
 
-function updateAccountAction(id: string, opts: Record<string, unknown>): void {
+async function updateAccount(id: string, opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(UPDATE_ACCOUNT_SPEC, opts, {
     aliases: UPDATE_ACCOUNT_ALIASES,
     atLeastOne:
@@ -466,7 +478,7 @@ function updateAccountAction(id: string, opts: Record<string, unknown>): void {
   });
   const { name, ...patch } = parsed;
 
-  const db = getDb();
+  const db = await openDb();
   const result: Record<string, unknown> = { id };
 
   if (name !== undefined) {
@@ -496,8 +508,13 @@ const INSTITUTION_COLUMNS: Column<LoadedInstitution>[] = [
   { header: "Country", value: (i) => i.country },
 ];
 
+interface ListInstitutionsOpts {
+  country?: string;
+  kind?: string;
+}
+
 /** Thin presentation adapter over the taxonomy loader (no business logic). */
-function listInstitutions(opts: { country?: string; kind?: string }): void {
+function listInstitutions(opts: ListInstitutionsOpts): void {
   emitList(findInstitutions(opts), INSTITUTION_COLUMNS);
 }
 
@@ -537,7 +554,7 @@ export function registerAccounts(program: Command): void {
     .option("--statement-day <n>", "statement closing day")
     .option("--metadata <json>", "additional metadata as JSON")
     .option("--input <path>", "batch-create accounts from an NDJSON/JSON file instead of individual flags")
-    .action(runAction(createAccountAction));
+    .action(runAction(createAccount));
 
   accounts
     .command("merge")
@@ -545,13 +562,13 @@ export function registerAccounts(program: Command): void {
     .option("--from <id>", "account id to merge from")
     .option("--to <id>", "account id to merge into")
     .option("--yes", "skip confirmation")
-    .action(runAction(mergeAccountsAction));
+    .action(runAction(mergeAccounts));
 
   accounts
     .command("delete <id>")
     .description("Delete an account")
     .option("--yes", "skip confirmation")
-    .action(runAction(deleteAccountAction));
+    .action(runAction(deleteAccount));
 
   accounts
     .command("adjust <id>")
@@ -559,7 +576,7 @@ export function registerAccounts(program: Command): void {
     .option("--to <amount>", "target balance amount")
     .option("--reason <text>", "reason for the adjustment")
     .option("--date <date>", "adjustment date")
-    .action(runAction(adjustAccountAction));
+    .action(runAction(adjustAccount));
 
   accounts
     .command("match")
@@ -584,5 +601,5 @@ export function registerAccounts(program: Command): void {
     .option("--masked <number>", "masked account number")
     .option("--bank <name>", "bank name")
     .option("--metadata <json>", "additional metadata as JSON")
-    .action(runAction(updateAccountAction));
+    .action(runAction(updateAccount));
 }

@@ -1,14 +1,14 @@
 import type { Command } from "commander";
-import { getDb } from "../../db/connection.js";
 import { emit, emitList, fail, mapNotFoundError, requireYes, runAction, type Column } from "../output.js";
+import { openDb } from "../db.js";
 import {
-  listMerchants,
+  listMerchants as queryMerchants,
   findMerchantByAlias,
   findMerchantById,
-  upsertMerchant,
+  upsertMerchant as upsertMerchantRow,
   setMerchantDefaultAccount,
   clearMerchantDefaultAccount,
-  mergeMerchants,
+  mergeMerchants as mergeMerchantRows,
   type MerchantRow,
   type MerchantUpsertInput,
 } from "../../db/queries/merchants.js";
@@ -23,16 +23,16 @@ const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
   { header: "Aliases", value: (m) => String(m.alias_count), align: "right" },
 ];
 
-function listMerchantsAction(): void {
-  const db = getDb();
-  emitList(listMerchants(db), MERCHANT_COLUMNS);
+async function listMerchants(): Promise<void> {
+  const db = await openDb();
+  emitList(queryMerchants(db), MERCHANT_COLUMNS);
 }
 
 const RESOLVE_MERCHANT_SPEC = z.object({ descriptor: str() });
 
-function resolveMerchantAction(opts: Record<string, unknown>): void {
+async function resolveMerchant(opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(RESOLVE_MERCHANT_SPEC, opts);
-  const db = getDb();
+  const db = await openDb();
   const match = findMerchantByAlias(db, parsed.descriptor);
   if (!match) {
     emit({ found: false });
@@ -52,16 +52,16 @@ const UPSERT_MERCHANT_SPEC = z.object({
   default_account: str().optional(),
 });
 
-function upsertMerchantAction(opts: Record<string, unknown>): void {
+async function upsertMerchant(opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(UPSERT_MERCHANT_SPEC, opts);
-  const db = getDb();
+  const db = await openDb();
   if (parsed.default_account && !findAccountById(db, parsed.default_account)) {
     fail("NOT_FOUND", `account "${parsed.default_account}" not found`);
   }
   const input: MerchantUpsertInput = { canonical_name: parsed.name };
   if (parsed.alias) input.alias = parsed.alias;
   if (parsed.default_account) input.default_account_id = parsed.default_account;
-  const merchant = upsertMerchant(db, input);
+  const merchant = upsertMerchantRow(db, input);
   emit(merchant);
 }
 
@@ -71,13 +71,13 @@ const SET_DEFAULT_SPEC = z.object({
   clear: bool().optional(),
 });
 
-function setDefaultAction(opts: Record<string, unknown>): void {
+async function setMerchantDefault(opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(SET_DEFAULT_SPEC, opts);
   if (!!parsed.account === !!parsed.clear) {
     fail("USAGE", "exactly one of --account or --clear is required");
   }
 
-  const db = getDb();
+  const db = await openDb();
   if (!findMerchantById(db, parsed.merchant)) {
     fail("NOT_FOUND", `merchant "${parsed.merchant}" not found`);
   }
@@ -101,13 +101,19 @@ const MERGE_MERCHANTS_SPEC = z.object({
   to: str(),
 });
 
-function mergeMerchantsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
+interface MergeMerchantsOpts {
+  from?: string;
+  to?: string;
+  yes?: boolean;
+}
+
+async function mergeMerchants(opts: MergeMerchantsOpts): Promise<void> {
   const parsed = parseInput(MERGE_MERCHANTS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging merchants");
-  const db = getDb();
+  const db = await openDb();
   let result;
   try {
-    result = mergeMerchants(db, parsed.from, parsed.to);
+    result = mergeMerchantRows(db, parsed.from, parsed.to);
   } catch (err) {
     mapNotFoundError(err);
   }
@@ -117,13 +123,13 @@ function mergeMerchantsAction(opts: { from?: string; to?: string; yes?: boolean 
 export function registerMerchants(program: Command): void {
   const merchants = program.command("merchants").description("Manage merchants");
 
-  merchants.command("list").description("List merchants").action(runAction(listMerchantsAction));
+  merchants.command("list").description("List merchants").action(runAction(listMerchants));
 
   merchants
     .command("resolve")
     .description("Resolve a merchant from a descriptor")
     .option("--descriptor <text>", "raw transaction descriptor")
-    .action(runAction(resolveMerchantAction));
+    .action(runAction(resolveMerchant));
 
   merchants
     .command("upsert")
@@ -131,7 +137,7 @@ export function registerMerchants(program: Command): void {
     .option("--name <name>", "merchant canonical name")
     .option("--alias <alias>", "merchant alias to add")
     .option("--default-account <id>", "default account id")
-    .action(runAction(upsertMerchantAction));
+    .action(runAction(upsertMerchant));
 
   merchants
     .command("set-default")
@@ -139,7 +145,7 @@ export function registerMerchants(program: Command): void {
     .option("--merchant <id>", "merchant id")
     .option("--account <id>", "account id")
     .option("--clear", "clear the default account instead of setting one")
-    .action(runAction(setDefaultAction));
+    .action(runAction(setMerchantDefault));
 
   merchants
     .command("merge")
@@ -147,5 +153,5 @@ export function registerMerchants(program: Command): void {
     .option("--from <id>", "merchant id to merge from")
     .option("--to <id>", "merchant id to merge into")
     .option("--yes", "skip confirmation")
-    .action(runAction(mergeMerchantsAction));
+    .action(runAction(mergeMerchants));
 }

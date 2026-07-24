@@ -14,27 +14,31 @@ import { openDb } from "../db.js";
  * counts, and drop one (cascade-removing its rows).
  */
 
-interface FilesListOpts {
+// Erased type query: derives the file row shape from the (lazily imported)
+// query without pulling the db module onto the startup path.
+type FileRow = ReturnType<typeof import("../../db/queries/files.js").listFiles>[number];
+
+const FILE_COLUMNS: Column<FileRow>[] = [
+  { header: "Status", value: (r) => r.status },
+  { header: "ID", value: (r) => r.id },
+  { header: "Source", value: (r) => r.source ?? "-" },
+  { header: "Ingested At", value: (r) => r.ingested_at ?? "-" },
+  { header: "Path", value: (r) => r.path },
+];
+
+interface ListFilesOpts {
   status?: string;
 }
 
-async function filesList(opts: FilesListOpts): Promise<void> {
+async function listFiles(opts: ListFilesOpts): Promise<void> {
   const db = await openDb();
-  const { listFiles } = await import("../../db/queries/files.js");
-  let rows = listFiles(db);
+  const { listFiles: queryFiles } = await import("../../db/queries/files.js");
+  let rows = queryFiles(db);
   if (opts.status) rows = rows.filter((r) => r.status === opts.status);
-
-  const columns: Column<(typeof rows)[number]>[] = [
-    { header: "STATUS", value: (r) => r.status },
-    { header: "ID", value: (r) => r.id },
-    { header: "SOURCE", value: (r) => r.source ?? "-" },
-    { header: "INGESTED_AT", value: (r) => r.ingested_at ?? "-" },
-    { header: "PATH", value: (r) => r.path },
-  ];
-  emitList(rows, columns);
+  emitList(rows, FILE_COLUMNS);
 }
 
-async function filesShow(id: string): Promise<void> {
+async function showFile(id: string): Promise<void> {
   const db = await openDb();
   const { findFileById } = await import("../../db/queries/files.js");
   const row = findFileById(db, id);
@@ -50,11 +54,11 @@ async function filesShow(id: string): Promise<void> {
   });
 }
 
-interface FilesDropOpts {
+interface DropFileOpts {
   yes?: boolean;
 }
 
-async function filesDrop(id: string, opts: FilesDropOpts): Promise<void> {
+async function dropFile(id: string, opts: DropFileOpts): Promise<void> {
   requireYes(opts, `dropping file ${id}`);
   const db = await openDb();
   const { deleteFile } = await import("../../db/queries/files.js");
@@ -74,16 +78,16 @@ export function registerFiles(program: Command): void {
     .command("list")
     .description("List ingested files")
     .option("--status <status>", "filter by status (new|pending|ingested|failed)")
-    .action(runAction(filesList));
+    .action(runAction(listFiles));
 
   files
     .command("show <id>")
     .description("Show a file with its transaction and open-question counts")
-    .action(runAction(filesShow));
+    .action(runAction(showFile));
 
   files
     .command("drop <id>")
     .description("Drop a file and cascade-remove its transactions/questions")
     .option("--yes", "skip confirmation")
-    .action(runAction(filesDrop));
+    .action(runAction(dropFile));
 }

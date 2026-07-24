@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { QuestionRow } from "../../db/queries/questions.js";
 import { emitList, fail, runAction, type Column } from "../output.js";
+import { openDb } from "../db.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../../lib/validate.js";
 import { parseJsonOrNull } from "../../lib/json.js";
@@ -36,15 +37,15 @@ function toListRow(row: QuestionRow): QuestionListRow {
 const QUESTION_REDACT_FIELDS = ["prompt"] as const;
 
 const LIST_COLUMNS: Column<QuestionListRow>[] = [
-  { header: "id", value: (r) => r.id },
-  { header: "kind", value: (r) => r.kind ?? "" },
-  { header: "prompt", value: (r) => r.prompt },
-  { header: "transaction_id", value: (r) => r.transaction_id ?? "" },
-  { header: "account_id", value: (r) => r.account_id ?? "" },
-  { header: "options", value: (r) => (r.options != null ? JSON.stringify(r.options) : "") },
-  { header: "context", value: (r) => (r.context != null ? JSON.stringify(r.context) : "") },
-  { header: "file_id", value: (r) => r.file_id ?? "" },
-  { header: "created_at", value: (r) => r.created_at },
+  { header: "ID", value: (r) => r.id },
+  { header: "Kind", value: (r) => r.kind ?? "" },
+  { header: "Prompt", value: (r) => r.prompt },
+  { header: "Transaction ID", value: (r) => r.transaction_id ?? "" },
+  { header: "Account ID", value: (r) => r.account_id ?? "" },
+  { header: "Options", value: (r) => (r.options != null ? JSON.stringify(r.options) : "") },
+  { header: "Context", value: (r) => (r.context != null ? JSON.stringify(r.context) : "") },
+  { header: "File ID", value: (r) => r.file_id ?? "" },
+  { header: "Created At", value: (r) => r.created_at },
 ];
 
 interface AnsweredRow {
@@ -55,10 +56,15 @@ interface AnsweredRow {
 }
 
 const ANSWERED_COLUMNS: Column<AnsweredRow>[] = [
-  { header: "id", value: (r) => r.id },
-  { header: "kind", value: (r) => r.kind ?? "" },
-  { header: "answer", value: (r) => r.answer },
-  { header: "rule_key", value: (r) => r.rule_key ?? "" },
+  { header: "ID", value: (r) => r.id },
+  { header: "Kind", value: (r) => r.kind ?? "" },
+  { header: "Answer", value: (r) => r.answer },
+  { header: "Rule Key", value: (r) => r.rule_key ?? "" },
+];
+
+const DEFER_COLUMNS: Column<{ id: string; days: number }>[] = [
+  { header: "ID", value: (r) => r.id },
+  { header: "Days", value: (r) => String(r.days) },
 ];
 
 interface ListQuestionsOpts {
@@ -67,14 +73,57 @@ interface ListQuestionsOpts {
   redact?: boolean;
 }
 
+async function listQuestions(opts: ListQuestionsOpts): Promise<void> {
+  const { listQuestions: queryQuestions } = await import("../../db/queries/questions.js");
+  const db = await openDb();
+  const rows = queryQuestions(db, {
+    batchId: opts.batch,
+    includeDeferred: !!opts.includeDeferred,
+  });
+  let listRows = rows.map(toListRow);
+  if (opts.redact) {
+    const { applyRedaction } = await import("../../privacy/redactor.js");
+    listRows = applyRedaction(listRows, true, QUESTION_REDACT_FIELDS);
+  }
+  emitList(listRows, LIST_COLUMNS);
+}
+
 const ANSWER_SPEC = z.object({
   answer: str(),
   also: str().optional(),
 });
 
+async function answerQuestion(id: string, opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(ANSWER_SPEC, opts);
+  const also: string[] = parsed.also
+    ? parsed.also.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  const ids = [id, ...also];
+
+  const { closeQuestion } = await import("../../db/queries/questions.js");
+  const db = await openDb();
+
+  const results: AnsweredRow[] = [];
+  for (const qid of ids) {
+    const closed = closeQuestion(db, qid, parsed.answer);
+    if (!closed) fail("NOT_FOUND", `question "${qid}" not found`);
+    results.push({ id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key });
+  }
+  emitList(results, ANSWERED_COLUMNS);
+}
+
 const DEFER_SPEC = z.object({
   days: int().default(7),
 });
+
+async function deferQuestion(id: string, opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(DEFER_SPEC, opts);
+  const { deferQuestion: deferQuestionRow } = await import("../../db/queries/questions.js");
+  const db = await openDb();
+  const ok = deferQuestionRow(db, id, parsed.days);
+  if (!ok) fail("NOT_FOUND", `question "${id}" not found`);
+  emitList([{ id, days: parsed.days }], DEFER_COLUMNS);
+}
 
 export function registerQuestions(program: Command): void {
   const questions = program.command("questions").description("Manage open questions");
@@ -85,67 +134,18 @@ export function registerQuestions(program: Command): void {
     .option("--batch <id>", "filter by batch id")
     .option("--include-deferred", "include deferred questions")
     .option("--no-redact", "skip PII redaction (on by default)")
-    .action(
-      runAction(async (opts: ListQuestionsOpts) => {
-        const { getDb } = await import("../../db/connection.js");
-        const { listQuestions } = await import("../../db/queries/questions.js");
-        const db = getDb();
-        const rows = listQuestions(db, {
-          batchId: opts.batch,
-          includeDeferred: !!opts.includeDeferred,
-        });
-        let listRows = rows.map(toListRow);
-        if (opts.redact) {
-          const { applyRedaction } = await import("../../privacy/redactor.js");
-          listRows = applyRedaction(listRows, true, QUESTION_REDACT_FIELDS);
-        }
-        emitList(listRows, LIST_COLUMNS);
-      }),
-    );
+    .action(runAction(listQuestions));
 
   questions
     .command("answer <id>")
     .description("Answer a question")
     .option("--answer <text>", "the answer text")
     .option("--also <ids>", "additional question ids to answer")
-    .action(
-      runAction(async (id: string, opts: Record<string, unknown>) => {
-        const parsed = parseInput(ANSWER_SPEC, opts);
-        const also: string[] = parsed.also
-          ? parsed.also.split(",").map((s) => s.trim()).filter(Boolean)
-          : [];
-        const ids = [id, ...also];
-
-        const { getDb } = await import("../../db/connection.js");
-        const { closeQuestion } = await import("../../db/queries/questions.js");
-        const db = getDb();
-
-        const results: AnsweredRow[] = [];
-        for (const qid of ids) {
-          const closed = closeQuestion(db, qid, parsed.answer);
-          if (!closed) fail("NOT_FOUND", `question "${qid}" not found`);
-          results.push({ id: qid, kind: closed.kind, answer: closed.answer, rule_key: closed.rule_key });
-        }
-        emitList(results, ANSWERED_COLUMNS);
-      }),
-    );
+    .action(runAction(answerQuestion));
 
   questions
     .command("defer <id>")
     .description("Defer a question")
     .option("--days <n>", "number of days to defer")
-    .action(
-      runAction(async (id: string, opts: Record<string, unknown>) => {
-        const parsed = parseInput(DEFER_SPEC, opts);
-        const { getDb } = await import("../../db/connection.js");
-        const { deferQuestion } = await import("../../db/queries/questions.js");
-        const db = getDb();
-        const ok = deferQuestion(db, id, parsed.days);
-        if (!ok) fail("NOT_FOUND", `question "${id}" not found`);
-        emitList([{ id, days: parsed.days }], [
-          { header: "id", value: (r: { id: string; days: number }) => r.id },
-          { header: "days", value: (r: { id: string; days: number }) => String(r.days) },
-        ]);
-      }),
-    );
+    .action(runAction(deferQuestion));
 }

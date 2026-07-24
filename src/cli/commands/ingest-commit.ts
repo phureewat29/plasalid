@@ -20,7 +20,7 @@ import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
  * resolution detail (fuzzy-match vs. placeholder vs. exact) alongside ok/duplicate/failed.
  */
 
-interface CommitOpts {
+interface CommitIngestOpts {
   file?: string;
   input?: string;
 }
@@ -311,7 +311,7 @@ function commitStandaloneRow(deps: RowCommitDeps, row: RowContext): Record<strin
   };
 }
 
-export async function ingestCommit(opts: CommitOpts): Promise<void> {
+export async function commitIngest(opts: CommitIngestOpts): Promise<void> {
   const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no transaction data provided");
 

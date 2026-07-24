@@ -13,13 +13,24 @@ import {
   runAction,
 } from "../output.js";
 import { openDb } from "../db.js";
-import { ingestCommit } from "./ingest-commit.js";
+import { commitIngest } from "./ingest-commit.js";
 
 /**
  * `ingest`: list candidate files, prepare pages, commit extracted rows, mark
  * files done/failed. Heavy db/ingest imports are deferred inside each action
  * so non-db commands don't pay for libsql/mupdf at startup (see status.ts).
  */
+
+// Erased type query: the discovered-entry shape without pulling ingest/prepare
+// (and its heavy deps) onto the startup path.
+type IngestEntry = Awaited<ReturnType<typeof import("../../ingest/prepare.js").discoverFiles>>[number];
+
+const INGEST_COLUMNS: Column<IngestEntry>[] = [
+  { header: "Status", value: (r) => r.status },
+  { header: "Enc", value: (r) => (r.encrypted ? `yes(${r.vaultCandidates})` : "no") },
+  { header: "File ID", value: (r) => r.fileId ?? "-" },
+  { header: "Path", value: (r) => r.relPath },
+];
 
 // pages spec parser (pure; unit-tested)
 
@@ -51,11 +62,11 @@ export function parsePagesSpec(spec: string): number[] | undefined {
 
 // ingest list
 
-interface ListOpts {
+interface ListIngestOpts {
   regex?: string;
 }
 
-async function ingestList(opts: ListOpts): Promise<void> {
+async function listIngest(opts: ListIngestOpts): Promise<void> {
   const db = await openDb();
   const { discoverFiles } = await import("../../ingest/prepare.js");
 
@@ -91,13 +102,7 @@ async function ingestList(opts: ListOpts): Promise<void> {
     return;
   }
 
-  const columns: Column<(typeof entries)[number]>[] = [
-    { header: "STATUS", value: (r) => r.status },
-    { header: "ENC", value: (r) => (r.encrypted ? `yes(${r.vaultCandidates})` : "no") },
-    { header: "FILE_ID", value: (r) => r.fileId ?? "-" },
-    { header: "PATH", value: (r) => r.relPath },
-  ];
-  emitList(entries, columns);
+  emitList(entries, INGEST_COLUMNS);
   if (mode.tty) {
     process.stdout.write(
       `\n${counts.new} new, ${counts.pending} pending, ${counts.ingested} ingested, ${counts.failed} failed (${total} total)\n`,
@@ -107,7 +112,7 @@ async function ingestList(opts: ListOpts): Promise<void> {
 
 // ingest prepare
 
-interface PrepareOpts {
+interface PrepareIngestOpts {
   passwordStdin?: boolean;
   force?: boolean;
   format?: string;
@@ -120,7 +125,7 @@ interface PrepareOpts {
 // caller knows the resolution used when rasterizing to png.
 const DEFAULT_DPI = 150;
 
-async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void> {
+async function prepareIngest(pathOrId: string, opts: PrepareIngestOpts): Promise<void> {
   const db = await openDb();
   const { resolveEntryPath, prepareFile, PasswordRequiredError } = await import(
     "../../ingest/prepare.js"
@@ -190,11 +195,11 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
 
 // ingest done / fail
 
-interface DoneOpts {
+interface CompleteIngestOpts {
   agent?: string;
 }
 
-async function ingestDone(id: string, opts: DoneOpts): Promise<void> {
+async function completeIngest(id: string, opts: CompleteIngestOpts): Promise<void> {
   const db = await openDb();
   const { markFileIngested } = await import("../../db/queries/files.js");
   const changes = markFileIngested(db, id, { source: opts.agent ?? "external" });
@@ -205,12 +210,12 @@ async function ingestDone(id: string, opts: DoneOpts): Promise<void> {
   emitObject({ file_id: id, status: "ingested", cache_removed: removed });
 }
 
-interface FailOpts {
+interface FailIngestOpts {
   agent?: string;
   error?: string;
 }
 
-async function ingestFail(id: string, opts: FailOpts): Promise<void> {
+async function failIngest(id: string, opts: FailIngestOpts): Promise<void> {
   if (!opts.error) fail("USAGE", "`ingest fail` requires --error <text>");
 
   const db = await openDb();
@@ -230,7 +235,7 @@ export function registerIngest(program: Command): void {
     .command("list")
     .description("List items in the ingest pipeline")
     .option("--regex <pattern>", "filter items by regex")
-    .action(runAction(ingestList));
+    .action(runAction(listIngest));
 
   ingest
     .command("prepare <pathOrId>")
@@ -243,25 +248,25 @@ export function registerIngest(program: Command): void {
       new Option("--pages <spec>", "page range to prepare (1-based, e.g. all | 1-5,8)").hideHelp(),
     )
     .option("--out <dir>", "output directory")
-    .action(runAction(ingestPrepare));
+    .action(runAction(prepareIngest));
 
   ingest
     .command("commit")
     .description("Commit extracted transactions (NDJSON/JSON array via --input file or stdin) into the ledger")
     .option("--file <id>", "default source file id for committed rows")
     .option("--input <path>", "read the batch from an NDJSON/JSON file instead of stdin")
-    .action(runAction(ingestCommit));
+    .action(runAction(commitIngest));
 
   ingest
     .command("done <id>")
     .description("Mark an ingest item as done")
     .option("--agent <name>", "name of the completing agent")
-    .action(runAction(ingestDone));
+    .action(runAction(completeIngest));
 
   ingest
     .command("fail <id>")
     .description("Mark an ingest item as failed")
     .option("--agent <name>", "name of the failing agent")
     .option("--error <text>", "failure reason")
-    .action(runAction(ingestFail));
+    .action(runAction(failIngest));
 }

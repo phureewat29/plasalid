@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { getDb } from "../../db/connection.js";
 import {
   currentMode,
   emit,
@@ -13,12 +12,13 @@ import {
   runAction,
   type Column,
 } from "../output.js";
+import { openDb } from "../db.js";
 import {
   insertTransaction,
-  deleteTransaction,
+  deleteTransaction as deleteTransactionRow,
   updateTransactionMeta,
   bulkRecategorize,
-  listTransactions,
+  listTransactions as queryTransactions,
   countTransactions,
   clampListLimit,
   getTransaction,
@@ -58,7 +58,7 @@ import { parseInput, str, num, json } from "../../lib/validate.js";
 
 // Free-text fields on a transaction that may carry PII. Ids, amount, currency, and
 // dates are structured data the agent needs verbatim and are left intact.
-const REDACT_FIELDS = [
+const TRANSACTION_REDACT_FIELDS = [
   "description",
   "raw_descriptor",
   "merchant_name",
@@ -69,7 +69,7 @@ const REDACT_FIELDS = [
 /** A transaction row with its stored minor-unit amount converted to a decimal. */
 type TransactionView = Omit<TransactionRow, "amount"> & { amount: number };
 
-function present(row: TransactionRow): TransactionView {
+function presentTransaction(row: TransactionRow): TransactionView {
   return { ...row, amount: fromMinorUnits(row.amount, row.currency) };
 }
 
@@ -83,7 +83,7 @@ const LIST_COLUMNS: Column<TransactionView>[] = [
   { header: "Currency", value: (t) => t.currency },
 ];
 
-interface ListOpts {
+interface ListTransactionsOpts {
   group?: boolean;
   redact?: boolean;
 }
@@ -98,8 +98,8 @@ const LIST_TRANSACTIONS_SPEC = z.object({
   limit: num().optional(),
 });
 
-function runList(opts: ListOpts): void {
-  const db = getDb();
+async function listTransactions(opts: ListTransactionsOpts): Promise<void> {
+  const db = await openDb();
   const parsed = parseInput(LIST_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
   const listOpts: Omit<ListTransactionsOptions, "group"> = {};
   if (parsed.account) listOpts.account = parsed.account;
@@ -117,7 +117,7 @@ function runList(opts: ListOpts): void {
   const limit = clampListLimit(listOpts.limit);
 
   if (opts.group) {
-    const clusters = listTransactions(db, { ...listOpts, group: true });
+    const clusters = queryTransactions(db, { ...listOpts, group: true });
     emitClusters(clusters, !!opts.redact);
     const returned = clusters.reduce((n, c) => n + c.transactions.length, 0);
     emitSummary({ total, returned, has_more: total > returned, limit });
@@ -125,9 +125,9 @@ function runList(opts: ListOpts): void {
   }
 
   const rows = applyRedaction(
-    listTransactions(db, listOpts).map(present),
+    queryTransactions(db, listOpts).map(presentTransaction),
     !!opts.redact,
-    REDACT_FIELDS,
+    TRANSACTION_REDACT_FIELDS,
   );
   emitList(rows, LIST_COLUMNS);
   emitSummary({ total, returned: rows.length, has_more: total > rows.length, limit });
@@ -136,7 +136,7 @@ function runList(opts: ListOpts): void {
 function emitClusters(clusters: TransactionCluster[], redact: boolean): void {
   const view = clusters.map((c) => ({
     group_id: c.group_id,
-    transactions: applyRedaction(c.transactions.map(present), redact, REDACT_FIELDS),
+    transactions: applyRedaction(c.transactions.map(presentTransaction), redact, TRANSACTION_REDACT_FIELDS),
   }));
   const mode = currentMode();
   if (mode.json) {
@@ -153,14 +153,14 @@ function emitClusters(clusters: TransactionCluster[], redact: boolean): void {
   }
 }
 
-function runShow(id: string, opts: { redact?: boolean }): void {
-  const db = getDb();
+async function showTransaction(id: string, opts: { redact?: boolean }): Promise<void> {
+  const db = await openDb();
   const detail = getTransaction(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
-  const view: Record<string, unknown> = present(detail);
-  if (detail.group) view.group = detail.group.map(present);
-  emit(applyRedaction(view, !!opts.redact, REDACT_FIELDS));
+  const view: Record<string, unknown> = presentTransaction(detail);
+  if (detail.group) view.group = detail.group.map(presentTransaction);
+  emit(applyRedaction(view, !!opts.redact, TRANSACTION_REDACT_FIELDS));
 }
 
 // Dedupe (find / auto-merge duplicates)
@@ -175,25 +175,25 @@ function accountsLabel(
 }
 
 // Presentation rows: minor-unit amounts converted to decimals at the CLI boundary.
-interface DuplicateRow extends Omit<DuplicateTransactionRow, "amount"> {
+type DuplicateRow = Omit<DuplicateTransactionRow, "amount"> & {
   amount: number;
   group: number;
-}
+};
 
 const DUPLICATE_COLUMNS: Column<DuplicateRow>[] = [
-  { header: "group", value: (r) => String(r.group), align: "right" },
-  { header: "id", value: (r) => r.id },
-  { header: "date", value: (r) => r.date },
-  { header: "amount", value: (r) => r.amount.toFixed(2), align: "right" },
-  { header: "currency", value: (r) => r.currency },
-  { header: "description", value: (r) => r.description },
-  { header: "accounts", value: (r) => accountsLabel(r.debit_account_name, r.debit_account_id, r.credit_account_name, r.credit_account_id) },
-  { header: "source_file_id", value: (r) => r.source_file_id ?? "" },
-  { header: "merchant_id", value: (r) => r.merchant_id ?? "" },
+  { header: "Group", value: (r) => String(r.group), align: "right" },
+  { header: "ID", value: (r) => r.id },
+  { header: "Date", value: (r) => r.date },
+  { header: "Amount", value: (r) => r.amount.toFixed(2), align: "right" },
+  { header: "Currency", value: (r) => r.currency },
+  { header: "Description", value: (r) => r.description },
+  { header: "Accounts", value: (r) => accountsLabel(r.debit_account_name, r.debit_account_id, r.credit_account_name, r.credit_account_id) },
+  { header: "Source File ID", value: (r) => r.source_file_id ?? "" },
+  { header: "Merchant ID", value: (r) => r.merchant_id ?? "" },
 ];
 
-function runDedupe(opts: { autoMerge?: boolean }): void {
-  const db = getDb();
+async function dedupeTransactions(opts: { autoMerge?: boolean }): Promise<void> {
+  const db = await openDb();
 
   let autoMerged: number | undefined;
   if (opts.autoMerge) {
@@ -219,10 +219,16 @@ const MERGE_TRANSACTIONS_SPEC = z.object({
   to: str(),
 });
 
-function mergeTransactionsAction(opts: { from?: string; to?: string; yes?: boolean }): void {
+interface MergeTransactionsOpts {
+  from?: string;
+  to?: string;
+  yes?: boolean;
+}
+
+async function mergeTransactions(opts: MergeTransactionsOpts): Promise<void> {
   const parsed = parseInput(MERGE_TRANSACTIONS_SPEC, opts as Record<string, unknown>);
   requireYes(opts, "merging transactions");
-  const db = getDb();
+  const db = await openDb();
 
   let result;
   try {
@@ -412,12 +418,14 @@ function addStrict(db: Database.Database, raw: RawTransactionInput): void {
 }
 
 async function addTransaction(opts: AddTransactionOpts): Promise<void> {
-  const db = getDb();
+  const db = await openDb();
   const raw = await buildRawTransaction(opts);
 
   if (opts.resolve) return addViaResolve(db, raw);
   return addStrict(db, raw);
 }
+
+// Update / recategorize
 
 const UPDATE_TRANSACTION_SPEC = z.object({
   date: str().optional(),
@@ -426,6 +434,24 @@ const UPDATE_TRANSACTION_SPEC = z.object({
 });
 
 const UPDATE_TRANSACTION_ALIASES = { merchant_id: ["merchant"] };
+
+async function updateTransaction(id: string, opts: Record<string, unknown>): Promise<void> {
+  const fields: UpdateTransactionMetaFields = parseInput(UPDATE_TRANSACTION_SPEC, opts, {
+    aliases: UPDATE_TRANSACTION_ALIASES,
+    atLeastOne: "at least one of --date, --description, --merchant is required",
+  });
+  const db = await openDb();
+  const changes = updateTransactionMeta(db, id, fields);
+  if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
+  emit({ transaction_id: id, updated: true });
+}
+
+async function deleteTransaction(id: string, opts: { yes?: boolean }): Promise<void> {
+  requireYes(opts, "deleting this transaction");
+  const db = await openDb();
+  if (!deleteTransactionRow(db, id)) fail("NOT_FOUND", `transaction "${id}" not found`);
+  emit({ transaction_id: id, deleted: true });
+}
 
 const RECATEGORIZE_SPEC = z.object({
   set_account: str(),
@@ -437,6 +463,24 @@ const RECATEGORIZE_SPEC = z.object({
 const RECATEGORIZE_LABELS = {
   filter_account: "--filter-account (recategorize moves that account's transactions)",
 };
+
+async function recategorizeTransactions(opts: Record<string, unknown>): Promise<void> {
+  const parsed = parseInput(RECATEGORIZE_SPEC, opts, { labels: RECATEGORIZE_LABELS });
+  const db = await openDb();
+  const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
+
+  let result;
+  try {
+    result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
+  } catch (err) {
+    fail("INVALID", (err as Error).message);
+  }
+  emit({
+    affected: result.affected,
+    skipped_self_transaction: result.skipped_self_transaction,
+    sample_transaction_ids: result.sample_transaction_ids,
+  });
+}
 
 export function registerTransactions(program: Command): void {
   const transactions = program
@@ -455,13 +499,13 @@ export function registerTransactions(program: Command): void {
     .option("--limit <n>", "max rows (default 50, max 500)")
     .option("--group", "fold linked transactions into their group clusters")
     .option("--no-redact", "skip PII redaction (on by default)")
-    .action(runAction((opts: ListOpts) => runList(opts)));
+    .action(runAction(listTransactions));
 
   transactions
     .command("show <id>")
     .description("Show a transaction's details (with its linked group when present)")
     .option("--no-redact", "skip PII redaction (on by default)")
-    .action(runAction((id: string, opts: { redact?: boolean }) => runShow(id, opts)));
+    .action(runAction(showTransaction));
 
   transactions
     .command("add")
@@ -473,7 +517,7 @@ export function registerTransactions(program: Command): void {
     .option("--date <date>", "transaction date (defaults to today)")
     .option("--description <text>", "transaction description")
     .option("--merchant-name <name>", "merchant name to upsert and link")
-    .action(runAction((opts: AddTransactionOpts) => addTransaction(opts)));
+    .action(runAction(addTransaction));
 
   transactions
     .command("update <id>")
@@ -481,64 +525,26 @@ export function registerTransactions(program: Command): void {
     .option("--date <date>", "transaction date")
     .option("--description <text>", "transaction description")
     .option("--merchant <id>", "merchant id to set")
-    .action(
-      runAction((id: string, opts: Record<string, unknown>) => {
-        const fields: UpdateTransactionMetaFields = parseInput(UPDATE_TRANSACTION_SPEC, opts, {
-          aliases: UPDATE_TRANSACTION_ALIASES,
-          atLeastOne: "at least one of --date, --description, --merchant is required",
-        });
-        const db = getDb();
-        const changes = updateTransactionMeta(db, id, fields);
-        if (changes === 0) fail("NOT_FOUND", `transaction "${id}" not found`);
-        emit({ transaction_id: id, updated: true });
-      }),
-    );
+    .action(runAction(updateTransaction));
 
   transactions
     .command("delete <id>")
     .description("Delete a transaction")
     .option("--yes", "skip confirmation")
-    .action(
-      runAction((id: string, opts: { yes?: boolean }) => {
-        requireYes(opts, "deleting this transaction");
-        const db = getDb();
-        if (!deleteTransaction(db, id)) fail("NOT_FOUND", `transaction "${id}" not found`);
-        emit({ transaction_id: id, deleted: true });
-      }),
-    );
+    .action(runAction(deleteTransaction));
 
   transactions
     .command("recategorize")
     .description("Bulk re-point one account's transactions onto another")
     .option("--set-account <id>", "account id to move matching transactions to")
     .option("--filter-account <id>", "account whose transactions are moved (required)")
-    .action(
-      runAction(
-        (opts: Record<string, unknown>) => {
-          const parsed = parseInput(RECATEGORIZE_SPEC, opts, { labels: RECATEGORIZE_LABELS });
-          const db = getDb();
-          const filter: BulkRecategorizeFilter = { accountId: parsed.filter_account };
-
-          let result;
-          try {
-            result = bulkRecategorize(db, filter, { accountId: parsed.set_account });
-          } catch (err) {
-            fail("INVALID", (err as Error).message);
-          }
-          emit({
-            affected: result.affected,
-            skipped_self_transaction: result.skipped_self_transaction,
-            sample_transaction_ids: result.sample_transaction_ids,
-          });
-        },
-      ),
-    );
+    .action(runAction(recategorizeTransactions));
 
   transactions
     .command("dedupe")
     .description("Find likely duplicate transactions (optionally auto-merge them)")
     .option("--auto-merge", "automatically merge detected duplicates")
-    .action(runAction((opts: { autoMerge?: boolean }) => runDedupe(opts)));
+    .action(runAction(dedupeTransactions));
 
   transactions
     .command("merge")
@@ -546,5 +552,5 @@ export function registerTransactions(program: Command): void {
     .option("--from <id>", "mirror transaction id to void")
     .option("--to <id>", "surviving transaction id")
     .option("--yes", "skip confirmation")
-    .action(runAction(mergeTransactionsAction));
+    .action(runAction(mergeTransactions));
 }

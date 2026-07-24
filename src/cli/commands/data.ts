@@ -1,8 +1,9 @@
 import { spawn } from "child_process";
 import { existsSync, mkdirSync } from "fs";
 import chalk from "chalk";
+import type { Command } from "commander";
 import { getDataDir } from "../../config.js";
-import { currentMode, emit } from "../output.js";
+import { currentMode, emit, runAction } from "../output.js";
 
 function openerCommand(): string | null {
   switch (process.platform) {
@@ -31,7 +32,7 @@ function spawnOpener(cmd: string, dataDir: string): Promise<string | undefined> 
  * `{"path": <dataDir>}` (plus `spawn_error` on failure); piped emits a bare
  * path. An opener failure is reported, never thrown — the path is still useful.
  */
-export async function runDataCommand(): Promise<void> {
+async function openDataDir(): Promise<void> {
   const dataDir = getDataDir();
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 
@@ -59,4 +60,13 @@ export async function runDataCommand(): Promise<void> {
       chalk.yellow(`Couldn't open the folder automatically: ${spawnError}. Open it manually with the path above.`),
     );
   }
+}
+
+export function registerData(program: Command): void {
+  // `data` opens the OS file explorer at the data dir; a thin, db-free command.
+  program
+    .command("data")
+    .alias("open")
+    .description("Open the Plasalid data folder in your OS file explorer")
+    .action(runAction(openDataDir));
 }

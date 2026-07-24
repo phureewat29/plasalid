@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { existsSync, mkdirSync } from "fs";
+import { openDb } from "../db.js";
 import {
   config as appConfig,
   getConfigPath,
@@ -117,8 +118,7 @@ async function convergeConfig(flags: ConvergeFlags): Promise<void> {
   saveConfig(patch);
 
   // Open once to run the migration against the (freshly) configured db path.
-  const { getDb } = await import("../../db/connection.js");
-  const db = getDb();
+  const db = await openDb();
 
   // Seed the structural accounts the ledger auto-references, so the first
   // ingest resolves them by exact match. Idempotent: no-ops if already present.
@@ -138,6 +138,20 @@ async function convergeConfig(flags: ConvergeFlags): Promise<void> {
   });
 }
 
+// Bare `config`: converge when any flag is given, otherwise show current config.
+async function configureHarness(opts: Record<string, unknown>): Promise<void> {
+  const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
+  if (Object.keys(flags).length > 0) {
+    await convergeConfig(flags);
+  } else {
+    printConfig(currentMode(), showPayload());
+  }
+}
+
+function showConfig(): void {
+  printConfig(currentMode(), showPayload());
+}
+
 export function registerConfig(program: Command): void {
   const configCmd = program
     .command("config")
@@ -152,23 +166,10 @@ export function registerConfig(program: Command): void {
     .option("--locale <locale>", "locale")
     .option("--currency <code>", "default currency code")
     .option("--user-name <name>", "user display name")
-    .action(
-      runAction(async (opts: Record<string, unknown>) => {
-        const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
-        if (Object.keys(flags).length > 0) {
-          await convergeConfig(flags);
-        } else {
-          printConfig(currentMode(), showPayload());
-        }
-      }),
-    );
+    .action(runAction(configureHarness));
 
   configCmd
     .command("show")
     .description("Show the current configuration")
-    .action(
-      runAction(async () => {
-        printConfig(currentMode(), showPayload());
-      }),
-    );
+    .action(runAction(showConfig));
 }

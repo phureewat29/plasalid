@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { getConfigPath, getDataDir } from "../../config.js";
+import { openDb } from "../db.js";
 import { getVersion } from "../../setup/install.js";
 import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
 import { errorMessage } from "../../lib/result.js";
@@ -25,8 +26,7 @@ function configCheck(): Check {
 
 async function dbOpenCheck(): Promise<{ check: Check; db: Database.Database | null }> {
   try {
-    const { getDb } = await import("../../db/connection.js");
-    const db = getDb();
+    const db = await openDb();
     return { check: { name: "db_open", ok: true }, db };
   } catch (err) {
     return { check: { name: "db_open", ok: false, detail: errorMessage(err) }, db: null };
@@ -114,29 +114,29 @@ function skillPackCheck(): Check {
 }
 
 const CHECK_COLUMNS: Column<Check>[] = [
-  { header: "check", value: (r) => r.name },
-  { header: "ok", value: (r) => (r.ok ? "yes" : "no") },
-  { header: "detail", value: (r) => r.detail ?? "" },
+  { header: "Check", value: (r) => r.name },
+  { header: "OK", value: (r) => (r.ok ? "yes" : "no") },
+  { header: "Detail", value: (r) => r.detail ?? "" },
 ];
+
+async function diagnoseEnvironment(): Promise<void> {
+  const checks = await runChecks();
+  const ok = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
+
+  const mode = currentMode();
+  if (mode.json) {
+    emit({ checks, ok });
+  } else {
+    emitList(checks, CHECK_COLUMNS);
+    const line = `overall: ${ok ? "ready" : "not ready"}`;
+    process.stdout.write((mode.color ? (ok ? chalk.green(line) : chalk.red(line)) : line) + "\n");
+  }
+  if (!ok) process.exitCode = EXIT.NOT_READY;
+}
 
 export function registerDoctor(program: Command): void {
   program
     .command("doctor")
     .description("Diagnose the harness environment")
-    .action(
-      runAction(async () => {
-        const checks = await runChecks();
-        const ok = checks.filter((c) => HARD_CHECKS.has(c.name)).every((c) => c.ok);
-
-        const mode = currentMode();
-        if (mode.json) {
-          emit({ checks, ok });
-        } else {
-          emitList(checks, CHECK_COLUMNS);
-          const line = `overall: ${ok ? "ready" : "not ready"}`;
-          process.stdout.write((mode.color ? (ok ? chalk.green(line) : chalk.red(line)) : line) + "\n");
-        }
-        if (!ok) process.exitCode = EXIT.NOT_READY;
-      }),
-    );
+    .action(runAction(diagnoseEnvironment));
 }

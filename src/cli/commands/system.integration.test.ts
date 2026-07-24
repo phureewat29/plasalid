@@ -348,7 +348,7 @@ describe("system CLI integration (subprocess)", () => {
 
       const raw = new Database(dbPath);
       try {
-        expect(raw.prepare("SELECT id FROM memories WHERE id = ?").get(noteId)).toBeUndefined();
+        expect(raw.prepare("SELECT id FROM notes WHERE id = ?").get(noteId)).toBeUndefined();
       } finally {
         raw.close();
       }

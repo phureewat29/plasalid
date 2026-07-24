@@ -65,7 +65,7 @@ async function buildReport(): Promise<StatusReport> {
   const { countFiles } = await import("../../db/queries/files.js");
   const { countQuestions } = await import("../../db/queries/questions.js");
   const { countMerchants } = await import("../../db/queries/merchants.js");
-  const { countMemories } = await import("../../db/queries/notes.js");
+  const { countNotes } = await import("../../db/queries/notes.js");
 
   // The only reachability probe is opening the db: an unconfigured/wrong-key/
   // unreadable db degrades to not-ready here. Counts run AFTER, outside the
@@ -83,7 +83,7 @@ async function buildReport(): Promise<StatusReport> {
     accounts: countAccounts(db),
     transactions: countTransactions(db),
     merchants: countMerchants(db),
-    notes: countMemories(db),
+    notes: countNotes(db),
   };
   report.files = countFiles(db);
   const open = countQuestions(db);

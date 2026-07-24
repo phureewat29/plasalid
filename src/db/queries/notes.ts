@@ -1,41 +1,40 @@
 import type Database from "libsql";
 
-export interface Memory {
+export interface NoteRow {
   id: number;
   content: string;
   category: string;
   created_at: string;
 }
 
-export function getMemories(db: Database.Database): Memory[] {
+export function listNotes(db: Database.Database): NoteRow[] {
   return db.prepare(
-    `SELECT id, content, category, created_at FROM memories ORDER BY created_at DESC`,
-  ).all() as Memory[];
+    `SELECT id, content, category, created_at FROM notes ORDER BY created_at DESC`,
+  ).all() as NoteRow[];
 }
 
-export function countMemories(db: Database.Database): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM memories`).get() as { n: number };
+export function countNotes(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM notes`).get() as { n: number };
   return row.n;
 }
 
 /**
  * Idempotent on (category, content): a verbatim repeat is a no-op. Semantic
- * dedup (different wording for the same rule) is the agent's job: the persona
- * tells it not to save what's already in the loaded memories.
+ * dedup (different wording for the same note) is the calling agent's job.
  */
-export function saveMemory(db: Database.Database, content: string, category = "general"): void {
+export function addNote(db: Database.Database, content: string, category = "fact"): void {
   const existing = db
-    .prepare(`SELECT 1 FROM memories WHERE category = ? AND content = ? LIMIT 1`)
+    .prepare(`SELECT 1 FROM notes WHERE category = ? AND content = ? LIMIT 1`)
     .get(category, content);
   if (existing) return;
-  db.prepare(`INSERT INTO memories (content, category) VALUES (?, ?)`).run(content, category);
+  db.prepare(`INSERT INTO notes (content, category) VALUES (?, ?)`).run(content, category);
 }
 
-export function deleteMemory(db: Database.Database, id: number): Memory | null {
+export function deleteNote(db: Database.Database, id: number): NoteRow | null {
   const row = db
-    .prepare(`SELECT id, content, category, created_at FROM memories WHERE id = ?`)
-    .get(id) as Memory | undefined;
+    .prepare(`SELECT id, content, category, created_at FROM notes WHERE id = ?`)
+    .get(id) as NoteRow | undefined;
   if (!row) return null;
-  db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM notes WHERE id = ?`).run(id);
   return row;
 }

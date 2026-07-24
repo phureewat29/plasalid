@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate, applyMigrations } from "./schema.js";
 import type { Migration } from "./migrations/index.js";
+import * as baseline from "./migrations/0001_baseline.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -40,7 +41,7 @@ describe("migrate", () => {
       "accounts",
       "questions",
       "file_passwords",
-      "memories",
+      "notes",
       "merchant_aliases",
       "merchants",
       "files",
@@ -51,6 +52,10 @@ describe("migrate", () => {
     for (const t of expected) {
       expect(tables, `missing table: ${t}`).toContain(t);
     }
+
+    // A fresh db replays the full chain: 0001 creates `memories`, 0002 renames
+    // it, so the finished schema exposes `notes` and never `memories`.
+    expect(tables).not.toContain("memories");
 
     expect(tables).not.toContain("journal_entries");
     expect(tables).not.toContain("journal_lines");
@@ -78,7 +83,7 @@ describe("migrate", () => {
     expect(() => migrate(db)).not.toThrow();
   });
 
-  it("records exactly version 1 and preserves data across re-migration", () => {
+  it("records each applied version once and preserves data across re-migration", () => {
     const db = freshDb();
     migrate(db);
     db.prepare(
@@ -94,7 +99,7 @@ describe("migrate", () => {
 
     expect(rowCount(db, "transactions")).toBe(1);
     expect(rowCount(db, "accounts")).toBe(2);
-    expect(versions(db)).toEqual([1]);
+    expect(versions(db)).toEqual([1, 2]);
   });
 
   it("accepts hierarchical accounts via parent_id", () => {
@@ -129,6 +134,37 @@ describe("migrate", () => {
         `INSERT INTO merchant_aliases (id, merchant_id, normalized_pattern) VALUES (?, ?, ?)`
       ).run("ma:2", "m:starbucks", "starbucks"),
     ).toThrow();
+  });
+});
+
+describe("migration 0002: memories -> notes", () => {
+  it("renames the table and normalizes legacy categories, preserving rule/preference", () => {
+    const db = freshDb();
+    // Build a real version-1 db (baseline only), so `memories` still exists and
+    // schema_migrations is at 1 — the path a pre-0002 database upgrades from.
+    applyMigrations(db, [baseline]);
+    const seed = db.prepare(`INSERT INTO memories (content, category) VALUES (?, ?)`);
+    seed.run("a general note", "general");
+    seed.run("a life event", "life_event");
+    seed.run("a stated preference", "preference");
+    seed.run("a hard rule", "rule");
+
+    // The full chain now carries 0002.
+    migrate(db);
+
+    expect(versions(db)).toEqual([1, 2]);
+    expect(tableNames(db)).toContain("notes");
+    expect(tableNames(db)).not.toContain("memories");
+
+    const rows = db
+      .prepare(`SELECT content, category FROM notes`)
+      .all() as { content: string; category: string }[];
+    const byContent = Object.fromEntries(rows.map((r) => [r.content, r.category]));
+    // Legacy categories collapse to the new default; rule/preference survive.
+    expect(byContent["a general note"]).toBe("fact");
+    expect(byContent["a life event"]).toBe("fact");
+    expect(byContent["a stated preference"]).toBe("preference");
+    expect(byContent["a hard rule"]).toBe("rule");
   });
 });
 

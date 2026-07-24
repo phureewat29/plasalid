@@ -1,17 +1,17 @@
 import type { Command } from "commander";
-import type { Memory } from "../../db/queries/notes.js";
+import type { NoteRow } from "../../db/queries/notes.js";
 import { emitList, fail, requireYes, runAction, type Column } from "../output.js";
 import { openDb } from "../db.js";
 import * as z from "zod";
 import { parseInput, str, num } from "../../lib/validate.js";
 
-const VALID_CATEGORIES = ["general", "preference", "life_event"] as const;
+const VALID_CATEGORIES = ["rule", "preference", "fact"] as const;
 
 // `content` is the only free-text field; id/category/created_at are
 // structured data left verbatim.
 const NOTE_REDACT_FIELDS = ["content"] as const;
 
-const NOTE_COLUMNS: Column<Memory>[] = [
+const NOTE_COLUMNS: Column<NoteRow>[] = [
   { header: "ID", value: (r) => String(r.id), align: "right" },
   { header: "Category", value: (r) => r.category },
   { header: "Content", value: (r) => r.content },
@@ -23,9 +23,9 @@ interface ListNotesOpts {
 }
 
 async function listNotes(opts: ListNotesOpts): Promise<void> {
-  const { getMemories } = await import("../../db/queries/notes.js");
+  const { listNotes: queryNotes } = await import("../../db/queries/notes.js");
   const db = await openDb();
-  let rows = getMemories(db);
+  let rows = queryNotes(db);
   if (opts.redact) {
     const { applyRedaction } = await import("../../privacy/redactor.js");
     rows = applyRedaction(rows, true, NOTE_REDACT_FIELDS);
@@ -35,16 +35,16 @@ async function listNotes(opts: ListNotesOpts): Promise<void> {
 
 const ADD_NOTE_SPEC = z.object({
   content: str(),
-  category: z.enum(VALID_CATEGORIES).default("general"),
+  category: z.enum(VALID_CATEGORIES).default("fact"),
 });
 
 async function addNote(opts: Record<string, unknown>): Promise<void> {
   const parsed = parseInput(ADD_NOTE_SPEC, opts);
 
-  const { getMemories, saveMemory } = await import("../../db/queries/notes.js");
+  const { listNotes: queryNotes, addNote: addNoteRow } = await import("../../db/queries/notes.js");
   const db = await openDb();
-  saveMemory(db, parsed.content, parsed.category);
-  const saved = getMemories(db)
+  addNoteRow(db, parsed.content, parsed.category);
+  const saved = queryNotes(db)
     .filter((m) => m.content === parsed.content && m.category === parsed.category)
     .sort((a, b) => b.id - a.id)[0];
   emitList(saved ? [saved] : [], NOTE_COLUMNS);
@@ -59,9 +59,9 @@ async function removeNote(id: string, opts: { yes?: boolean }): Promise<void> {
   requireYes(opts, "removing this note");
   const parsed = parseInput(NOTE_ID_SPEC, { id }, { labels: NOTE_ID_LABELS });
 
-  const { deleteMemory } = await import("../../db/queries/notes.js");
+  const { deleteNote: deleteNoteRow } = await import("../../db/queries/notes.js");
   const db = await openDb();
-  const deleted = deleteMemory(db, parsed.id);
+  const deleted = deleteNoteRow(db, parsed.id);
   if (!deleted) fail("NOT_FOUND", `note "${id}" not found`);
   emitList([deleted], NOTE_COLUMNS);
 }
@@ -79,7 +79,7 @@ export function registerNotes(program: Command): void {
     .command("add")
     .description("Add a note")
     .option("--content <text>", "note content")
-    .option("--category <cat>", "note category")
+    .option("--category <cat>", "note category: rule, preference, or fact")
     .action(runAction(addNote));
 
   notes

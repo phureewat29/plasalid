@@ -15,7 +15,7 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { generateKey } from "../db/encryption.js";
 import { config } from "../config.js";
-import { createAccount } from "../db/queries/account-balance.js";
+import { createAccount } from "../accounts/accounts.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
 import { insertTransaction, countTransactionsBySourceFile } from "../db/queries/transactions.js";
 import { findFileById } from "../db/queries/files.js";

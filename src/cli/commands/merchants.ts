@@ -12,7 +12,7 @@ import {
   type MerchantRow,
   type MerchantUpsertInput,
 } from "../../db/queries/merchants.js";
-import { findAccountById } from "../../db/queries/account-balance.js";
+import { findAccountById } from "../../accounts/accounts.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
 

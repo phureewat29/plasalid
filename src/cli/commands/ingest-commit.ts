@@ -152,7 +152,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
     "../../ingest/commit-transaction.js"
   );
   const { getTransaction } = await import("../../db/queries/transactions.js");
-  const { findAccountById } = await import("../../db/queries/account-balance.js");
+  const { findAccountById } = await import("../../accounts/accounts.js");
   const { findFileById } = await import("../../db/queries/files.js");
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
 

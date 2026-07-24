@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
-import {
-  createAccount,
-  findAccountById,
-  getAccountBalancesFromTransactions,
-} from "../db/queries/account-balance.js";
+import { createAccount, findAccountById } from "../accounts/accounts.js";
+import { getAccountBalancesFromTransactions } from "../accounts/balances.js";
 import {
   countTransactions,
   getTransaction,

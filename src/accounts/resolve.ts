@@ -4,10 +4,9 @@ import {
   findAccountById,
   ensureStructuralAccount,
   ensureTopLevelRoot,
-  TOP_LEVEL_TYPES,
-  type AccountType,
-} from "../db/queries/account-balance.js";
-import { findAccountsByFuzzyName } from "../db/queries/account-match.js";
+} from "./accounts.js";
+import { TOP_LEVEL_TYPES, type AccountType } from "./types.js";
+import { findAccountsByFuzzyName } from "./matching.js";
 
 // Shared account/merchant resolution used by the commit pipeline (`commit-transaction.ts`).
 

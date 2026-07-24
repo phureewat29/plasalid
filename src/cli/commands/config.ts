@@ -128,7 +128,7 @@ async function convergeConfig(flags: ConvergeFlags): Promise<void> {
 
   // Seed the structural accounts the ledger auto-references, so the first
   // ingest resolves them by exact match. Idempotent: no-ops if already present.
-  const { ensureStructuralAccount } = await import("../../db/queries/account-balance.js");
+  const { ensureStructuralAccount } = await import("../../accounts/accounts.js");
   for (const id of ["expense:uncategorized", "equity:adjustments", "equity:opening-balance"] as const) {
     ensureStructuralAccount(db, id);
   }

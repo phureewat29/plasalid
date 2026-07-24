@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
-import { createAccount } from "./account-balance.js";
+import { createAccount } from "../../accounts/accounts.js";
 import { recordQuestion, listQuestions, closeQuestion, countQuestions, deferQuestion } from "./questions.js";
 
 function freshDb() {

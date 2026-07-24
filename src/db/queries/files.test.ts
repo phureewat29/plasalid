@@ -9,7 +9,7 @@ import {
   markFileIngested,
   markFileFailed,
 } from "./files.js";
-import { createAccount } from "./account-balance.js";
+import { createAccount } from "../../accounts/accounts.js";
 import { insertTransaction } from "./transactions.js";
 import { recordQuestion } from "./questions.js";
 

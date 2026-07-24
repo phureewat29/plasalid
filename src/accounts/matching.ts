@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import type { AccountRow } from "./account-balance.js";
+import type { AccountRow } from "./types.js";
 
 export interface FuzzyAccountMatch {
   account: AccountRow;

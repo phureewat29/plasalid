@@ -11,7 +11,7 @@ import {
   mergeMerchants,
   normalizeDescriptor,
 } from "./merchants.js";
-import { createAccount } from "./account-balance.js";
+import { createAccount } from "../../accounts/accounts.js";
 import { insertTransaction, type TransactionInput } from "./transactions.js";
 
 function freshDb() {

@@ -30,7 +30,7 @@ import {
   type TransactionCluster,
   type DuplicateTransactionRow,
 } from "../../db/queries/transactions.js";
-import { findAccountById } from "../../db/queries/account-balance.js";
+import { findAccountById } from "../../accounts/accounts.js";
 import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
 import {
   commitTransaction,

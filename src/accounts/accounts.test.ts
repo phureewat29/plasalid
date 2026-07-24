@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { migrate } from "../schema.js";
+import { migrate } from "../db/schema.js";
 import {
   createAccount,
   updateAccountMetadata,
@@ -8,8 +8,9 @@ import {
   getAccountSubtree,
   ensureStructuralAccount,
   ensureTopLevelRoot,
-} from "./account-balance.js";
-import { findAccountsByFuzzyName, accountNumberKey, normalizeMaskedAccountNumber } from "./account-match.js";
+  repointTransactions,
+} from "./accounts.js";
+import { insertTransaction, getTransaction, type TransactionInput } from "../db/queries/transactions.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -199,121 +200,50 @@ describe("updateAccountMetadata", () => {
   });
 });
 
-describe("findAccountsByFuzzyName", () => {
-  let db: Database.Database;
-  beforeEach(() => {
-    db = freshDb();
-    createAccount(db, { id: "asset:ttb-1", name: "TTB Savings ••1234", type: "asset", parent_id: "asset" });
-    createAccount(db, { id: "asset:scb-1", name: "SCB Savings ••5678", type: "asset", parent_id: "asset" });
-    createAccount(db, { id: "asset:kbank-1", name: "KBank Savings ••9012", type: "asset", parent_id: "asset" });
+// repointTransactions is the re-point step of mergeAccounts (see accounts.ts).
+function seededDb(): Database.Database {
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
+  createAccount(db, { id: "asset:cash", name: "Cash", type: "asset", parent_id: "asset" });
+  createAccount(db, { id: "asset:bank", name: "KBank Savings", type: "asset", parent_id: "asset" });
+  createAccount(db, { id: "income", name: "Income", type: "income", parent_id: null });
+  createAccount(db, { id: "income:salary", name: "Salary", type: "income", parent_id: "income" });
+  createAccount(db, { id: "expense", name: "Expenses", type: "expense", parent_id: null });
+  createAccount(db, { id: "expense:food", name: "Food", type: "expense", parent_id: "expense" });
+  createAccount(db, { id: "expense:food:dining", name: "Dining", type: "expense", parent_id: "expense:food" });
+  createAccount(db, { id: "expense:food:groceries", name: "Groceries", type: "expense", parent_id: "expense:food" });
+  return db;
+}
+
+function ins(db: Database.Database, over: Partial<TransactionInput> & Pick<TransactionInput, "debit_account_id" | "credit_account_id" | "amount">) {
+  insertTransaction(db, {
+    date: "2026-05-01",
+    description: "x",
+    currency: "THB",
+    ...over,
+  });
+}
+
+describe("repointTransactions", () => {
+  it("moves both columns and deletes would-be self-transactions", () => {
+    const db = seededDb();
+    ins(db, { id: "tx:1", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 10000 });
+    ins(db, { id: "tx:2", debit_account_id: "asset:cash", credit_account_id: "expense:food", amount: 10000 });
+    // Re-pointing food -> dining would collapse this row (dining on both sides).
+    ins(db, { id: "tx:self", debit_account_id: "expense:food", credit_account_id: "expense:food:dining", amount: 10000 });
+
+    const res = repointTransactions(db, "expense:food", "expense:food:dining");
+    expect(res.deletedSelfTransactions).toBe(1);
+    expect(res.moved).toBe(2);
+    expect(getTransaction(db, "tx:1")?.debit_account_id).toBe("expense:food:dining");
+    expect(getTransaction(db, "tx:2")?.credit_account_id).toBe("expense:food:dining");
+    expect(getTransaction(db, "tx:self")).toBeNull();
   });
 
-  it("finds the right account by substring", () => {
-    const matches = findAccountsByFuzzyName(db, "ttb saving");
-    expect(matches.length).toBeGreaterThan(0);
-    expect(matches[0].account.id).toBe("asset:ttb-1");
-    expect(matches[0].similarity).toBeGreaterThanOrEqual(0.85);
-  });
-
-  it("returns multiple candidates ranked by similarity", () => {
-    const matches = findAccountsByFuzzyName(db, "saving");
-    const ids = matches.map(m => m.account.id);
-    expect(ids).toContain("asset:ttb-1");
-    expect(ids).toContain("asset:scb-1");
-    expect(ids).toContain("asset:kbank-1");
-  });
-
-  it("respects the threshold", () => {
-    const matches = findAccountsByFuzzyName(db, "xyz", 0.9);
-    expect(matches).toHaveLength(0);
-  });
-
-  it("returns nothing for empty query", () => {
-    expect(findAccountsByFuzzyName(db, "")).toEqual([]);
-    expect(findAccountsByFuzzyName(db, "   ")).toEqual([]);
-  });
-
-  it("matches a number with a trailing check digit against the masked number", () => {
-    createAccount(db, {
-      id: "asset:kbank-7652",
-      name: "KBank Savings ••7652",
-      type: "asset",
-      parent_id: "asset",
-      account_number_masked: "••7652",
-    });
-    const matches = findAccountsByFuzzyName(db, "kbank savings 76520");
-    expect(matches[0].account.id).toBe("asset:kbank-7652");
-    expect(matches[0].similarity).toBeGreaterThanOrEqual(0.9);
-  });
-});
-
-describe("accountNumberKey", () => {
-  it("strips separators and a trailing check digit to the last 4 digits", () => {
-    expect(accountNumberKey("••7652")).toBe("7652");
-    expect(accountNumberKey("••7652-0")).toBe("7652");
-    expect(accountNumberKey("xxx-7652-0")).toBe("7652");
-    expect(accountNumberKey("1234")).toBe("1234");
-    expect(accountNumberKey(null)).toBe("");
-    expect(accountNumberKey("••")).toBe("");
-  });
-
-  it("uses the literal trailing digits after a mask run, without dropping one as a check digit", () => {
-    /**
-     * Regression: digits before the mask used to get concatenated with the
-     * trailing digits, and the check-digit heuristic dropped a real trailing
-     * digit ("470686XXXXXX9483" -> "6948" instead of "9483").
-     */
-    expect(accountNumberKey("470686XXXXXX9483")).toBe("9483");
-    expect(accountNumberKey("470686XXXXXX483")).toBe("483");
-    // A pure-digit number (no mask chars) keeps the check-digit-drop heuristic: "76520" -> "7652".
-    expect(accountNumberKey("76520")).toBe("7652");
-  });
-});
-
-describe("normalizeMaskedAccountNumber", () => {
-  it("collapses check-digit variants to one masked value", () => {
-    expect(normalizeMaskedAccountNumber("••7652-0")).toBe("••7652");
-    expect(normalizeMaskedAccountNumber("••76520")).toBe("••7652");
-    expect(normalizeMaskedAccountNumber("••7652")).toBe("••7652");
-    expect(normalizeMaskedAccountNumber(null)).toBeNull();
-    expect(normalizeMaskedAccountNumber("••")).toBe("••");
-  });
-
-  it("stores the literal trailing digits (ending in 9483) for a masked-middle number", () => {
-    const normalized = normalizeMaskedAccountNumber("470686XXXXXX9483");
-    expect(normalized).not.toBeNull();
-    expect(normalized!.endsWith("9483")).toBe(true);
-  });
-});
-
-describe("createAccount with a masked-middle account number", () => {
-  it("stores a display mask ending in the real trailing digits, not a corrupted check-digit drop", () => {
-    const db = freshDb();
-    createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
-    createAccount(db, {
-      id: "asset:kbank-9483",
-      name: "KBank Savings",
-      type: "asset",
-      parent_id: "asset",
-      account_number_masked: "470686XXXXXX9483",
-    });
-    const stored = findAccountById(db, "asset:kbank-9483")!.account_number_masked!;
-    expect(stored.endsWith("9483")).toBe(true);
-  });
-});
-
-describe("findAccountsByFuzzyName matching key derivation for a masked-middle query", () => {
-  it("matches on the literal trailing digits, not the longer unmasked prefix run", () => {
-    const db = freshDb();
-    createAccount(db, { id: "asset", name: "Assets", type: "asset", parent_id: null });
-    createAccount(db, {
-      id: "asset:kbank-9483",
-      name: "KBank Savings",
-      type: "asset",
-      parent_id: "asset",
-      account_number_masked: "••9483",
-    });
-    const matches = findAccountsByFuzzyName(db, "470686XXXXXX9483");
-    expect(matches[0]?.account.id).toBe("asset:kbank-9483");
+  it("refuses re-pointing an account to itself", () => {
+    const db = seededDb();
+    expect(() => repointTransactions(db, "expense:food", "expense:food")).toThrow();
   });
 });

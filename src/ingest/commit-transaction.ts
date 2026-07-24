@@ -5,7 +5,7 @@ import {
   resolveMerchantId,
   type AccountHint,
   type ResolvedMerchant,
-} from "./resolve.js";
+} from "../accounts/resolve.js";
 import {
   insertTransaction,
   insertLinkedTransactions,

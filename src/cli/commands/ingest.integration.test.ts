@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
-import { createAccount } from "../../db/queries/account-balance.js";
+import { createAccount } from "../../accounts/accounts.js";
 import { createSandbox, type Sandbox } from "../../lib/sandbox.js";
 
 // This test lives in src/cli/commands/ -> repo root is three levels up.

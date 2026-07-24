@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "libsql";
 import { migrate } from "../../db/schema.js";
-import { createAccount } from "../../db/queries/account-balance.js";
+import { createAccount } from "../../accounts/accounts.js";
 import { insertTransaction } from "../../db/queries/transactions.js";
 import { recordQuestion } from "../../db/queries/questions.js";
 import { createSandbox, type Sandbox } from "../../lib/sandbox.js";

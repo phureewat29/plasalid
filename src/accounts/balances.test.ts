@@ -1,17 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
-import { migrate } from "../schema.js";
+import { migrate } from "../db/schema.js";
+import { createAccount, findAccountById } from "./accounts.js";
 import {
-  createAccount,
-  findAccountById,
   getAccountBalancesFromTransactions,
   getNetWorthFromTransactions,
   getPeriodTotalsFromTransactions,
   getRollupBalanceFromTransactions,
-  repointTransactions,
   adjustAccountBalanceViaTransaction,
-} from "./account-balance.js";
-import { insertTransaction, getTransaction, type TransactionInput } from "./transactions.js";
+} from "./balances.js";
+import { insertTransaction, type TransactionInput } from "../db/queries/transactions.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
@@ -99,28 +97,6 @@ describe("getRollupBalanceFromTransactions", () => {
     ins(db, { debit_account_id: "expense:food:groceries", credit_account_id: "asset:cash", amount: 60000 });
     expect(getRollupBalanceFromTransactions(db, "expense:food")).toBe(950);
     expect(getRollupBalanceFromTransactions(db, "asset:cash")).toBe(-950);
-  });
-});
-
-describe("repointTransactions", () => {
-  it("moves both columns and deletes would-be self-transactions", () => {
-    const db = freshDb();
-    ins(db, { id: "tx:1", debit_account_id: "expense:food", credit_account_id: "asset:cash", amount: 10000 });
-    ins(db, { id: "tx:2", debit_account_id: "asset:cash", credit_account_id: "expense:food", amount: 10000 });
-    // Re-pointing food -> dining would collapse this row (dining on both sides).
-    ins(db, { id: "tx:self", debit_account_id: "expense:food", credit_account_id: "expense:food:dining", amount: 10000 });
-
-    const res = repointTransactions(db, "expense:food", "expense:food:dining");
-    expect(res.deletedSelfTransactions).toBe(1);
-    expect(res.moved).toBe(2);
-    expect(getTransaction(db, "tx:1")?.debit_account_id).toBe("expense:food:dining");
-    expect(getTransaction(db, "tx:2")?.credit_account_id).toBe("expense:food:dining");
-    expect(getTransaction(db, "tx:self")).toBeNull();
-  });
-
-  it("refuses re-pointing an account to itself", () => {
-    const db = freshDb();
-    expect(() => repointTransactions(db, "expense:food", "expense:food")).toThrow();
   });
 });
 

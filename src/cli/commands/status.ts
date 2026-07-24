@@ -60,7 +60,7 @@ async function buildReport(): Promise<StatusReport> {
   // Deferred so non-db commands skip the libsql cost at startup.
   const { getDb } = await import("../../db/connection.js");
   const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
-    "../../db/queries/account-balance.js"
+    "../../accounts/balances.js"
   );
   const { countTransactions } = await import("../../db/queries/transactions.js");
   const { countFiles } = await import("../../db/queries/files.js");

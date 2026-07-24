@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../schema.js";
+import { createAccount } from "../../accounts/accounts.js";
 import {
-  createAccount,
   getAccountBalancesFromTransactions,
   getNetWorthFromTransactions,
   getPeriodTotalsFromTransactions,
   getRollupBalanceFromTransactions,
-} from "./account-balance.js";
+} from "../../accounts/balances.js";
 import {
   validateTransaction,
   deriveTransactionId,

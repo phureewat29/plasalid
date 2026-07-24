@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
-import { createAccount, findAccountById } from "../db/queries/account-balance.js";
+import { createAccount, findAccountById } from "./accounts.js";
 import { resolveOnePosting } from "./resolve.js";
 
 function freshDb(): Database.Database {

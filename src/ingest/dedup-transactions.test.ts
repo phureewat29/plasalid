@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
-import { createAccount } from "../db/queries/account-balance.js";
+import { createAccount } from "../accounts/accounts.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
 import { insertTransaction, countTransactions, type TransactionInput } from "../db/queries/transactions.js";
 import { autoMergeStrictDuplicateTransactions } from "./dedup-transactions.js";

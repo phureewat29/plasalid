@@ -276,6 +276,64 @@ function accountCurrency(db: Database.Database, id: string): string {
 }
 
 /**
+ * Resolve both postings, then guard against fuzzy over-collapse: the inputs are
+ * distinct (validated upstream), so a collision where both sides land on one
+ * account means fuzzy matching over-eagerly collapsed them — re-resolve the
+ * fuzzy-matched side(s) with `skipFuzzy`. A collision with no fuzzy match on
+ * either side is left as-is for the dirty_input backstop to catch. Resolving may
+ * create placeholder accounts as a side effect.
+ */
+function resolveTransactionAccounts(
+  db: Database.Database,
+  debitAccountId: string,
+  creditAccountId: string,
+): { debitId: string; creditId: string; hints: { side: TransactionSide; hint: AccountHint }[] } {
+  let debitRes = resolveOnePosting(db, { account_id: debitAccountId });
+  let creditRes = resolveOnePosting(db, { account_id: creditAccountId });
+  let debitId = debitRes.posting.account_id;
+  let creditId = creditRes.posting.account_id;
+
+  if (debitId === creditId && debitRes.hint?.type === "similar_matched") {
+    debitRes = resolveOnePosting(db, { account_id: debitAccountId }, { skipFuzzy: true });
+    debitId = debitRes.posting.account_id;
+  }
+  if (debitId === creditId && creditRes.hint?.type === "similar_matched") {
+    creditRes = resolveOnePosting(db, { account_id: creditAccountId }, { skipFuzzy: true });
+    creditId = creditRes.posting.account_id;
+  }
+
+  const hints: { side: TransactionSide; hint: AccountHint }[] = [];
+  if (debitRes.hint) hints.push({ side: "debit", hint: debitRes.hint });
+  if (creditRes.hint) hints.push({ side: "credit", hint: creditRes.hint });
+
+  return { debitId, creditId, hints };
+}
+
+/**
+ * Currency is derived from the resolved accounts, never trusted from input. Both
+ * legs must share it (ledger-design §5); a cross-currency move is reported as a
+ * mismatch so the caller can drop it in favor of a linked conversion pair.
+ */
+function deriveTransactionCurrency(
+  db: Database.Database,
+  debitId: string,
+  creditId: string,
+):
+  | { ok: true; currency: string }
+  | { ok: false; debit: { id: string; currency: string }; credit: { id: string; currency: string } } {
+  const debitCur = accountCurrency(db, debitId);
+  const creditCur = accountCurrency(db, creditId);
+  if (debitCur !== creditCur) {
+    return {
+      ok: false,
+      debit: { id: debitId, currency: debitCur },
+      credit: { id: creditId, currency: creditCur },
+    };
+  }
+  return { ok: true, currency: debitCur };
+}
+
+/**
  * Runs validate -> resolve accounts -> derive currency -> convert amount ->
  * resolve merchant -> compute id, without touching the transactions table.
  * Resolving accounts may create placeholder accounts as a side effect; on a
@@ -289,43 +347,23 @@ function prepareTransaction(
   const raw = validateRawTransaction(input);
   if (!raw.ok) return { ok: false, reason: "dirty_input", message: raw.reason };
 
-  let debitRes = resolveOnePosting(db, { account_id: input.debit_account_id });
-  let creditRes = resolveOnePosting(db, { account_id: input.credit_account_id });
-  let debitId = debitRes.posting.account_id;
-  let creditId = creditRes.posting.account_id;
+  const { debitId, creditId, hints } = resolveTransactionAccounts(
+    db,
+    input.debit_account_id,
+    input.credit_account_id,
+  );
 
-  // Fuzzy-collapse guard: inputs are guaranteed distinct (validated above), so a
-  // collision here means fuzzy matching over-eagerly collapsed two accounts onto
-  // one — not dirty input. Re-resolve the fuzzy-matched side(s) with skipFuzzy.
-  // A collision with no fuzzy match on either side falls through to the
-  // dirty_input backstop below.
-  if (debitId === creditId && debitRes.hint?.type === "similar_matched") {
-    debitRes = resolveOnePosting(db, { account_id: input.debit_account_id }, { skipFuzzy: true });
-    debitId = debitRes.posting.account_id;
-  }
-  if (debitId === creditId && creditRes.hint?.type === "similar_matched") {
-    creditRes = resolveOnePosting(db, { account_id: input.credit_account_id }, { skipFuzzy: true });
-    creditId = creditRes.posting.account_id;
-  }
-
-  const hints: { side: TransactionSide; hint: AccountHint }[] = [];
-  if (debitRes.hint) hints.push({ side: "debit", hint: debitRes.hint });
-  if (creditRes.hint) hints.push({ side: "credit", hint: creditRes.hint });
-
-  // Currency is derived from the resolved accounts; a cross-currency transaction is
-  // dropped for a linked conversion pair instead.
-  const debitCur = accountCurrency(db, debitId);
-  const creditCur = accountCurrency(db, creditId);
-  if (debitCur !== creditCur) {
+  const cur = deriveTransactionCurrency(db, debitId, creditId);
+  if (!cur.ok) {
     return {
       ok: false,
       reason: "currency_mismatch",
-      message: `debit ${debitId} is ${debitCur}, credit ${creditId} is ${creditCur}`,
-      debit: { id: debitId, currency: debitCur },
-      credit: { id: creditId, currency: creditCur },
+      message: `debit ${cur.debit.id} is ${cur.debit.currency}, credit ${cur.credit.id} is ${cur.credit.currency}`,
+      debit: cur.debit,
+      credit: cur.credit,
     };
   }
-  const currency = debitCur;
+  const currency = cur.currency;
   const currencyOverridden = !!input.currency && input.currency !== currency;
 
   const amountMinor = toMinorUnits(input.amount, currency);

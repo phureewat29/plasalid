@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type Database from "libsql";
 import type {
   TransactionCommitContext,
   TransactionCommitHooks,
@@ -143,6 +144,173 @@ const LEG_ALIASES = {
   credit_account_id: ["credit_account"],
 };
 
+interface Counters {
+  posted: number;
+  duplicates: number;
+  failed: number;
+  raisedTotal: number;
+}
+
+// Per-invocation collaborators resolved once (dynamic imports, db, derived
+// helpers) and shared by every row. Passed explicitly so the row committers
+// capture no loop-scoped state.
+interface RowCommitDeps {
+  db: Database.Database;
+  commitTransaction: (typeof import("../../ingest/commit-transaction.js"))["commitTransaction"];
+  commitLinkedTransactions: (typeof import("../../ingest/commit-transaction.js"))["commitLinkedTransactions"];
+  getTransaction: (typeof import("../../db/queries/transactions.js"))["getTransaction"];
+  accountExists: (id: string) => boolean;
+  counters: Counters;
+}
+
+// The per-row state built before the compound/standalone split.
+interface RowContext {
+  record: Record<string, unknown>;
+  index: number;
+  fileId: string | null;
+  ctx: TransactionCommitContext;
+  events: CommitEvent[];
+  hooks: TransactionCommitHooks;
+}
+
+// Derive the deterministic-id source hash from the files row, memoized per file.
+function makeFileHashCache(
+  db: Database.Database,
+  findFileById: (typeof import("../../db/queries/files.js"))["findFileById"],
+): (fileId: string | null) => string | null {
+  const cache = new Map<string, string | null>();
+  return (fileId) => {
+    if (!fileId) return null;
+    if (!cache.has(fileId)) cache.set(fileId, findFileById(db, fileId)?.file_hash ?? null);
+    return cache.get(fileId) ?? null;
+  };
+}
+
+// A row rejected before the commit pipeline (bad JSON shape) reuses the per-row
+// failure shape so the PARTIAL contract holds. Counts the failure and returns
+// the record for the caller to push — never throws.
+function failRow(counters: Counters, index: number, message: string): Record<string, unknown> {
+  counters.failed++;
+  return { type: "result", index, ok: false, reason: "dirty_input", message, raised_questions: 0 };
+}
+
+// Compound row: a header plus >=1 linked legs committed atomically under one group.
+function commitCompoundRow(
+  deps: RowCommitDeps,
+  row: RowContext,
+  linked: unknown[],
+): Record<string, unknown> {
+  const { counters } = deps;
+  const parsedHeader = safeParse(LINKED_HEADER_SPEC, row.record);
+  if (!parsedHeader.ok) return failRow(counters, row.index, parsedHeader.error);
+  const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: row.fileId };
+
+  const legs: LinkedTransactionLeg[] = [];
+  let legError: string | undefined;
+  for (const rawLeg of linked) {
+    const legRecord = asRecord(rawLeg);
+    if (!legRecord) {
+      legError = "each linked leg must be a JSON object.";
+      break;
+    }
+    const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord, { aliases: LEG_ALIASES });
+    if (!parsedLeg.ok) {
+      legError = parsedLeg.error;
+      break;
+    }
+    // Cast is a lie for malformed rows — validateRawTransaction rejects those.
+    legs.push({ ...parsedLeg.value, amount: legRecord.amount as number });
+  }
+  if (legError !== undefined) return failRow(counters, row.index, legError);
+
+  const outcome = deps.commitLinkedTransactions(deps.db, row.ctx, header, legs, row.hooks);
+  counters.raisedTotal += outcome.raisedQuestions;
+
+  if (!outcome.ok) {
+    counters.failed++;
+    return {
+      type: "result",
+      index: row.index,
+      ok: false,
+      reason: outcome.reason,
+      message: outcome.message,
+      raised_questions: outcome.raisedQuestions,
+    };
+  }
+
+  const allDuplicate = outcome.results.every((r) => r.duplicate);
+  if (allDuplicate) counters.duplicates++;
+  else counters.posted++;
+
+  return {
+    type: "result",
+    index: row.index,
+    ok: true,
+    group_id: outcome.group_id,
+    legs: outcome.results.map((r) => ({ transaction_id: r.id, duplicate: r.duplicate })),
+    duplicate: allDuplicate,
+    raised_questions: outcome.raisedQuestions,
+    merchant: classifyMerchant(parsedHeader.value, row.events, () =>
+      deps.getTransaction(deps.db, outcome.results[0]?.id)?.merchant_id,
+    ),
+  };
+}
+
+// Standalone row: a single debit/credit transaction.
+function commitStandaloneRow(deps: RowCommitDeps, row: RowContext): Record<string, unknown> {
+  const { counters } = deps;
+  const parsed = safeParse(STANDALONE_SPEC, row.record, { aliases: LEG_ALIASES });
+  if (!parsed.ok) return failRow(counters, row.index, parsed.error);
+  // Cast is a lie for malformed rows — validateRawTransaction rejects those.
+  const raw: RawTransactionInput = {
+    ...parsed.value,
+    source_file_id: row.fileId,
+    amount: row.record.amount as number,
+  };
+
+  const outcome = deps.commitTransaction(deps.db, row.ctx, raw, row.hooks);
+  counters.raisedTotal += outcome.raisedQuestions;
+
+  if (!outcome.ok) {
+    counters.failed++;
+    return {
+      type: "result",
+      index: row.index,
+      ok: false,
+      reason: outcome.reason,
+      message: outcome.message,
+      raised_questions: outcome.raisedQuestions,
+    };
+  }
+
+  if (outcome.duplicate) counters.duplicates++;
+  else counters.posted++;
+
+  return {
+    type: "result",
+    index: row.index,
+    ok: true,
+    transaction_id: outcome.transactionId,
+    duplicate: outcome.duplicate,
+    raised_questions: outcome.raisedQuestions,
+    merchant: classifyMerchant(parsed.value, row.events, () =>
+      deps.getTransaction(deps.db, outcome.transactionId)?.merchant_id,
+    ),
+    sides: [
+      {
+        side: "debit",
+        requested: raw.debit_account_id,
+        ...classifySide(raw.debit_account_id, "debit", row.events, deps.accountExists),
+      },
+      {
+        side: "credit",
+        requested: raw.credit_account_id,
+        ...classifySide(raw.credit_account_id, "credit", row.events, deps.accountExists),
+      },
+    ],
+  };
+}
+
 export async function ingestCommit(opts: CommitOpts): Promise<void> {
   const items = await readStdinBatch(opts.input);
   if (items.length === 0) fail("USAGE", "no transaction data provided");
@@ -158,179 +326,58 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
 
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
   const batchId = `ib:${randomUUID()}`;
+  const fileHashFor = makeFileHashCache(db, findFileById);
 
-  // Derive the deterministic-id source hash from the files row (cached).
-  const fileHashCache = new Map<string, string | null>();
-  const fileHashFor = (fileId: string | null): string | null => {
-    if (!fileId) return null;
-    if (!fileHashCache.has(fileId)) {
-      fileHashCache.set(fileId, findFileById(db, fileId)?.file_hash ?? null);
-    }
-    return fileHashCache.get(fileId) ?? null;
+  const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };
+  const deps: RowCommitDeps = {
+    db,
+    commitTransaction,
+    commitLinkedTransactions,
+    getTransaction,
+    accountExists,
+    counters,
   };
 
   const results: Record<string, unknown>[] = [];
-  let posted = 0;
-  let duplicates = 0;
-  let failed = 0;
-  let raisedTotal = 0;
-
-  // A row rejected before the commit pipeline (bad JSON shape) reuses the loop's
-  // per-row failure shape so the PARTIAL contract holds — never throws.
-  const failRow = (index: number, message: string): void => {
-    failed++;
-    results.push({ type: "result", index, ok: false, reason: "dirty_input", message, raised_questions: 0 });
-  };
 
   for (let index = 0; index < items.length; index++) {
     const record = asRecord(items[index]);
     if (!record) {
-      failRow(index, "each transaction must be a JSON object.");
+      results.push(failRow(counters, index, "each transaction must be a JSON object."));
       continue;
     }
 
     const fileId = ((record.source_file_id as string | null | undefined) ?? opts.file) ?? null;
-    const ctx: TransactionCommitContext = {
-      batchId,
-      fileId,
-      fileHash: fileHashFor(fileId),
-    };
+    const ctx: TransactionCommitContext = { batchId, fileId, fileHash: fileHashFor(fileId) };
     const events: CommitEvent[] = [];
     const hooks = makeRecordingHooks(defaultTransactionCommitHooks(db, ctx), events);
+    const row: RowContext = { record, index, fileId, ctx, events, hooks };
 
     const linked = record.linked;
-    const isCompound = Array.isArray(linked) && linked.length > 0;
-
-    if (isCompound) {
-      const parsedHeader = safeParse(LINKED_HEADER_SPEC, record);
-      if (!parsedHeader.ok) {
-        failRow(index, parsedHeader.error);
-        continue;
-      }
-      const header: LinkedTransactionHeader = { ...parsedHeader.value, source_file_id: fileId };
-
-      const legs: LinkedTransactionLeg[] = [];
-      let legError: string | undefined;
-      for (const rawLeg of linked) {
-        const legRecord = asRecord(rawLeg);
-        if (!legRecord) {
-          legError = "each linked leg must be a JSON object.";
-          break;
-        }
-        const parsedLeg = safeParse(LINKED_LEG_SPEC, legRecord, { aliases: LEG_ALIASES });
-        if (!parsedLeg.ok) {
-          legError = parsedLeg.error;
-          break;
-        }
-        // Cast is a lie for malformed rows — validateRawTransaction rejects those.
-        legs.push({ ...parsedLeg.value, amount: legRecord.amount as number });
-      }
-      if (legError !== undefined) {
-        failRow(index, legError);
-        continue;
-      }
-
-      const outcome = commitLinkedTransactions(db, ctx, header, legs, hooks);
-      raisedTotal += outcome.raisedQuestions;
-
-      if (!outcome.ok) {
-        failed++;
-        results.push({
-          type: "result",
-          index,
-          ok: false,
-          reason: outcome.reason,
-          message: outcome.message,
-          raised_questions: outcome.raisedQuestions,
-        });
-        continue;
-      }
-
-      const allDuplicate = outcome.results.every((r) => r.duplicate);
-      if (allDuplicate) duplicates++;
-      else posted++;
-
-      results.push({
-        type: "result",
-        index,
-        ok: true,
-        group_id: outcome.group_id,
-        legs: outcome.results.map((r) => ({ transaction_id: r.id, duplicate: r.duplicate })),
-        duplicate: allDuplicate,
-        raised_questions: outcome.raisedQuestions,
-        merchant: classifyMerchant(parsedHeader.value, events, () =>
-          getTransaction(db, outcome.results[0]?.id)?.merchant_id,
-        ),
-      });
+    if (Array.isArray(linked) && linked.length > 0) {
+      results.push(commitCompoundRow(deps, row, linked));
       continue;
     }
-
-    // Standalone transaction.
-    const parsed = safeParse(STANDALONE_SPEC, record, { aliases: LEG_ALIASES });
-    if (!parsed.ok) {
-      failRow(index, parsed.error);
-      continue;
-    }
-    // Cast is a lie for malformed rows — validateRawTransaction rejects those.
-    const raw: RawTransactionInput = {
-      ...parsed.value,
-      source_file_id: fileId,
-      amount: record.amount as number,
-    };
-
-    const outcome = commitTransaction(db, ctx, raw, hooks);
-    raisedTotal += outcome.raisedQuestions;
-
-    if (!outcome.ok) {
-      failed++;
-      results.push({
-        type: "result",
-        index,
-        ok: false,
-        reason: outcome.reason,
-        message: outcome.message,
-        raised_questions: outcome.raisedQuestions,
-      });
-      continue;
-    }
-
-    if (outcome.duplicate) duplicates++;
-    else posted++;
-
-    results.push({
-      type: "result",
-      index,
-      ok: true,
-      transaction_id: outcome.transactionId,
-      duplicate: outcome.duplicate,
-      raised_questions: outcome.raisedQuestions,
-      merchant: classifyMerchant(parsed.value, events, () => getTransaction(db, outcome.transactionId)?.merchant_id),
-      sides: [
-        {
-          side: "debit",
-          requested: raw.debit_account_id,
-          ...classifySide(raw.debit_account_id, "debit", events, accountExists),
-        },
-        {
-          side: "credit",
-          requested: raw.credit_account_id,
-          ...classifySide(raw.credit_account_id, "credit", events, accountExists),
-        },
-      ],
-    });
+    results.push(commitStandaloneRow(deps, row));
   }
 
   const mode = currentMode();
   if (mode.json) {
     for (const r of results) emit(r);
-    emitSummary({ batch_id: batchId, posted, duplicates, failed, raised_questions: raisedTotal });
+    emitSummary({
+      batch_id: batchId,
+      posted: counters.posted,
+      duplicates: counters.duplicates,
+      failed: counters.failed,
+      raised_questions: counters.raisedTotal,
+    });
   } else {
     for (const r of results) emitObject(r);
     process.stdout.write(
-      `\nbatch ${batchId}: ${posted} posted, ${duplicates} duplicate(s), ${failed} failed, ${raisedTotal} question(s) raised\n`,
+      `\nbatch ${batchId}: ${counters.posted} posted, ${counters.duplicates} duplicate(s), ${counters.failed} failed, ${counters.raisedTotal} question(s) raised\n`,
     );
   }
 
   // Exit 7 only for genuine failures — duplicates are a successful no-op.
-  if (failed > 0) process.exitCode = EXIT.PARTIAL;
+  if (counters.failed > 0) process.exitCode = EXIT.PARTIAL;
 }

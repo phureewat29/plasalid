@@ -1,9 +1,9 @@
 import type Database from "libsql";
+import { deleteTransaction } from "../db/queries/transactions.js";
 import {
-  deleteTransaction,
   findDuplicateTransactions,
   type DuplicateTransactionRow,
-} from "../db/queries/transactions.js";
+} from "../db/queries/transactions-dedup.js";
 
 /**
  * Within each duplicate group, keeps the earliest transaction and deletes any

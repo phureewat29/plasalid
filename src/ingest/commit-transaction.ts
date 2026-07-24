@@ -10,14 +10,23 @@ import {
   insertTransaction,
   insertLinkedTransactions,
   validateTransaction,
-  deriveTransactionId,
-  deriveGroupId,
   type TransactionInput,
   type ValidateTransactionResult,
 } from "../db/queries/transactions.js";
+import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
 import { toMinorUnits } from "../lib/money.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import type { MerchantUpsertInput } from "../db/queries/merchants.js";
+
+/**
+ * Ledger-design §5: both legs of a single transaction must share a currency
+ * (derived from the accounts, never trusted from input); the fix for a
+ * cross-currency move is a linked conversion pair. This is the canonical
+ * CLI-facing hint for a `currency_mismatch`, shared by `transactions add`'s
+ * strict and `--resolve` paths so the §5 guidance has a single home.
+ */
+export const CURRENCY_MISMATCH_HINT =
+  "add a linked conversion pair (one leg per currency, sharing a group)";
 
 /**
  * Commit context for the transaction pipeline. `fileHash` enables idempotent

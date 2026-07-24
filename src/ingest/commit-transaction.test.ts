@@ -3,12 +3,8 @@ import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount, findAccountById } from "../accounts/accounts.js";
 import { getAccountBalancesFromTransactions } from "../accounts/balances.js";
-import {
-  countTransactions,
-  getTransaction,
-  deriveTransactionId,
-  deriveGroupId,
-} from "../db/queries/transactions.js";
+import { countTransactions, getTransaction } from "../db/queries/transactions.js";
+import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
 import { listQuestions, countQuestions } from "../db/queries/questions.js";
 import {
   commitTransaction,

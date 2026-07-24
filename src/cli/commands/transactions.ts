@@ -21,20 +21,23 @@ import {
   countTransactions,
   clampListLimit,
   getTransaction,
-  findDuplicateTransactions,
   voidTransactionAsMirror,
   type BulkRecategorizeFilter,
   type UpdateTransactionMetaFields,
   type ListTransactionsOptions,
   type TransactionRow,
   type TransactionCluster,
-  type DuplicateTransactionRow,
 } from "../../db/queries/transactions.js";
+import {
+  findDuplicateTransactions,
+  type DuplicateTransactionRow,
+} from "../../db/queries/transactions-dedup.js";
 import { findAccountById } from "../../accounts/accounts.js";
 import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
 import {
   commitTransaction,
   defaultTransactionCommitHooks,
+  CURRENCY_MISMATCH_HINT,
   type TransactionCommitContext,
   type RawTransactionInput,
 } from "../../ingest/commit-transaction.js";
@@ -349,9 +352,7 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
     const outcome = commitTransaction(db, ctx, raw, defaultTransactionCommitHooks(db, ctx));
     if (!outcome.ok) {
       if (outcome.reason === "currency_mismatch") {
-        fail("INVALID", outcome.message, {
-          hint: "add a linked conversion pair (one leg per currency, sharing a group)",
-        });
+        fail("INVALID", outcome.message, { hint: CURRENCY_MISMATCH_HINT });
       }
       fail("INVALID", outcome.message);
     }
@@ -379,14 +380,18 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
   const credit = findAccountById(db, raw.credit_account_id);
   if (!credit) fail("NOT_FOUND", `account "${raw.credit_account_id}" not found`, { hint: accountHint });
 
-  // Currency is derived from the resolved accounts; a cross-currency transaction is
-  // rejected (add it as a linked conversion pair instead).
+  // Ledger-design §5 currency rule, applied inline: derive currency from the
+  // pre-resolved accounts and reject a cross-currency move. The canonical
+  // `currency_mismatch` home is commitTransaction (the --resolve branch above);
+  // this path stays separate on purpose — it requires both accounts to pre-exist,
+  // raises no questions, and emits a self-contained message. Only the shared
+  // hint (CURRENCY_MISMATCH_HINT) is single-sourced.
   const currency = debit.currency || "THB";
   if ((credit.currency || "THB") !== currency) {
     fail(
       "INVALID",
       `debit ${debit.id} is ${currency}, credit ${credit.id} is ${credit.currency}; a single transaction can't cross currencies`,
-      { hint: "add a linked conversion pair (one leg per currency, sharing a group)" },
+      { hint: CURRENCY_MISMATCH_HINT },
     );
   }
 

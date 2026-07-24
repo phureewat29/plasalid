@@ -176,17 +176,15 @@ async function ingestPrepare(pathOrId: string, opts: PrepareOpts): Promise<void>
       outDir,
     });
   } catch (err) {
-    if (err instanceof PasswordRequiredError) {
-      if (err.reason === "wrong_password") {
-        fail("INPUT_REQUIRED", "incorrect password for encrypted PDF", {
-          hint: "pipe the correct password with --password-stdin, or store one via `plasalid vault add <pattern> --password-stdin`",
-        });
-      }
-      fail("INPUT_REQUIRED", "password required for encrypted PDF", {
-        hint: "pipe the password with --password-stdin, or store one via `plasalid vault add <pattern> --password-stdin`",
+    if (!(err instanceof PasswordRequiredError)) throw err;
+    if (err.reason === "wrong_password") {
+      fail("INPUT_REQUIRED", "incorrect password for encrypted PDF", {
+        hint: "pipe the correct password with --password-stdin, or store one via `plasalid vault add <pattern> --password-stdin`",
       });
     }
-    throw err;
+    fail("INPUT_REQUIRED", "password required for encrypted PDF", {
+      hint: "pipe the password with --password-stdin, or store one via `plasalid vault add <pattern> --password-stdin`",
+    });
   }
 
   if (result.format === "pdf") {

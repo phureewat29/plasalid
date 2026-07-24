@@ -5,6 +5,7 @@ import { existsSync } from "fs";
 import { formatAmount } from "../../currency.js";
 import { banner, visibleLength, ANSI_RE } from "../format.js";
 import { currentMode, emit, runAction } from "../output.js";
+import { tryExecute } from "../../lib/result.js";
 
 interface Counts {
   accounts: number;
@@ -56,37 +57,40 @@ async function buildReport(): Promise<StatusReport> {
     net_worth: null,
   };
 
-  // Deferred so non-db commands skip the libsql cost at startup; getDb() is
-  // wrapped so an unconfigured/wrong-key/unreadable db degrades to not-ready, never crashes.
-  try {
-    const { getDb } = await import("../../db/connection.js");
-    const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
-      "../../db/queries/account-balance.js"
-    );
-    const { countTransactions } = await import("../../db/queries/transactions.js");
-    const { countFiles } = await import("../../db/queries/files.js");
-    const { countQuestions } = await import("../../db/queries/questions.js");
-    const { listMerchants } = await import("../../db/queries/merchants.js");
-    const { countMemories } = await import("../../db/queries/notes.js");
+  // Deferred so non-db commands skip the libsql cost at startup.
+  const { getDb } = await import("../../db/connection.js");
+  const { getAccountBalancesFromTransactions, getNetWorthFromTransactions } = await import(
+    "../../db/queries/account-balance.js"
+  );
+  const { countTransactions } = await import("../../db/queries/transactions.js");
+  const { countFiles } = await import("../../db/queries/files.js");
+  const { countQuestions } = await import("../../db/queries/questions.js");
+  const { listMerchants } = await import("../../db/queries/merchants.js");
+  const { countMemories } = await import("../../db/queries/notes.js");
 
-    const db = getDb();
-    report.db.reachable = true;
-
-    report.counts = {
-      accounts: getAccountBalancesFromTransactions(db).length,
-      transactions: countTransactions(db),
-      merchants: listMerchants(db, { limit: 1000 }).length,
-      notes: countMemories(db),
-    };
-    report.files = countFiles(db);
-    const open = countQuestions(db);
-    const total = countQuestions(db, { includeDeferred: true });
-    report.questions = { open, deferred: Math.max(0, total - open) };
-    report.net_worth = getNetWorthFromTransactions(db);
-  } catch (err) {
-    report.db.reachable = false;
-    report.db.error = err instanceof Error ? err.message : String(err);
+  // The only reachability probe is opening the db: an unconfigured/wrong-key/
+  // unreadable db degrades to not-ready here. Counts run AFTER, outside the
+  // probe, so a bug in a query surfaces as a real error (via runAction) rather
+  // than masquerading as an unreachable database.
+  const opened = tryExecute(() => getDb());
+  if (!opened.ok) {
+    report.db.error = opened.error;
+    return report;
   }
+  const db = opened.value;
+  report.db.reachable = true;
+
+  report.counts = {
+    accounts: getAccountBalancesFromTransactions(db).length,
+    transactions: countTransactions(db),
+    merchants: listMerchants(db, { limit: 1000 }).length,
+    notes: countMemories(db),
+  };
+  report.files = countFiles(db);
+  const open = countQuestions(db);
+  const total = countQuestions(db, { includeDeferred: true });
+  report.questions = { open, deferred: Math.max(0, total - open) };
+  report.net_worth = getNetWorthFromTransactions(db);
 
   return report;
 }

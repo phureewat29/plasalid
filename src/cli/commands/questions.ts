@@ -3,6 +3,7 @@ import type { QuestionRow } from "../../db/queries/questions.js";
 import { emitList, fail, runAction, type Column } from "../output.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../../lib/validate.js";
+import { tryExecute } from "../../lib/result.js";
 
 interface QuestionListRow {
   id: string;
@@ -18,11 +19,8 @@ interface QuestionListRow {
 
 function parseJsonColumn(raw: string | null): unknown {
   if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  const parsed = tryExecute(() => JSON.parse(raw));
+  return parsed.ok ? parsed.value : null;
 }
 
 function toListRow(row: QuestionRow): QuestionListRow {

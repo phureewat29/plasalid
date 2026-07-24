@@ -151,6 +151,10 @@ function ensurePlaceholderAccount(db: Database.Database, accountId: string): Pla
   const type = segments[0] as AccountType;
   if (!TOP_LEVEL_TYPES.includes(type)) return { accountId: ensureUncategorizedFallback(db), fellBack: true };
 
+  // Intentional swallow: any hierarchy failure (unknown type, malformed id, a
+  // create race) degrades to the uncategorized fallback per this function's
+  // contract — a usable id is always returned, never a surfaced error.
+  // `--resolve` relies on this to auto-create a placeholder silently.
   try {
     walkAncestorChain(db, segments, type, segments.length);
   } catch {

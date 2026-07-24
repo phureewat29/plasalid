@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "fs";
 import { dirname, resolve } from "path";
 import { getPlasalidDir } from "./config.js";
+import { tryExecute } from "./lib/result.js";
 
 export function getContextPath(): string {
   return resolve(getPlasalidDir(), "context.md");
@@ -9,11 +10,8 @@ export function getContextPath(): string {
 export function readContext(): string {
   const p = getContextPath();
   if (!existsSync(p)) return "";
-  try {
-    return readFileSync(p, "utf-8");
-  } catch {
-    return "";
-  }
+  const result = tryExecute(() => readFileSync(p, "utf-8"));
+  return result.ok ? result.value : "";
 }
 
 function writeContext(content: string): void {

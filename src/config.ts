@@ -69,6 +69,10 @@ function loadFileConfig(): Partial<PlasalidConfig> {
   try {
     return JSON.parse(readFileSync(configPath, "utf-8"));
   } catch {
+    // Intentional swallow: this runs at module load (via buildConfig) and from
+    // saveConfig. A corrupt config file must degrade to defaults rather than
+    // throw — otherwise every command, including the `config` commands that
+    // would repair it, would crash on startup.
     return {};
   }
 }

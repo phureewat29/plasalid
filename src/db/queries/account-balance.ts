@@ -104,13 +104,13 @@ export interface CreateAccountInput {
  * Enforces the hierarchy invariants: top-level roots have parent_id null and
  * id == type; children need an existing same-type parent (its top-level root
  * auto-bootstraps, intermediate categories don't) and an id prefixed
- * `parent.id + ':'`. Duplicate id surfaces as code 'ACCOUNT_EXISTS'.
+ * `parent.id + ':'`. Throws on any violation; the caller does the INSERT.
  */
-export function createAccount(db: Database.Database, input: CreateAccountInput): void {
-  const bank = input.bank_name ? String(input.bank_name).toUpperCase() : null;
-  const maskedNumber = normalizeMaskedAccountNumber(input.account_number_masked);
-  const parentId = input.parent_id ?? null;
-
+function validateAccountHierarchy(
+  db: Database.Database,
+  input: CreateAccountInput,
+  parentId: string | null,
+): void {
   if (parentId === null) {
     if (!TOP_LEVEL_TYPES.includes(input.id as AccountType)) {
       throw new Error(
@@ -120,26 +120,35 @@ export function createAccount(db: Database.Database, input: CreateAccountInput):
     if (input.id !== input.type) {
       throw new Error(`Top-level root id "${input.id}" must equal its type "${input.type}".`);
     }
-  } else {
-    let parent = findAccountById(db, parentId);
-    if (!parent) {
-      if (TOP_LEVEL_TYPES.includes(parentId as AccountType)) {
-        ensureTopLevelRoot(db, parentId as AccountType);
-        parent = findAccountById(db, parentId);
-      }
-    }
-    if (!parent) {
-      throw new Error(`Parent account "${parentId}" does not exist; create it first.`);
-    }
-    if (parent.type !== input.type) {
-      throw new Error(
-        `Account "${input.id}" type "${input.type}" does not match parent "${parentId}" type "${parent.type}".`,
-      );
-    }
-    if (!input.id.startsWith(parent.id + ":")) {
-      throw new Error(`Account id "${input.id}" must start with parent id "${parent.id}:".`);
-    }
+    return;
   }
+
+  let parent = findAccountById(db, parentId);
+  if (!parent && TOP_LEVEL_TYPES.includes(parentId as AccountType)) {
+    ensureTopLevelRoot(db, parentId as AccountType);
+    parent = findAccountById(db, parentId);
+  }
+  if (!parent) {
+    throw new Error(`Parent account "${parentId}" does not exist; create it first.`);
+  }
+  if (parent.type !== input.type) {
+    throw new Error(
+      `Account "${input.id}" type "${input.type}" does not match parent "${parentId}" type "${parent.type}".`,
+    );
+  }
+  if (!input.id.startsWith(parent.id + ":")) {
+    throw new Error(`Account id "${input.id}" must start with parent id "${parent.id}:".`);
+  }
+}
+
+/** Inserts an account after enforcing the hierarchy invariants. A duplicate id
+ *  surfaces as an Error with code 'ACCOUNT_EXISTS'. */
+export function createAccount(db: Database.Database, input: CreateAccountInput): void {
+  const bank = input.bank_name ? String(input.bank_name).toUpperCase() : null;
+  const maskedNumber = normalizeMaskedAccountNumber(input.account_number_masked);
+  const parentId = input.parent_id ?? null;
+
+  validateAccountHierarchy(db, input, parentId);
 
   try {
     db.prepare(
@@ -158,10 +167,11 @@ export function createAccount(db: Database.Database, input: CreateAccountInput):
       input.statement_day ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
     );
-  } catch (err: any) {
-    if (String(err.message).includes("UNIQUE")) {
-      const dup = new Error(`Account "${input.id}" already exists.`);
-      (dup as any).code = "ACCOUNT_EXISTS";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("UNIQUE")) {
+      const dup = new Error(`Account "${input.id}" already exists.`) as Error & { code?: string };
+      dup.code = "ACCOUNT_EXISTS";
       throw dup;
     }
     throw err;

@@ -289,15 +289,13 @@ function prepareTransaction(
   // one — not dirty input. Re-resolve the fuzzy-matched side(s) with skipFuzzy.
   // A collision with no fuzzy match on either side falls through to the
   // dirty_input backstop below.
-  if (debitId === creditId) {
-    if (debitRes.hint?.type === "similar_matched") {
-      debitRes = resolveOnePosting(db, { account_id: input.debit_account_id }, { skipFuzzy: true });
-      debitId = debitRes.posting.account_id;
-    }
-    if (debitId === creditId && creditRes.hint?.type === "similar_matched") {
-      creditRes = resolveOnePosting(db, { account_id: input.credit_account_id }, { skipFuzzy: true });
-      creditId = creditRes.posting.account_id;
-    }
+  if (debitId === creditId && debitRes.hint?.type === "similar_matched") {
+    debitRes = resolveOnePosting(db, { account_id: input.debit_account_id }, { skipFuzzy: true });
+    debitId = debitRes.posting.account_id;
+  }
+  if (debitId === creditId && creditRes.hint?.type === "similar_matched") {
+    creditRes = resolveOnePosting(db, { account_id: input.credit_account_id }, { skipFuzzy: true });
+    creditId = creditRes.posting.account_id;
   }
 
   const hints: { side: TransactionSide; hint: AccountHint }[] = [];

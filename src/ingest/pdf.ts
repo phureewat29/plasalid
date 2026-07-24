@@ -17,10 +17,9 @@ function getMupdf(): Promise<Mupdf> {
 // mupdf's authenticatePassword returns 0 on a wrong password, non-zero on success.
 const MUPDF_AUTH_FAILED = 0;
 
-interface UnlockResult {
-  ok: boolean;
-  decrypted?: Buffer;
-}
+type UnlockResult =
+  | { ok: true; decrypted: Buffer }
+  | { ok: false; reason: "unsupported_document" | "wrong_password" };
 
 export async function isEncrypted(bytes: Buffer): Promise<boolean> {
   const mupdf = await getMupdf();
@@ -40,14 +39,14 @@ async function unlock(
   const doc = mupdf.Document.openDocument(bytes, "application/pdf");
   try {
     if (!(doc instanceof mupdf.PDFDocument)) {
-      return { ok: false };
+      return { ok: false, reason: "unsupported_document" };
     }
     if (!doc.needsPassword()) {
       return { ok: true, decrypted: bytes };
     }
     const result = doc.authenticatePassword(password);
     if (result === MUPDF_AUTH_FAILED) {
-      return { ok: false };
+      return { ok: false, reason: "wrong_password" };
     }
     const out = doc.saveToBuffer("decrypt");
     return { ok: true, decrypted: Buffer.from(out.asUint8Array()) };
@@ -178,7 +177,7 @@ export async function unlockNonInteractive(
 
   for (const cand of findCandidates(db, filename, config.dbEncryptionKey)) {
     const result = await unlock(bytes, cand.password);
-    if (result.ok && result.decrypted) {
+    if (result.ok) {
       recordUse(db, cand.id);
       return { ok: true, decrypted: result.decrypted };
     }
@@ -188,7 +187,7 @@ export async function unlockNonInteractive(
   if (!password) return { ok: false, reason: "password_required" };
 
   const result = await unlock(bytes, password);
-  if (!(result.ok && result.decrypted)) {
+  if (!result.ok) {
     return { ok: false, reason: "wrong_password" };
   }
   savePassword(db, suggestPattern(filename), password, config.dbEncryptionKey);

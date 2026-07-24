@@ -13,6 +13,7 @@ import {
   deriveTransactionId,
   deriveGroupId,
   type TransactionInput,
+  type ValidateTransactionResult,
 } from "../db/queries/transactions.js";
 import { toMinorUnits } from "../currency.js";
 import { recordQuestion } from "../db/queries/questions.js";
@@ -236,7 +237,7 @@ type PrepareResult =
       credit: { id: string; currency: string };
     };
 
-function validateRawTransaction(input: RawTransactionInput): { ok: true } | { ok: false; reason: string } {
+function validateRawTransaction(input: RawTransactionInput): ValidateTransactionResult {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) {
     return { ok: false, reason: "date must be an ISO date (YYYY-MM-DD)." };
   }

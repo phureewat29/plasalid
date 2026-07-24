@@ -61,7 +61,7 @@ interface TransactionDetail extends TransactionRow {
   group?: TransactionRow[];
 }
 
-type ValidateTransactionResult = { ok: true } | { ok: false; reason: string };
+export type ValidateTransactionResult = { ok: true } | { ok: false; reason: string };
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 

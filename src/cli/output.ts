@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { visibleLength, ANSI_RE } from "./format.js";
 import { ValidationError } from "../lib/validate.js";
+import { errorMessage } from "../lib/result.js";
 
 /**
  * Shared output + error layer for the deterministic CLI harness.
@@ -279,8 +280,18 @@ function toCliError(err: unknown): CliError {
       hint: "run `plasalid config --generate-key` to configure the harness",
     });
   }
-  const message = err instanceof Error ? err.message : String(err);
-  return new CliError("GENERIC", message);
+  return new CliError("GENERIC", errorMessage(err));
+}
+
+/** Shared not-found/invalid mapper for domain errors thrown as plain `Error`s:
+ *  a "not found" message (or one matching `extraNotFound`) maps to NOT_FOUND,
+ *  everything else maps to INVALID. */
+export function mapNotFoundError(err: unknown, extraNotFound?: RegExp): never {
+  const message = errorMessage(err);
+  if (/not found/i.test(message) || (extraNotFound && extraNotFound.test(message))) {
+    fail("NOT_FOUND", message);
+  }
+  fail("INVALID", message);
 }
 
 function reportError(err: unknown): number {

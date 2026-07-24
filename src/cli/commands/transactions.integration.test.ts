@@ -486,7 +486,7 @@ describe("transactions CLI integration (subprocess)", () => {
       ]);
       expect(metadataOnly.code).toBe(0);
       const metaResult = parseOne(metadataOnly.stdout);
-      expect(metaResult.changed).toBe(true);
+      expect(Object.keys(metaResult.after).length).toBeGreaterThan(0);
       expect(metaResult.after.bank_name).toBe("SCB");
       expect(metaResult.renamed).toBeUndefined();
 
@@ -506,8 +506,8 @@ describe("transactions CLI integration (subprocess)", () => {
         id: "asset:wallet",
         name: "Main Wallet",
         renamed: true,
-        changed: true,
       });
+      expect(Object.keys(bothResult.after).length).toBeGreaterThan(0);
       expect(bothResult.after.points_balance).toBe(10);
 
       const none = await runCli(["accounts", "update", "asset:wallet", "--json"]);

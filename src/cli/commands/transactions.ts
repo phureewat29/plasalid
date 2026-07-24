@@ -44,6 +44,7 @@ import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num, json } from "../../lib/validate.js";
+import { errorMessage } from "../../lib/result.js";
 
 // `transactions`: list/show/add/update/delete/recategorize/dedupe over the
 // TigerBeetle-style table. Amounts are minor units in the DB, decimals here (the CLI boundary).
@@ -222,7 +223,7 @@ function mergeTransactionsAction(opts: { from?: string; to?: string; yes?: boole
   try {
     result = voidTransactionAsMirror(db, parsed.from, parsed.to);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     if (/not found/i.test(message)) fail("NOT_FOUND", message);
     fail("INVALID", message);
   }

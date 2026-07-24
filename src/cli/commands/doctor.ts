@@ -8,6 +8,7 @@ import { join } from "path";
 import { getConfigPath, getDataDir } from "../../config.js";
 import { getVersion } from "../../setup/install.js";
 import { EXIT, currentMode, emit, emitList, runAction, type Column } from "../output.js";
+import { errorMessage } from "../../lib/result.js";
 
 interface Check {
   name: string;
@@ -17,10 +18,6 @@ interface Check {
 
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
 const REQUIRED_TABLES = ["accounts", "transactions", "questions"];
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 async function runChecks(): Promise<Check[]> {
   const checks: Check[] = [];
@@ -33,7 +30,7 @@ async function runChecks(): Promise<Check[]> {
     db = getDb();
     checks.push({ name: "db_open", ok: true });
   } catch (err) {
-    checks.push({ name: "db_open", ok: false, detail: errMsg(err) });
+    checks.push({ name: "db_open", ok: false, detail: errorMessage(err) });
   }
 
   try {
@@ -44,14 +41,14 @@ async function runChecks(): Promise<Check[]> {
     rmSync(probe, { force: true });
     checks.push({ name: "data_dir_writable", ok: true });
   } catch (err) {
-    checks.push({ name: "data_dir_writable", ok: false, detail: errMsg(err) });
+    checks.push({ name: "data_dir_writable", ok: false, detail: errorMessage(err) });
   }
 
   try {
     await import("mupdf");
     checks.push({ name: "mupdf_loads", ok: true });
   } catch (err) {
-    checks.push({ name: "mupdf_loads", ok: false, detail: errMsg(err) });
+    checks.push({ name: "mupdf_loads", ok: false, detail: errorMessage(err) });
   }
 
   if (db) {
@@ -68,7 +65,7 @@ async function runChecks(): Promise<Check[]> {
         detail: missing.length ? `missing: ${missing.join(", ")}` : undefined,
       });
     } catch (err) {
-      checks.push({ name: "schema_tables_present", ok: false, detail: errMsg(err) });
+      checks.push({ name: "schema_tables_present", ok: false, detail: errorMessage(err) });
     }
   } else {
     checks.push({ name: "schema_tables_present", ok: false, detail: "database not open" });

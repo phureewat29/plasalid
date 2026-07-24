@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { getDb } from "../../db/connection.js";
-import { emit, emitList, fail, requireYes, runAction, type Column } from "../output.js";
+import { emit, emitList, fail, mapNotFoundError, requireYes, runAction, type Column } from "../output.js";
 import {
   listMerchants,
   findMerchantByAlias,
@@ -15,14 +15,6 @@ import {
 import { findAccountById } from "../../db/queries/account-balance.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
-
-/** For merge: a missing-merchant message maps to NOT_FOUND, everything else
- *  (self-merge) maps to INVALID. */
-function mapMerchantError(err: unknown): never {
-  const message = err instanceof Error ? err.message : String(err);
-  if (/not found/i.test(message)) fail("NOT_FOUND", message);
-  fail("INVALID", message);
-}
 
 const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
   { header: "ID", value: (m) => m.id },
@@ -117,7 +109,7 @@ function mergeMerchantsAction(opts: { from?: string; to?: string; yes?: boolean 
   try {
     result = mergeMerchants(db, parsed.from, parsed.to);
   } catch (err) {
-    mapMerchantError(err);
+    mapNotFoundError(err);
   }
   emit({ from: parsed.from, to: parsed.to, ...result });
 }

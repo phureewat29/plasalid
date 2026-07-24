@@ -172,7 +172,7 @@ describe("updateAccountMetadata", () => {
 
   it("returns before/after for changed fields", () => {
     const result = updateAccountMetadata(db, "liability:ktc", { due_day: 20, statement_day: 28 });
-    expect(result.changed).toBe(true);
+    expect(Object.keys(result.after).length).toBeGreaterThan(0);
     expect(result.before.due_day).toBe(15);
     expect(result.after.due_day).toBe(20);
     expect(result.before.statement_day).toBeNull();
@@ -181,7 +181,7 @@ describe("updateAccountMetadata", () => {
 
   it("reports no change when patch is empty", () => {
     const result = updateAccountMetadata(db, "liability:ktc", {});
-    expect(result.changed).toBe(false);
+    expect(Object.keys(result.after).length).toBe(0);
   });
 
   it("shallow-merges metadata into the existing blob", () => {

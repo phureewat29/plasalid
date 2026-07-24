@@ -4,6 +4,7 @@ import { fromMinorUnits, toMinorUnits } from "../../currency.js";
 import { todayIso } from "../../lib/date.js";
 import { normalizeMaskedAccountNumber } from "./account-match.js";
 import { buildPatch, type PatchField } from "../../lib/patch.js";
+import { errorMessage } from "../../lib/result.js";
 
 export type AccountType = "asset" | "liability" | "income" | "expense" | "equity";
 
@@ -168,7 +169,7 @@ export function createAccount(db: Database.Database, input: CreateAccountInput):
       input.metadata ? JSON.stringify(input.metadata) : null,
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     if (message.includes("UNIQUE")) {
       const dup = new Error(`Account "${input.id}" already exists.`) as Error & { code?: string };
       dup.code = "ACCOUNT_EXISTS";
@@ -190,7 +191,6 @@ export interface UpdateAccountMetadataPatch {
 interface UpdateAccountMetadataResult {
   before: Record<string, unknown>;
   after: Record<string, unknown>;
-  changed: boolean;
 }
 
 const ACCOUNT_PATCH: Record<string, PatchField> = {
@@ -228,10 +228,10 @@ export function updateAccountMetadata(
     after.metadata = merged;
   }
 
-  if (sets.length === 0) return { before, after, changed: false };
+  if (sets.length === 0) return { before, after };
   params.push(id);
   db.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).run(...params);
-  return { before, after, changed: true };
+  return { before, after };
 }
 
 interface MergeAccountsResult {

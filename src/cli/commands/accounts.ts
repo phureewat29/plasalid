@@ -9,11 +9,13 @@ import {
   emitList,
   emitSummary,
   fail,
+  mapNotFoundError,
   readStdinBatch,
   requireYes,
   runAction,
   type Column,
 } from "../output.js";
+import { errorMessage } from "../../lib/result.js";
 import { emitObject } from "./ingest.js";
 import {
   getAccountBalancesFromTransactions,
@@ -55,14 +57,6 @@ function present(a: AccountBalanceMinor): PresentedAccount {
     debits_posted: fromMinorUnits(debits_posted, a.currency),
     credits_posted: fromMinorUnits(credits_posted, a.currency),
   };
-}
-
-/** Shared by create/merge/delete/adjust/update: a missing-id message maps to
- *  NOT_FOUND, everything else (hierarchy/self-merge/duplicate) maps to INVALID. */
-function mapAccountError(err: unknown): never {
-  const message = err instanceof Error ? err.message : String(err);
-  if (/not found|does not exist/i.test(message)) fail("NOT_FOUND", message);
-  fail("INVALID", message);
 }
 
 const ACCOUNT_COLUMNS: Column<PresentedAccount>[] = [
@@ -279,7 +273,7 @@ function createSingleAccount(opts: Record<string, unknown>): void {
   try {
     result = createOneAccount(db, parsed);
   } catch (err) {
-    mapAccountError(err);
+    mapNotFoundError(err, /does not exist/i);
   }
   emit({
     id: result.id,
@@ -342,8 +336,7 @@ async function createAccountsBatch(inputPath: string | undefined): Promise<void>
         continue;
       }
       failed++;
-      const message = err instanceof Error ? err.message : String(err);
-      results.push({ type: "result", index, ok: false, message });
+      results.push({ type: "result", index, ok: false, message: errorMessage(err) });
     }
   }
 
@@ -384,7 +377,7 @@ function mergeAccountsAction(opts: { from?: string; to?: string; yes?: boolean }
   try {
     result = mergeAccounts(db, parsed.from, parsed.to);
   } catch (err) {
-    mapAccountError(err);
+    mapNotFoundError(err, /does not exist/i);
   }
   emit({
     from: parsed.from,
@@ -401,7 +394,7 @@ function deleteAccountAction(id: string, opts: { yes?: boolean }): void {
   try {
     deleteAccount(db, id);
   } catch (err) {
-    mapAccountError(err);
+    mapNotFoundError(err, /does not exist/i);
   }
   emit({ id, deleted: true });
 }
@@ -428,7 +421,7 @@ function adjustAccountAction(
       date: parsed.date,
     });
   } catch (err) {
-    mapAccountError(err);
+    mapNotFoundError(err, /does not exist/i);
   }
   emit({ transaction_id: result.transactionId, delta: result.delta });
 }
@@ -483,7 +476,7 @@ function updateAccountAction(id: string, opts: Record<string, unknown>): void {
     try {
       metaResult = updateAccountMetadata(db, id, patch);
     } catch (err) {
-      mapAccountError(err);
+      mapNotFoundError(err, /does not exist/i);
     }
     Object.assign(result, metaResult);
   }

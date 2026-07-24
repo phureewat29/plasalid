@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import type Database from "libsql";
 import type {
   TransactionCommitContext,
@@ -8,8 +7,9 @@ import type {
   LinkedTransactionHeader,
   LinkedTransactionLeg,
 } from "../../ingest/commit-transaction.js";
-import { EXIT, asRecord, currentMode, emit, emitSummary, fail, readStdinBatch } from "../output.js";
-import { emitObject, openDb } from "./ingest.js";
+import { EXIT, asRecord, currentMode, emit, emitObject, emitSummary, fail, readStdinBatch } from "../output.js";
+import { openDb } from "../db.js";
+import { newBatchId } from "../../lib/ids.js";
 import * as z from "zod";
 import { safeParse, str, num, json } from "../../lib/validate.js";
 import type { MerchantUpsertInput } from "../../db/queries/merchants.js";
@@ -325,7 +325,7 @@ export async function ingestCommit(opts: CommitOpts): Promise<void> {
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
 
   // Must be non-null: raise() no-ops when batchId is null, silently dropping every question.
-  const batchId = `ib:${randomUUID()}`;
+  const batchId = newBatchId();
   const fileHashFor = makeFileHashCache(db, findFileById);
 
   const counters: Counters = { posted: 0, duplicates: 0, failed: 0, raisedTotal: 0 };

@@ -1,14 +1,14 @@
 import { config } from "../config.js";
 
-const DEFAULT_LOCALE = "th-TH";
-const DEFAULT_CURRENCY = "THB";
-
+// No local locale/currency defaults: buildConfig() resolves these with `||`
+// over its non-empty defaults, so config.displayLocale/displayCurrency are
+// never empty. The single last-resort constants live in config.ts.
 export function getDisplayLocale(): string {
-  return config.displayLocale || DEFAULT_LOCALE;
+  return config.displayLocale;
 }
 
 export function getDisplayCurrency(): string {
-  return config.displayCurrency || DEFAULT_CURRENCY;
+  return config.displayCurrency;
 }
 
 export function formatCurrencyAmount(

@@ -3,7 +3,7 @@ import type { QuestionRow } from "../../db/queries/questions.js";
 import { emitList, fail, runAction, type Column } from "../output.js";
 import * as z from "zod";
 import { parseInput, str, int } from "../../lib/validate.js";
-import { tryExecute } from "../../lib/result.js";
+import { parseJsonOrNull } from "../../lib/json.js";
 
 interface QuestionListRow {
   id: string;
@@ -17,12 +17,6 @@ interface QuestionListRow {
   created_at: string;
 }
 
-function parseJsonColumn(raw: string | null): unknown {
-  if (!raw) return null;
-  const parsed = tryExecute(() => JSON.parse(raw));
-  return parsed.ok ? parsed.value : null;
-}
-
 function toListRow(row: QuestionRow): QuestionListRow {
   return {
     id: row.id,
@@ -30,8 +24,8 @@ function toListRow(row: QuestionRow): QuestionListRow {
     prompt: row.prompt,
     transaction_id: row.transaction_id,
     account_id: row.account_id,
-    options: parseJsonColumn(row.options_json),
-    context: parseJsonColumn(row.context_json),
+    options: parseJsonOrNull(row.options_json),
+    context: parseJsonOrNull(row.context_json),
     file_id: row.file_id,
     created_at: row.created_at,
   };

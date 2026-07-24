@@ -5,16 +5,16 @@
  * at the CLI/pipeline boundary.
  */
 
-const DEFAULT_CURRENCY = "THB";
-
 const exponentCache = new Map<string, number>();
 
 /**
  * Fractional digits the currency's minor unit carries (THB=2, JPY=0, KWD=3),
- * resolved via Intl and memoized. Falls back to 2 on an unresolvable code.
+ * resolved via Intl and memoized. Falls back to 2 on an unresolvable code —
+ * including an empty/garbage code, which Intl rejects (matching THB's own
+ * exponent of 2, so no local default currency is needed).
  */
 export function minorUnitExponent(currency: string): number {
-  const code = (currency || DEFAULT_CURRENCY).toUpperCase();
+  const code = currency.toUpperCase();
   const cached = exponentCache.get(code);
   if (cached !== undefined) return cached;
 

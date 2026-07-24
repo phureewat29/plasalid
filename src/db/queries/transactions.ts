@@ -1,7 +1,8 @@
 import type Database from "libsql";
-import { randomUUID } from "crypto";
 import { upsertMerchant, type MerchantUpsertInput } from "./merchants.js";
 import { buildPatch, type PatchField } from "../../lib/patch.js";
+import { newGroupId, newTransactionId } from "../../lib/ids.js";
+import { ISO_DATE_RE } from "../../lib/date.js";
 
 /**
  * TigerBeetle-style single-row transaction: one debit account, one credit
@@ -63,11 +64,9 @@ interface TransactionDetail extends TransactionRow {
 
 export type ValidateTransactionResult = { ok: true } | { ok: false; reason: string };
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 // Amount must already be an integer in minor units — this layer never sees decimals.
 export function validateTransaction(input: TransactionInput): ValidateTransactionResult {
-  if (!ISO_DATE.test(input.date ?? "")) {
+  if (!ISO_DATE_RE.test(input.date ?? "")) {
     return { ok: false, reason: "Transaction date must be an ISO date (YYYY-MM-DD)." };
   }
   if (!input.description || !input.description.trim()) {
@@ -121,7 +120,7 @@ export function insertTransaction(
   const check = validateTransaction(input);
   if (!check.ok) throw new Error(check.reason);
 
-  const id = input.id ?? `tx:${randomUUID()}`;
+  const id = input.id ?? newTransactionId();
   let merchantId = input.merchant_id ?? null;
   if (!merchantId && input.merchant) {
     merchantId = upsertMerchant(db, input.merchant).id;
@@ -155,7 +154,7 @@ export function insertLinkedTransactions(
     throw new Error("insertLinkedTransactions requires at least one transaction.");
   }
   const groupId =
-    opts.group_id ?? inputs.find((i) => i.group_id)?.group_id ?? `tg:${randomUUID()}`;
+    opts.group_id ?? inputs.find((i) => i.group_id)?.group_id ?? newGroupId();
 
   let results: { id: string; duplicate: boolean }[] = [];
   const tx = db.transaction((): void => {

@@ -1,7 +1,8 @@
 import type Database from "libsql";
 import { insertTransaction } from "../db/queries/transactions.js";
+import { config } from "../config.js";
 import { fromMinorUnits, toMinorUnits } from "../lib/money.js";
-import { todayIso } from "../lib/date.js";
+import { todayIso, ISO_DATE_RE } from "../lib/date.js";
 import {
   type AccountType,
   type AccountRow,
@@ -177,7 +178,7 @@ export function adjustAccountBalanceViaTransaction(
     throw new Error(`targetAmount must be a number, got ${JSON.stringify(opts.targetAmount)}.`);
   }
 
-  const currency = account.currency || "THB";
+  const currency = account.currency || config.displayCurrency;
   const currentMinor =
     getAccountBalancesFromTransactions(db).find((b) => b.id === account.id)?.balance_minor ?? 0;
   const targetMinor = toMinorUnits(target, currency);
@@ -191,7 +192,7 @@ export function adjustAccountBalanceViaTransaction(
   const creditAccountId = accountIsDebit ? EQUITY_ADJUST_ID : account.id;
 
   const date =
-    opts.date && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : todayIso();
+    opts.date && ISO_DATE_RE.test(opts.date) ? opts.date : todayIso();
   const reason = String(opts.reason || "Balance adjustment").trim();
 
   let transactionId = "";

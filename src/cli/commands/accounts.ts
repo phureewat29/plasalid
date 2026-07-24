@@ -7,6 +7,7 @@ import {
   currentMode,
   emit,
   emitList,
+  emitObject,
   emitSummary,
   fail,
   mapNotFoundError,
@@ -16,7 +17,6 @@ import {
   type Column,
 } from "../output.js";
 import { errorMessage } from "../../lib/result.js";
-import { emitObject } from "./ingest.js";
 import {
   createAccount,
   renameAccount,

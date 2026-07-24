@@ -30,6 +30,10 @@ const PLASALID_DIR = process.env.PLASALID_DIR
  * the fields listed here.
  */
 const CONFIG_FIELDS: Record<keyof PlasalidConfig, { envVar?: string; default: string }> = {
+  // Single last-resort locale/currency constants for the whole codebase,
+  // overridden by `config converge`. Every other module reads the resolved
+  // config value (or getDisplayCurrency) rather than hardcoding a currency.
+  // A later wave seeds these from the active dataset.
   displayLocale: { default: "th-TH" },
   displayCurrency: { default: "THB" },
   dbPath: { envVar: "PLASALID_DB_PATH", default: resolve(PLASALID_DIR, "db.sqlite") },

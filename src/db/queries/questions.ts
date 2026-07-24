@@ -1,6 +1,6 @@
 import type Database from "libsql";
 import { randomUUID } from "crypto";
-import { tryExecute } from "../../lib/result.js";
+import { parseJsonOrNull } from "../../lib/json.js";
 
 interface QuestionTarget {
   /** The transaction this question is about, when it targets a specific movement. */
@@ -106,10 +106,8 @@ export function closeQuestion(
 }
 
 function extractRuleKey(contextJson: string | null): string | null {
-  if (!contextJson) return null;
-  const parsed = tryExecute(() => JSON.parse(contextJson));
-  if (!parsed.ok) return null;
-  return typeof parsed.value?.rule_key === "string" ? parsed.value.rule_key : null;
+  const parsed = parseJsonOrNull(contextJson) as { rule_key?: unknown } | null;
+  return typeof parsed?.rule_key === "string" ? parsed.rule_key : null;
 }
 
 /**

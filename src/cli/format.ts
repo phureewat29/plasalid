@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import type { OutputMode } from "./output.js";
 
 // eslint-disable-next-line no-control-regex
 export const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -15,6 +16,26 @@ export function formatInt(n: number): string {
 export function padLabel(label: string, width: number, opts: { bold?: boolean } = {}): string {
   const padded = label.padEnd(width);
   return opts.bold ? chalk.bold(padded) : padded;
+}
+
+/**
+ * Print flat key/value rows for human output: aligned two-column in a TTY
+ * (labels bold when `bold`), tab-separated when piped. Never emits JSON — the
+ * caller owns the `--json` path.
+ */
+export function printKeyValues(
+  mode: OutputMode,
+  rows: [string, string | number][],
+  opts: { bold?: boolean } = {},
+): void {
+  if (!mode.tty) {
+    process.stdout.write(rows.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n");
+    return;
+  }
+  const width = Math.max(...rows.map(([k]) => k.length));
+  for (const [k, v] of rows) {
+    process.stdout.write(`${padLabel(k, width, { bold: !!opts.bold })}  ${v}\n`);
+  }
 }
 
 export function banner(): string {

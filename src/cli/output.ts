@@ -143,6 +143,19 @@ export function emitList<T>(rows: T[], columns: Column<T>[]): void {
   renderPlain(rows, columns);
 }
 
+/** JSON → one NDJSON object; human/plain → tab-separated key/value lines
+ *  (ANSI-free, so it stays stable when piped). */
+export function emitObject(obj: Record<string, unknown>): void {
+  if (currentMode().json) {
+    emit(obj);
+    return;
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    const s = v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
+    process.stdout.write(`${k}\t${s}\n`);
+  }
+}
+
 function renderPlain<T>(rows: T[], columns: Column<T>[]): void {
   const lines = rows.map((row) =>
     columns.map((c) => c.value(row).replace(ANSI_RE, "")).join("\t"),

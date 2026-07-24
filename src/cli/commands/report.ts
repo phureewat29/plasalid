@@ -1,20 +1,7 @@
 import type { Command } from "commander";
-import { padLabel } from "../format.js";
-import { currentMode, emit, fail, runAction, type OutputMode } from "../output.js";
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Print a flat set of key/value pairs: colored two-column in TTY, tab-separated otherwise. */
-function printKeyValues(mode: OutputMode, rows: [string, string | number][]): void {
-  if (!mode.tty) {
-    process.stdout.write(rows.map(([k, v]) => `${k}\t${v}`).join("\n") + "\n");
-    return;
-  }
-  const width = Math.max(...rows.map(([k]) => k.length));
-  for (const [k, v] of rows) {
-    process.stdout.write(`${padLabel(k, width, { bold: mode.color })}  ${v}\n`);
-  }
-}
+import { printKeyValues } from "../format.js";
+import { currentMode, emit, fail, runAction } from "../output.js";
+import { ISO_DATE_RE } from "../../lib/date.js";
 
 export function registerReport(program: Command): void {
   program
@@ -48,13 +35,17 @@ export function registerReport(program: Command): void {
           emit(result);
           return;
         }
-        printKeyValues(mode, [
-          ["from", result.from],
-          ["to", result.to],
-          ["income", result.income],
-          ["expenses", result.expenses],
-          ["net", result.net],
-        ]);
+        printKeyValues(
+          mode,
+          [
+            ["from", result.from],
+            ["to", result.to],
+            ["income", result.income],
+            ["expenses", result.expenses],
+            ["net", result.net],
+          ],
+          { bold: mode.color },
+        );
       }),
     );
 }

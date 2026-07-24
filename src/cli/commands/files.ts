@@ -1,36 +1,18 @@
 import type { Command } from "commander";
 import {
   type Column,
-  currentMode,
-  emit,
   emitList,
+  emitObject,
   fail,
   requireYes,
   runAction,
 } from "../output.js";
+import { openDb } from "../db.js";
 
 /**
  * `files`: browse ingested files, inspect one with its transaction/question
  * counts, and drop one (cascade-removing its rows).
  */
-
-/** JSON → one NDJSON object; human/plain → tab-separated key/value lines
- *  (ANSI-free, so it stays stable when piped). */
-function emitObject(obj: Record<string, unknown>): void {
-  if (currentMode().json) {
-    emit(obj);
-    return;
-  }
-  for (const [k, v] of Object.entries(obj)) {
-    const s = v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
-    process.stdout.write(`${k}\t${s}\n`);
-  }
-}
-
-async function openDb() {
-  const { getDb } = await import("../../db/connection.js");
-  return getDb();
-}
 
 interface FilesListOpts {
   status?: string;

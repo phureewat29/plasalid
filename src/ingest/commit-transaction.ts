@@ -1,5 +1,5 @@
 import type Database from "libsql";
-import { randomUUID } from "crypto";
+import { config } from "../config.js";
 import {
   resolveOnePosting,
   resolveMerchantId,
@@ -13,8 +13,9 @@ import {
   type TransactionInput,
   type ValidateTransactionResult,
 } from "../db/queries/transactions.js";
-import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
+import { deriveTransactionId, deriveGroupId, newTransactionId, newGroupId } from "../lib/ids.js";
 import { toMinorUnits } from "../lib/money.js";
+import { ISO_DATE_RE } from "../lib/date.js";
 import { recordQuestion } from "../db/queries/questions.js";
 import type { MerchantUpsertInput } from "../db/queries/merchants.js";
 
@@ -247,7 +248,7 @@ type PrepareResult =
     };
 
 function validateRawTransaction(input: RawTransactionInput): ValidateTransactionResult {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? "")) {
+  if (!ISO_DATE_RE.test(input.date ?? "")) {
     return { ok: false, reason: "date must be an ISO date (YYYY-MM-DD)." };
   }
   if (!input.description || !input.description.trim()) {
@@ -272,7 +273,7 @@ function accountCurrency(db: Database.Database, id: string): string {
   const row = db.prepare(`SELECT currency FROM accounts WHERE id = ?`).get(id) as
     | { currency: string }
     | undefined;
-  return row?.currency || "THB";
+  return row?.currency || config.displayCurrency;
 }
 
 /**
@@ -377,7 +378,7 @@ function prepareTransaction(
           input.row_index,
           input.leg_index ?? undefined,
         )
-      : input.id ?? `tx:${randomUUID()}`;
+      : input.id ?? newTransactionId();
 
   const built: TransactionInput = {
     id,
@@ -542,7 +543,7 @@ export function commitLinkedTransactions(
     header.group_id ??
     (ctx.fileHash && header.row_index != null
       ? deriveGroupId(ctx.fileHash, header.source_page ?? 0, header.row_index)
-      : `tg:${randomUUID()}`);
+      : newGroupId());
 
   const preps: PreparedTransaction[] = [];
   for (let i = 0; i < legs.length; i++) {

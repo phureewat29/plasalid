@@ -1,17 +1,18 @@
 import { resolve } from "path";
 import { Option } from "commander";
 import type { Command } from "commander";
-import type Database from "libsql";
 import {
   type Column,
   currentMode,
   emit,
   emitList,
+  emitObject,
   emitSummary,
   fail,
   readSecretFromStdin,
   runAction,
 } from "../output.js";
+import { openDb } from "../db.js";
 import { ingestCommit } from "./ingest-commit.js";
 
 /**
@@ -19,26 +20,6 @@ import { ingestCommit } from "./ingest-commit.js";
  * files done/failed. Heavy db/ingest imports are deferred inside each action
  * so non-db commands don't pay for libsql/mupdf at startup (see status.ts).
  */
-
-// small shared output helper
-
-/** JSON → one NDJSON object; human/plain → tab-separated key/value lines
- *  (ANSI-free, so it stays stable when piped). */
-export function emitObject(obj: Record<string, unknown>): void {
-  if (currentMode().json) {
-    emit(obj);
-    return;
-  }
-  for (const [k, v] of Object.entries(obj)) {
-    const s = v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
-    process.stdout.write(`${k}\t${s}\n`);
-  }
-}
-
-export async function openDb(): Promise<Database.Database> {
-  const { getDb } = await import("../../db/connection.js");
-  return getDb();
-}
 
 // pages spec parser (pure; unit-tested)
 

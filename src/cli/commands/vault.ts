@@ -2,38 +2,20 @@ import type { Command } from "commander";
 import { config } from "../../config.js";
 import {
   type Column,
-  currentMode,
-  emit,
   emitList,
+  emitObject,
   fail,
   readSecretFromStdin,
   requireYes,
   runAction,
 } from "../output.js";
+import { openDb } from "../db.js";
 
 /**
  * `vault`: manages file-password patterns for unlocking encrypted statements
  * non-interactively. Passwords are encrypted at rest (see pdf.ts's
  * savePassword); this surface never prints plaintext.
  */
-
-function emitObject(obj: Record<string, unknown>): void {
-  if (currentMode().json) {
-    emit(obj);
-    return;
-  }
-  for (const [k, v] of Object.entries(obj)) {
-    const s = v !== null && typeof v === "object" ? JSON.stringify(v) : String(v);
-    process.stdout.write(`${k}\t${s}\n`);
-  }
-}
-
-async function openDb() {
-  const { getDb } = await import("../../db/connection.js");
-  return getDb();
-}
-
-// vault add
 
 interface AddOpts {
   passwordStdin?: boolean;
@@ -60,8 +42,6 @@ async function vaultAdd(pattern: string, _opts: AddOpts): Promise<void> {
   emitObject({ id, pattern });
 }
 
-// vault list
-
 async function vaultList(): Promise<void> {
   const db = await openDb();
   const { listPasswords } = await import("../../db/queries/vault.js");
@@ -75,8 +55,6 @@ async function vaultList(): Promise<void> {
   ];
   emitList(rows, columns);
 }
-
-// vault rm
 
 interface RmOpts {
   yes?: boolean;

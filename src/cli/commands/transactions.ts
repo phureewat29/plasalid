@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type Database from "libsql";
-import { randomUUID } from "crypto";
 import { getDb } from "../../db/connection.js";
 import {
   currentMode,
@@ -8,6 +7,7 @@ import {
   emitList,
   emitSummary,
   fail,
+  mapNotFoundError,
   readStdinToEnd,
   requireYes,
   runAction,
@@ -44,11 +44,12 @@ import {
 } from "../../ingest/commit-transaction.js";
 import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup-transactions.js";
 import { fromMinorUnits, toMinorUnits } from "../../lib/money.js";
+import { getDisplayCurrency } from "../currency.js";
+import { newBatchId } from "../../lib/ids.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import { todayIso } from "../../lib/date.js";
 import * as z from "zod";
 import { parseInput, str, num, json } from "../../lib/validate.js";
-import { errorMessage } from "../../lib/result.js";
 
 // `transactions`: list/show/add/update/delete/recategorize/dedupe over the
 // TigerBeetle-style table. Amounts are minor units in the DB, decimals here (the CLI boundary).
@@ -105,10 +106,10 @@ function runList(opts: ListOpts): void {
   if (parsed.from) listOpts.from = parsed.from;
   if (parsed.to) listOpts.to = parsed.to;
   if (parsed.query) listOpts.query = parsed.query;
-  // Amount crosses the decimal -> minor-unit boundary here; currency defaults to
-  // THB (the ledger's primary currency) when the caller doesn't pin one.
+  // Amount crosses the decimal -> minor-unit boundary here; currency defaults
+  // to the configured display currency when the caller doesn't pin one.
   if (parsed.amount !== undefined) {
-    listOpts.amount = toMinorUnits(parsed.amount, parsed.currency ?? "THB");
+    listOpts.amount = toMinorUnits(parsed.amount, parsed.currency ?? getDisplayCurrency());
   }
   if (parsed.limit !== undefined) listOpts.limit = parsed.limit;
 
@@ -227,9 +228,7 @@ function mergeTransactionsAction(opts: { from?: string; to?: string; yes?: boole
   try {
     result = voidTransactionAsMirror(db, parsed.from, parsed.to);
   } catch (err) {
-    const message = errorMessage(err);
-    if (/not found/i.test(message)) fail("NOT_FOUND", message);
-    fail("INVALID", message);
+    mapNotFoundError(err);
   }
 
   if (result.alreadyVoid) {
@@ -340,7 +339,7 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
 }
 
 function addViaResolve(db: Database.Database, raw: RawTransactionInput): void {
-  const batchId = `ib:${randomUUID()}`;
+  const batchId = newBatchId();
   const ctx: TransactionCommitContext = {
     batchId,
     fileId: null,
@@ -382,8 +381,8 @@ function addStrict(db: Database.Database, raw: RawTransactionInput): void {
   // this path stays separate on purpose — it requires both accounts to pre-exist,
   // raises no questions, and emits a self-contained message. Only the shared
   // hint (CURRENCY_MISMATCH_HINT) is single-sourced.
-  const currency = debit.currency || "THB";
-  if ((credit.currency || "THB") !== currency) {
+  const currency = debit.currency || getDisplayCurrency();
+  if ((credit.currency || getDisplayCurrency()) !== currency) {
     fail(
       "INVALID",
       `debit ${debit.id} is ${currency}, credit ${credit.id} is ${credit.currency}; a single transaction can't cross currencies`,

@@ -3,6 +3,8 @@ import { accountHasTransactions } from "../db/queries/transactions.js";
 import { normalizeMaskedAccountNumber } from "./matching.js";
 import { buildPatch, type PatchField } from "../lib/patch.js";
 import { errorMessage } from "../lib/result.js";
+import { parseJsonOrNull } from "../lib/json.js";
+import { config } from "../config.js";
 import {
   type AccountType,
   TOP_LEVEL_TYPES,
@@ -119,7 +121,7 @@ export function createAccount(db: Database.Database, input: CreateAccountInput):
       input.subtype ?? null,
       bank,
       maskedNumber,
-      input.currency ?? "THB",
+      input.currency ?? config.displayCurrency,
       input.due_day ?? null,
       input.statement_day ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
@@ -167,7 +169,16 @@ export function updateAccountMetadata(
   const { sets, params, before, after } = buildPatch(ACCOUNT_PATCH, current, patch);
 
   if (patch.metadata !== undefined) {
-    const existing = current.metadata_json ? JSON.parse(current.metadata_json) : {};
+    // A non-null blob that fails to parse must surface an error, not be
+    // silently overwritten with {} — that would discard real (if corrupt) data.
+    let existing: Record<string, unknown> = {};
+    if (current.metadata_json != null) {
+      const parsed = parseJsonOrNull(current.metadata_json);
+      if (parsed == null || typeof parsed !== "object") {
+        throw new Error(`Account "${id}" has unreadable metadata_json; refusing to overwrite it.`);
+      }
+      existing = parsed as Record<string, unknown>;
+    }
     const merged = { ...existing, ...patch.metadata };
     sets.push("metadata_json = ?");
     params.push(JSON.stringify(merged));

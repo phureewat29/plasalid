@@ -16,8 +16,9 @@ describe("currency helpers", () => {
   });
 
   it("defaults to Thai locale and THB", () => {
-    config.displayLocale = "";
-    config.displayCurrency = "";
+    // The helpers now trust config (buildConfig guarantees non-empty values);
+    // the last-resort defaults are asserted at the config layer, and resolve
+    // to th-TH / THB here.
     expect(getDisplayLocale()).toBe("th-TH");
     expect(getDisplayCurrency()).toBe("THB");
   });

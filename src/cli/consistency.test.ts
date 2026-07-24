@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { buildProgram, COMMANDS } from "./program.js";
 import { AGENTS_MD_BLOCK } from "../setup/codex.js";
-import { ALL_THAI_INSTITUTIONS } from "../accounts/taxonomy.js";
+import { findInstitutions } from "../accounts/taxonomy.js";
 
 /**
  * Drift-prevention test: no subprocesses, pure import + string parsing. Keeps
@@ -231,9 +231,9 @@ describe("docs consistency (no subprocesses)", () => {
 
   it("SKILL.md Thai institution codes match the account-forming registry exactly (both directions)", () => {
     const expected = new Set(
-      ALL_THAI_INSTITUTIONS.filter((inst) => ACCOUNT_FORMING_KINDS.includes(inst.kind)).map(
-        (inst) => inst.code,
-      ),
+      findInstitutions({ country: "TH" })
+        .filter((inst) => ACCOUNT_FORMING_KINDS.includes(inst.kind))
+        .map((inst) => inst.code),
     );
 
     /** Codes are the backtick spans between the institution heading and the next heading. */

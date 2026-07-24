@@ -28,7 +28,8 @@
   },
   "files": [
     "dist/",
-    "skills/"
+    "skills/",
+    "taxonomy/"
   ],
   "scripts": {
     "build": "tsc",

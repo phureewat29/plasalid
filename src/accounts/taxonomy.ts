@@ -1,149 +1,108 @@
-type InstitutionKind =
-  | "bank"
-  | "card_issuer"
-  | "wallet"
-  | "payment_rail"
-  | "broker"
-  | "crypto_exchange"
-  | "insurer"
-  | "gov"
-  | "telco"
-  | "utility";
+import * as z from "zod";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-export interface ThaiInstitution {
-  code: string;
-  label: string;
-  kind: InstitutionKind;
-  /** Optional disambiguating note (mergers, rebrands, regulatory status). */
-  notes?: string;
+/**
+ * Data-driven institution registry. The taxonomy itself lives as one JSON file
+ * per country under `taxonomy/` at the package root (shipped via package.json's
+ * `files`); this module loads, validates, and flattens those files. Adding a
+ * country is a new `<cc>.json`, not a code change.
+ */
+
+const INSTITUTION_KINDS = [
+  "bank",
+  "card_issuer",
+  "wallet",
+  "payment_rail",
+  "broker",
+  "crypto_exchange",
+  "insurer",
+  "gov",
+  "telco",
+  "utility",
+] as const;
+
+const institutionSchema = z.object({
+  code: z.string(),
+  label: z.string(),
+  kind: z.enum(INSTITUTION_KINDS),
+  notes: z.string().optional(),
+});
+
+/** Shape of one `taxonomy/<cc>.json` file. Exported so the loader test can
+ *  exercise validation directly without writing a malformed file to disk. */
+export const countryFileSchema = z.object({
+  country: z.string(),
+  institutions: z.array(institutionSchema),
+});
+
+export type InstitutionKind = z.infer<typeof institutionSchema>["kind"];
+export type Institution = z.infer<typeof institutionSchema>;
+
+/** An institution tagged with the (uppercased) country it was loaded from. */
+export interface LoadedInstitution extends Institution {
+  country: string;
 }
 
-const THAI_BANKS: ThaiInstitution[] = [
-  { code: "KBANK", label: "Kasikornbank", kind: "bank" },
-  { code: "SCB", label: "Siam Commercial Bank", kind: "bank" },
-  { code: "BBL", label: "Bangkok Bank", kind: "bank" },
-  { code: "KTB", label: "Krungthai Bank", kind: "bank", notes: "State-owned." },
-  { code: "BAY", label: "Krungsri (Bank of Ayudhya)", kind: "bank" },
-  { code: "TTB", label: "TMBThanachart Bank", kind: "bank", notes: "Result of TMB + Thanachart merger." },
-  { code: "UOB-TH", label: "UOB Thailand", kind: "bank", notes: "Absorbed Citi Thailand's consumer banking (incl. cards) in Nov 2022." },
-  { code: "CIMB-TH", label: "CIMB Thai", kind: "bank" },
-  { code: "GHB", label: "Government Housing Bank", kind: "bank", notes: "State-owned, mortgage focus." },
-  { code: "GSB", label: "Government Savings Bank", kind: "bank", notes: "State-owned." },
-  { code: "LH-BANK", label: "Land and Houses Bank", kind: "bank" },
-  { code: "KKP", label: "Kiatnakin Phatra Bank", kind: "bank", notes: "Merged 2020 from KK + Phatra." },
-  { code: "TISCO", label: "TISCO Bank", kind: "bank" },
-  { code: "IBT", label: "Islamic Bank of Thailand", kind: "bank", notes: "State-owned; serves all customers." },
-  { code: "ICBC-TH", label: "ICBC (Thai)", kind: "bank", notes: "Subsidiary of ICBC China." },
-  { code: "BAAC", label: "Bank for Agriculture and Agricultural Cooperatives", kind: "bank", notes: "State-owned, rural finance." },
-];
+// Two levels below the package root in both layouts: src/accounts/ under tsx,
+// dist/accounts/ once built. `taxonomy/` sits at the root and is not compiled,
+// so the same relative walk reaches it in dev, in the build, and in the package.
+const TAXONOMY_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../taxonomy");
 
-const THAI_CARD_ISSUERS: ThaiInstitution[] = [
-  { code: "KTC", label: "Krungthai Card", kind: "card_issuer", notes: "Listed subsidiary of KTB." },
-  { code: "AEON", label: "AEON Thana Sinsap", kind: "card_issuer" },
-  { code: "FIRSTCHOICE", label: "Krungsri First Choice", kind: "card_issuer" },
-  { code: "CITI-TH", label: "Citibank Thailand", kind: "card_issuer", notes: "Consumer cards migrated to UOB-TH in Nov 2022; only historical statements still reference Citi." },
-  { code: "AMEX-TH", label: "American Express Thailand", kind: "card_issuer" },
-  { code: "CARDX", label: "CardX", kind: "card_issuer", notes: "SCB X consumer-card spinoff; issues cards previously branded SCB." },
-  { code: "DINERS", label: "Diners Club Thailand", kind: "card_issuer" },
-  { code: "UOB-TH", label: "UOB Thailand (Cards)", kind: "card_issuer", notes: "Same legal entity as the bank UOB-TH; now issues both its own card line (UOB Yolo, UOB Premier) and the migrated Citi consumer cards." },
-];
+let cache: LoadedInstitution[] | null = null;
 
-const THAI_WALLETS: ThaiInstitution[] = [
-  { code: "TRUEMONEY", label: "TrueMoney Wallet", kind: "wallet" },
-  { code: "LINEPAY", label: "Rabbit LINE Pay", kind: "wallet" },
-  { code: "SHOPEEPAY", label: "ShopeePay", kind: "wallet" },
-  { code: "GRABPAY", label: "GrabPay (Thailand)", kind: "wallet" },
-  { code: "DOLFIN", label: "Dolfin Wallet", kind: "wallet", notes: "Central Group + JD.com joint venture." },
-  { code: "MPAY", label: "mPay", kind: "wallet", notes: "AIS-operated." },
-  { code: "PAOTANG", label: "Paotang", kind: "wallet", notes: "Krungthai-operated; government-benefits and tax e-wallet." },
-];
+function readCountryFile(file: string): LoadedInstitution[] {
+  const path = resolve(TAXONOMY_DIR, file);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    // A shipped taxonomy file that won't parse is a packaging defect, not user
+    // input — surface it loudly rather than degrading to an empty registry.
+    throw new Error(`taxonomy file ${file} is not valid JSON: ${(err as Error).message}`);
+  }
+  const parsed = countryFileSchema.safeParse(raw);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    throw new Error(`taxonomy file ${file} has an invalid shape: ${detail}`);
+  }
+  const country = parsed.data.country.toUpperCase();
+  return parsed.data.institutions.map((inst) => ({ ...inst, country }));
+}
 
-const THAI_PAYMENT_RAILS: ThaiInstitution[] = [
-  { code: "PROMPTPAY", label: "PromptPay", kind: "payment_rail", notes: "National 24/7 interbank rail; appears on payment slips, not an issuer." },
-];
+/** Read + validate every `taxonomy/*.json`, flatten, and sort stably by
+ *  country then code. Runs once; the result is memoized. */
+function loadAll(): LoadedInstitution[] {
+  const files = readdirSync(TAXONOMY_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .sort();
+  const rows = files.flatMap(readCountryFile);
+  rows.sort((a, b) => a.country.localeCompare(b.country) || a.code.localeCompare(b.code));
+  return rows;
+}
 
-const THAI_BROKERS: ThaiInstitution[] = [
-  { code: "INNOVESTX", label: "InnovestX Securities", kind: "broker", notes: "Former SCBS; SCBX subsidiary." },
-  { code: "BLS", label: "Bualuang Securities", kind: "broker", notes: "BBL subsidiary." },
-  { code: "KS", label: "Kasikorn Securities", kind: "broker", notes: "KBANK subsidiary." },
-  { code: "KGI-TH", label: "KGI Securities (Thailand)", kind: "broker" },
-  { code: "MAYBANK-SEC", label: "Maybank Securities (Thailand)", kind: "broker" },
-  { code: "ASP", label: "Asia Plus Securities", kind: "broker" },
-  { code: "TISCO-SEC", label: "TISCO Securities", kind: "broker" },
-  { code: "KSS", label: "Krungsri Securities", kind: "broker", notes: "BAY subsidiary." },
-  { code: "KKPS", label: "Kiatnakin Phatra Securities", kind: "broker", notes: "KKP subsidiary." },
-  { code: "LH-SEC", label: "Land and Houses Securities", kind: "broker" },
-  { code: "FINANSIA", label: "Finansia Syrus Securities", kind: "broker" },
-  { code: "YUANTA-TH", label: "Yuanta Securities (Thailand)", kind: "broker" },
-  { code: "DBSVICKERS", label: "DBS Vickers Securities (Thailand)", kind: "broker" },
-  { code: "KTBST", label: "Krungthai Xspring Securities", kind: "broker", notes: "Formerly KTBST; KTB-affiliated." },
-];
+// Lazy + memoized so importing this module does no file I/O; the first
+// getInstitutions/findInstitutions call builds the registry once.
+function getAll(): LoadedInstitution[] {
+  if (!cache) cache = loadAll();
+  return cache;
+}
 
-const THAI_CRYPTO_EXCHANGES: ThaiInstitution[] = [
-  { code: "BITKUB", label: "Bitkub Exchange", kind: "crypto_exchange", notes: "SEC-licensed; dominant market share." },
-  { code: "UPBIT-TH", label: "Upbit Thailand", kind: "crypto_exchange", notes: "SEC-licensed; subsidiary of South Korean Upbit." },
-  { code: "ORBIX", label: "Orbix Trade", kind: "crypto_exchange", notes: "Former Satang Pro; rebranded under KBank ownership." },
-  { code: "GULF-BINANCE", label: "Binance Thailand (Gulf Binance)", kind: "crypto_exchange", notes: "Binance + Gulf Innova JV; SEC-licensed." },
-  { code: "KUCOIN-TH", label: "KuCoin Thailand", kind: "crypto_exchange", notes: "Former ERX; rebranded 2025 after KuCoin acquisition." },
-  { code: "WAANX", label: "WaanX", kind: "crypto_exchange", notes: "SEC-licensed." },
-  { code: "TDX", label: "Thai Digital Assets Exchange", kind: "crypto_exchange", notes: "SET Group subsidiary." },
-  { code: "GMO-Z-EX", label: "Z.com EX (GMO-Z.com)", kind: "crypto_exchange", notes: "Japanese GMO subsidiary." },
-  { code: "ZIPMEX", label: "Zipmex", kind: "crypto_exchange", notes: "Defunct since Nov 2023; statements only appear in historical files." },
-];
+/** Every known institution across all countries, sorted by country then code. */
+export function getInstitutions(): LoadedInstitution[] {
+  return getAll().slice();
+}
 
-const THAI_INSURERS: ThaiInstitution[] = [
-  // Life
-  { code: "AIA-TH", label: "AIA Thailand", kind: "insurer", notes: "Life; market leader." },
-  { code: "MUANG-THAI-LIFE", label: "Muang Thai Life Insurance", kind: "insurer", notes: "Life." },
-  { code: "THAI-LIFE", label: "Thai Life Insurance", kind: "insurer", notes: "Life; listed (TLI)." },
-  { code: "FWD-TH", label: "FWD Thailand", kind: "insurer", notes: "Life." },
-  { code: "ALLIANZ-AYUDHYA-LIFE", label: "Allianz Ayudhya Assurance", kind: "insurer", notes: "Life; Allianz + BAY JV." },
-  { code: "KTAXA", label: "Krungthai-AXA Life", kind: "insurer", notes: "Life; KTB + AXA JV." },
-  { code: "BANGKOK-LIFE", label: "Bangkok Life Assurance", kind: "insurer", notes: "Life." },
-  { code: "CHUBB-SAMAGGI", label: "Chubb Samaggi Insurance", kind: "insurer", notes: "Life and non-life." },
-  { code: "GENERALI-TH", label: "Generali Thailand", kind: "insurer", notes: "Life." },
-  // Non-life
-  { code: "DHIPAYA", label: "Dhipaya Insurance", kind: "insurer", notes: "Non-life." },
-  { code: "BANGKOK-INS", label: "Bangkok Insurance", kind: "insurer", notes: "Non-life." },
-  { code: "ALLIANZ-AYUDHYA-GENERAL", label: "Allianz Ayudhya General Insurance", kind: "insurer", notes: "Non-life." },
-  { code: "VIRIYAH", label: "Viriyah Insurance", kind: "insurer", notes: "Non-life; #1 motor insurer." },
-  { code: "TOKIO-MARINE", label: "Tokio Marine (Thailand)", kind: "insurer", notes: "Non-life." },
-];
-
-const THAI_GOV: ThaiInstitution[] = [
-  { code: "REVDEPT", label: "Revenue Department (กรมสรรพากร)", kind: "gov", notes: "Income tax, VAT, excise." },
-  { code: "SSO", label: "Social Security Office (สำนักงานประกันสังคม)", kind: "gov", notes: "Employee + self-employed social security contributions." },
-  { code: "BOT", label: "Bank of Thailand", kind: "gov", notes: "Central bank; rarely on consumer statements outside of regulatory letters." },
-  { code: "MOF", label: "Ministry of Finance", kind: "gov" },
-  { code: "LDT", label: "Department of Lands (กรมที่ดิน)", kind: "gov", notes: "Land registration, property tax." },
-  { code: "CUSTOMS", label: "Customs Department (กรมศุลกากร)", kind: "gov", notes: "Import/export duties." },
-];
-
-const THAI_UTILITIES: ThaiInstitution[] = [
-  { code: "MEA", label: "Metropolitan Electricity Authority (กฟน.)", kind: "utility", notes: "Electricity for Bangkok, Nonthaburi, Samut Prakan." },
-  { code: "PEA", label: "Provincial Electricity Authority (กฟภ.)", kind: "utility", notes: "Electricity for the rest of Thailand outside MEA's area." },
-  { code: "MWA", label: "Metropolitan Waterworks Authority (กปน.)", kind: "utility", notes: "Water for Bangkok, Nonthaburi, Samut Prakan." },
-  { code: "PWA", label: "Provincial Waterworks Authority (กปภ.)", kind: "utility", notes: "Water for the rest of Thailand." },
-  { code: "EGAT", label: "Electricity Generating Authority of Thailand (กฟผ.)", kind: "utility", notes: "Power generation; rarely appears on consumer bills directly." },
-];
-
-const THAI_TELCOS: ThaiInstitution[] = [
-  { code: "AIS", label: "Advanced Info Service (AIS)", kind: "telco" },
-  { code: "TRUE-CORP", label: "True Corporation", kind: "telco", notes: "Merged entity of True + dtac since March 2023." },
-  { code: "TRUEMOVE", label: "TrueMove H", kind: "telco", notes: "Brand retained under TRUE-CORP per NBTC ruling." },
-  { code: "DTAC", label: "dtac", kind: "telco", notes: "Brand retained under TRUE-CORP per NBTC ruling." },
-  { code: "NT", label: "National Telecom (NT)", kind: "telco", notes: "Former TOT; state-owned, minimal consumer presence." },
-];
-
-export const ALL_THAI_INSTITUTIONS: ThaiInstitution[] = [
-  ...THAI_BANKS,
-  ...THAI_CARD_ISSUERS,
-  ...THAI_WALLETS,
-  ...THAI_PAYMENT_RAILS,
-  ...THAI_BROKERS,
-  ...THAI_CRYPTO_EXCHANGES,
-  ...THAI_INSURERS,
-  ...THAI_GOV,
-  ...THAI_TELCOS,
-  ...THAI_UTILITIES,
-];
+/** Institutions filtered by country (case-insensitive) and/or kind. */
+export function findInstitutions(
+  filter: { country?: string; kind?: string } = {},
+): LoadedInstitution[] {
+  const country = filter.country?.toUpperCase();
+  const { kind } = filter;
+  return getAll().filter(
+    (r) => (!country || r.country === country) && (!kind || r.kind === kind),
+  );
+}

@@ -38,6 +38,7 @@ import {
 } from "../../accounts/types.js";
 import { findAccountsByFuzzyName, type FuzzyAccountMatch } from "../../accounts/matching.js";
 import { ensureAccountAncestors } from "../../accounts/resolve.js";
+import { findInstitutions, type LoadedInstitution } from "../../accounts/taxonomy.js";
 import { fromMinorUnits } from "../../lib/money.js";
 import { applyRedaction } from "../../privacy/redactor.js";
 import * as z from "zod";
@@ -488,6 +489,18 @@ function updateAccountAction(id: string, opts: Record<string, unknown>): void {
   emit(result);
 }
 
+const INSTITUTION_COLUMNS: Column<LoadedInstitution>[] = [
+  { header: "Code", value: (i) => i.code },
+  { header: "Label", value: (i) => i.label },
+  { header: "Kind", value: (i) => i.kind },
+  { header: "Country", value: (i) => i.country },
+];
+
+/** Thin presentation adapter over the taxonomy loader (no business logic). */
+function listInstitutions(opts: { country?: string; kind?: string }): void {
+  emitList(findInstitutions(opts), INSTITUTION_COLUMNS);
+}
+
 export function registerAccounts(program: Command): void {
   const accounts = program.command("accounts").description("Manage accounts");
 
@@ -553,6 +566,13 @@ export function registerAccounts(program: Command): void {
     .description("Match accounts against a query")
     .option("--query <text>", "search text")
     .action(runAction(matchAccounts));
+
+  accounts
+    .command("institutions")
+    .description("List known financial institutions from the taxonomy registry")
+    .option("--country <code>", "filter by country (e.g. th)")
+    .option("--kind <kind>", "filter by kind")
+    .action(runAction(listInstitutions));
 
   accounts
     .command("update <id>")

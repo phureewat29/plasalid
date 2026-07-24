@@ -54,8 +54,6 @@ import { parseInput, str, num, json } from "../../lib/validate.js";
 // `transactions`: list/show/add/update/delete/recategorize/dedupe over the
 // TigerBeetle-style table. Amounts are minor units in the DB, decimals here (the CLI boundary).
 
-// Read view (list / show)
-
 // Free-text fields on a transaction that may carry PII. Ids, amount, currency, and
 // dates are structured data the agent needs verbatim and are left intact.
 const TRANSACTION_REDACT_FIELDS = [
@@ -163,8 +161,6 @@ async function showTransaction(id: string, opts: { redact?: boolean }): Promise<
   emit(applyRedaction(view, !!opts.redact, TRANSACTION_REDACT_FIELDS));
 }
 
-// Dedupe (find / auto-merge duplicates)
-
 function accountsLabel(
   debitName: string | null,
   debitId: string,
@@ -216,8 +212,6 @@ async function dedupeTransactions(opts: { autoMerge?: boolean; redact?: boolean 
   });
 }
 
-// Merge (void a mirror into its surviving twin)
-
 const MERGE_TRANSACTIONS_SPEC = z.object({
   from: str(),
   to: str(),
@@ -247,8 +241,6 @@ async function mergeTransactions(opts: MergeTransactionsOpts): Promise<void> {
   }
   emit({ from: parsed.from, to: parsed.to, voided: true });
 }
-
-// Write path (add)
 
 interface AddTransactionOpts {
   resolve?: boolean;
@@ -340,7 +332,6 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
   });
   return {
     ...parsed,
-    // Description prefers an explicit value, then the merchant's canonical name.
     description: parsed.description ?? parsed.merchant?.canonical_name ?? "Manual entry",
     // amount's number check is owned by the strict/resolve validators below, so it
     // passes through un-coerced (keeping their exit codes and messages).
@@ -428,8 +419,6 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
   if (opts.resolve) return addViaResolve(db, raw);
   return addStrict(db, raw);
 }
-
-// Update / recategorize
 
 const UPDATE_TRANSACTION_SPEC = z.object({
   date: str().optional(),

@@ -1,5 +1,3 @@
-// codex block markers
-
 /** Opening marker prefix; the version is appended, so a re-install still
  *  matches the BEGIN..END span for in-place replacement. */
 const CODEX_BEGIN_MARKER = "<!-- BEGIN plasalid-skill";
@@ -8,8 +6,6 @@ const CODEX_END_MARKER = "<!-- END plasalid-skill -->";
 /** Matches a previously-installed block (any version), so the installer
  *  replaces it in place instead of appending a duplicate. */
 export const CODEX_BLOCK_RE = /<!-- BEGIN plasalid-skill[\s\S]*?<!-- END plasalid-skill -->/;
-
-// AGENTS.md block (codex)
 
 /** Condensed skill wrapped in replace-in-place markers for codex AGENTS.md. */
 export function AGENTS_MD_BLOCK(version: string): string {

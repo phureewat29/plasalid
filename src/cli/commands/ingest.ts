@@ -32,8 +32,6 @@ const INGEST_COLUMNS: Column<IngestEntry>[] = [
   { header: "Path", value: (r) => r.relPath },
 ];
 
-// pages spec parser (pure; unit-tested)
-
 /**
  * Parse a `--pages` spec into 0-based page indices for `prepareFile`.
  *   "all" / "" → undefined (every page)
@@ -59,8 +57,6 @@ export function parsePagesSpec(spec: string): number[] | undefined {
   if (pages.size === 0) return undefined;
   return [...pages].sort((a, b) => a - b);
 }
-
-// ingest list
 
 interface ListIngestOpts {
   regex?: string;
@@ -109,8 +105,6 @@ async function listIngest(opts: ListIngestOpts): Promise<void> {
     );
   }
 }
-
-// ingest prepare
 
 interface PrepareIngestOpts {
   passwordStdin?: boolean;
@@ -192,8 +186,6 @@ async function prepareIngest(pathOrId: string, opts: PrepareIngestOpts): Promise
     pages: result.pages,
   });
 }
-
-// ingest done / fail
 
 interface CompleteIngestOpts {
   agent?: string;

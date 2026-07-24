@@ -71,7 +71,6 @@ interface WalkedFile {
   relPath: string;
 }
 
-// Recursively walks the data dir for PDFs.
 function walk(dir: string, root: string, out: WalkedFile[]): void {
   const entries = tryExecute(() => readdirSync(dir));
   if (!entries.ok) return;

@@ -160,8 +160,6 @@ function renderTreePlain(nodes: AccountTreeNode[]): void {
   if (out.length) process.stdout.write(out.join("\n") + "\n");
 }
 
-// Per-subcommand actions (registered by registerAccounts below).
-
 /** Validates `--type` against the known top-level account types up front,
  *  matching the wording zod produces for `accounts create --type` (see
  *  CREATE_ACCOUNT_SPEC below) so an invalid filter fails the same way. */

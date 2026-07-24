@@ -86,7 +86,6 @@ describe("commitTransaction", () => {
     expect(row.debit_account_id).toBe("expense:subscriptions:news");
     const created = findAccountById(db, "expense:subscriptions:news")!;
     expect(created).toBeTruthy();
-    // A silently created placeholder is NOT flagged with has_question.
     expect(created.has_question).toBe(0);
     expect(countTransactions(db)).toBe(1);
   });

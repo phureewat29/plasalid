@@ -158,7 +158,6 @@ async function convergeConfig(flags: ConvergeFlags): Promise<void> {
   });
 }
 
-// Bare `config`: converge when any flag is given, otherwise show current config.
 async function configureHarness(opts: Record<string, unknown>): Promise<void> {
   const flags = parseInput(CONVERGE_FLAGS_SPEC, opts);
   if (Object.keys(flags).length > 0) {

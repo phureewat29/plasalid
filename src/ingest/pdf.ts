@@ -194,8 +194,6 @@ export async function unlockNonInteractive(
   return { ok: true, decrypted: result.decrypted };
 }
 
-// PDF read + hash.
-
 const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
 };

@@ -141,7 +141,6 @@ function installCodex(opts: InstallOptions, version: string): InstalledTarget {
 export function installSkillPack(opts: InstallOptions = {}): InstallResult {
   const version = getVersion();
 
-  // Default target: claude.
   const wantClaude = opts.claude || (!opts.claude && !opts.codex);
   const wantCodex = !!opts.codex;
 

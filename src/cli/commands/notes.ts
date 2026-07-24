@@ -7,6 +7,10 @@ import { parseInput, str, num } from "../../lib/validate.js";
 
 const VALID_CATEGORIES = ["general", "preference", "life_event"] as const;
 
+// `content` is the only free-text field; id/category/created_at are
+// structured data left verbatim.
+const NOTE_REDACT_FIELDS = ["content"] as const;
+
 const NOTE_COLUMNS: Column<Memory>[] = [
   { header: "ID", value: (r) => String(r.id), align: "right" },
   { header: "Category", value: (r) => r.category },
@@ -14,10 +18,19 @@ const NOTE_COLUMNS: Column<Memory>[] = [
   { header: "Created At", value: (r) => r.created_at },
 ];
 
-async function listNotes(): Promise<void> {
+interface ListNotesOpts {
+  redact?: boolean;
+}
+
+async function listNotes(opts: ListNotesOpts): Promise<void> {
   const { getMemories } = await import("../../db/queries/notes.js");
   const db = await openDb();
-  emitList(getMemories(db), NOTE_COLUMNS);
+  let rows = getMemories(db);
+  if (opts.redact) {
+    const { applyRedaction } = await import("../../privacy/redactor.js");
+    rows = applyRedaction(rows, true, NOTE_REDACT_FIELDS);
+  }
+  emitList(rows, NOTE_COLUMNS);
 }
 
 const ADD_NOTE_SPEC = z.object({
@@ -56,7 +69,11 @@ async function removeNote(id: string, opts: { yes?: boolean }): Promise<void> {
 export function registerNotes(program: Command): void {
   const notes = program.command("notes").description("Manage notes");
 
-  notes.command("list").description("List notes").action(runAction(listNotes));
+  notes
+    .command("list")
+    .description("List notes")
+    .option("--no-redact", "skip PII redaction (on by default)")
+    .action(runAction(listNotes));
 
   notes
     .command("add")

@@ -13,8 +13,13 @@ import {
   type MerchantUpsertInput,
 } from "../../db/queries/merchants.js";
 import { findAccountById } from "../../accounts/accounts.js";
+import { applyRedaction } from "../../privacy/redactor.js";
 import * as z from "zod";
 import { parseInput, str, bool } from "../../lib/validate.js";
+
+// `canonical_name` is the only free-text field; ids and the default-account
+// link are structured data left verbatim.
+const MERCHANT_REDACT_FIELDS = ["canonical_name"] as const;
 
 const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
   { header: "ID", value: (m) => m.id },
@@ -23,9 +28,14 @@ const MERCHANT_COLUMNS: Column<MerchantRow & { alias_count: number }>[] = [
   { header: "Aliases", value: (m) => String(m.alias_count), align: "right" },
 ];
 
-async function listMerchants(): Promise<void> {
+interface ListMerchantsOpts {
+  redact?: boolean;
+}
+
+async function listMerchants(opts: ListMerchantsOpts): Promise<void> {
   const db = await openDb();
-  emitList(queryMerchants(db), MERCHANT_COLUMNS);
+  const rows = applyRedaction(queryMerchants(db), !!opts.redact, MERCHANT_REDACT_FIELDS);
+  emitList(rows, MERCHANT_COLUMNS);
 }
 
 const RESOLVE_MERCHANT_SPEC = z.object({ descriptor: str() });
@@ -123,7 +133,11 @@ async function mergeMerchants(opts: MergeMerchantsOpts): Promise<void> {
 export function registerMerchants(program: Command): void {
   const merchants = program.command("merchants").description("Manage merchants");
 
-  merchants.command("list").description("List merchants").action(runAction(listMerchants));
+  merchants
+    .command("list")
+    .description("List merchants")
+    .option("--no-redact", "skip PII redaction (on by default)")
+    .action(runAction(listMerchants));
 
   merchants
     .command("resolve")

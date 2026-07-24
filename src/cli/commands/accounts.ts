@@ -146,6 +146,17 @@ function renderTreePlain(nodes: AccountTreeNode[]): void {
 
 // Per-subcommand actions (registered by registerAccounts below).
 
+/** Validates `--type` against the known top-level account types up front,
+ *  matching the wording zod produces for `accounts create --type` (see
+ *  CREATE_ACCOUNT_SPEC below) so an invalid filter fails the same way. */
+function parseAccountTypeFilter(type: string | undefined): AccountType | undefined {
+  if (type === undefined) return undefined;
+  if (!TOP_LEVEL_TYPES.includes(type as AccountType)) {
+    fail("USAGE", `--type must be one of ${TOP_LEVEL_TYPES.join(", ")}, got "${type}"`);
+  }
+  return type as AccountType;
+}
+
 interface ListAccountsOpts {
   type?: string;
   redact?: boolean;
@@ -153,10 +164,9 @@ interface ListAccountsOpts {
 
 async function listAccounts(opts: ListAccountsOpts): Promise<void> {
   const db = await openDb();
+  const type = parseAccountTypeFilter(opts.type);
   const rows = applyRedaction(
-    getAccountBalancesFromTransactions(db, opts.type ? { type: opts.type as AccountType } : {}).map(
-      presentAccount,
-    ),
+    getAccountBalancesFromTransactions(db, type ? { type } : {}).map(presentAccount),
     !!opts.redact,
     ACCOUNT_REDACT_FIELDS,
   );
@@ -165,11 +175,13 @@ async function listAccounts(opts: ListAccountsOpts): Promise<void> {
 
 interface TreeAccountsOpts {
   type?: string;
+  redact?: boolean;
 }
 
 async function treeAccounts(opts: TreeAccountsOpts): Promise<void> {
   const db = await openDb();
-  const roots = buildAccountTree(db, opts.type as AccountType | undefined);
+  const type = parseAccountTypeFilter(opts.type);
+  const roots = applyRedaction(buildAccountTree(db, type), !!opts.redact, ACCOUNT_REDACT_FIELDS);
   const mode = currentMode();
   if (mode.json) {
     emit(roots);
@@ -182,7 +194,7 @@ async function treeAccounts(opts: TreeAccountsOpts): Promise<void> {
   renderTreePlain(roots);
 }
 
-async function showAccount(id: string): Promise<void> {
+async function showAccount(id: string, opts: { redact?: boolean } = {}): Promise<void> {
   const db = await openDb();
   const account = findAccountById(db, id);
   if (!account) fail("NOT_FOUND", `account "${id}" not found`);
@@ -191,14 +203,20 @@ async function showAccount(id: string): Promise<void> {
   const children = balances
     .filter((b) => b.parent_id === id)
     .map((b) => ({ id: b.id, name: b.name, type: b.type, balance: b.balance }));
-  emit({
-    ...account,
-    balance: self?.balance ?? 0,
-    debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
-    credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
-    rollup: getRollupBalanceFromTransactions(db, id),
-    children,
-  });
+  emit(
+    applyRedaction(
+      {
+        ...account,
+        balance: self?.balance ?? 0,
+        debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
+        credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
+        rollup: getRollupBalanceFromTransactions(db, id),
+        children,
+      },
+      !!opts.redact,
+      ACCOUNT_REDACT_FIELDS,
+    ),
+  );
 }
 
 const CREATE_ACCOUNT_SPEC = z.object({
@@ -532,11 +550,13 @@ export function registerAccounts(program: Command): void {
     .command("tree")
     .description("Show accounts as a tree")
     .option("--type <type>", "filter by account type")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction(treeAccounts));
 
   accounts
     .command("show <id>")
     .description("Show an account's details")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction(showAccount));
 
   accounts

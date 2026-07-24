@@ -192,7 +192,7 @@ const DUPLICATE_COLUMNS: Column<DuplicateRow>[] = [
   { header: "Merchant ID", value: (r) => r.merchant_id ?? "" },
 ];
 
-async function dedupeTransactions(opts: { autoMerge?: boolean }): Promise<void> {
+async function dedupeTransactions(opts: { autoMerge?: boolean; redact?: boolean }): Promise<void> {
   const db = await openDb();
 
   let autoMerged: number | undefined;
@@ -201,8 +201,12 @@ async function dedupeTransactions(opts: { autoMerge?: boolean }): Promise<void> 
   }
 
   const groups = findDuplicateTransactions(db);
-  const rows: DuplicateRow[] = groups.flatMap((group, i) =>
-    group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
+  const rows: DuplicateRow[] = applyRedaction(
+    groups.flatMap((group, i) =>
+      group.map((t) => ({ ...t, amount: fromMinorUnits(t.amount, t.currency), group: i })),
+    ),
+    !!opts.redact,
+    TRANSACTION_REDACT_FIELDS,
   );
 
   emitList(rows, DUPLICATE_COLUMNS);
@@ -544,6 +548,7 @@ export function registerTransactions(program: Command): void {
     .command("dedupe")
     .description("Find likely duplicate transactions (optionally auto-merge them)")
     .option("--auto-merge", "automatically merge detected duplicates")
+    .option("--no-redact", "skip PII redaction (on by default)")
     .action(runAction(dedupeTransactions));
 
   transactions

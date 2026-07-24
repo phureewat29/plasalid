@@ -19,58 +19,73 @@ interface Check {
 const HARD_CHECKS = new Set(["db_open", "schema_tables_present"]);
 const REQUIRED_TABLES = ["accounts", "transactions", "questions"];
 
-async function runChecks(): Promise<Check[]> {
-  const checks: Check[] = [];
+function configCheck(): Check {
+  return { name: "config_exists", ok: existsSync(getConfigPath()) };
+}
 
-  checks.push({ name: "config_exists", ok: existsSync(getConfigPath()) });
-
-  let db: Database.Database | null = null;
+async function dbOpenCheck(): Promise<{ check: Check; db: Database.Database | null }> {
   try {
     const { getDb } = await import("../../db/connection.js");
-    db = getDb();
-    checks.push({ name: "db_open", ok: true });
+    const db = getDb();
+    return { check: { name: "db_open", ok: true }, db };
   } catch (err) {
-    checks.push({ name: "db_open", ok: false, detail: errorMessage(err) });
+    return { check: { name: "db_open", ok: false, detail: errorMessage(err) }, db: null };
   }
+}
 
+function dataDirWritableCheck(): Check {
   try {
     const dir = getDataDir();
     mkdirSync(dir, { recursive: true });
     const probe = join(dir, `.doctor-probe-${randomUUID()}`);
     writeFileSync(probe, "ok");
     rmSync(probe, { force: true });
-    checks.push({ name: "data_dir_writable", ok: true });
+    return { name: "data_dir_writable", ok: true };
   } catch (err) {
-    checks.push({ name: "data_dir_writable", ok: false, detail: errorMessage(err) });
+    return { name: "data_dir_writable", ok: false, detail: errorMessage(err) };
   }
+}
 
+async function mupdfCheck(): Promise<Check> {
   try {
     await import("mupdf");
-    checks.push({ name: "mupdf_loads", ok: true });
+    return { name: "mupdf_loads", ok: true };
   } catch (err) {
-    checks.push({ name: "mupdf_loads", ok: false, detail: errorMessage(err) });
+    return { name: "mupdf_loads", ok: false, detail: errorMessage(err) };
   }
+}
 
-  if (db) {
-    try {
-      const placeholders = REQUIRED_TABLES.map(() => "?").join(",");
-      const rows = db
-        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
-        .all(...REQUIRED_TABLES) as { name: string }[];
-      const present = new Set(rows.map((r) => r.name));
-      const missing = REQUIRED_TABLES.filter((t) => !present.has(t));
-      checks.push({
-        name: "schema_tables_present",
-        ok: missing.length === 0,
-        detail: missing.length ? `missing: ${missing.join(", ")}` : undefined,
-      });
-    } catch (err) {
-      checks.push({ name: "schema_tables_present", ok: false, detail: errorMessage(err) });
-    }
-  } else {
-    checks.push({ name: "schema_tables_present", ok: false, detail: "database not open" });
+function schemaTablesCheck(db: Database.Database | null): Check {
+  if (!db) return { name: "schema_tables_present", ok: false, detail: "database not open" };
+
+  try {
+    const placeholders = REQUIRED_TABLES.map(() => "?").join(",");
+    const rows = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
+      .all(...REQUIRED_TABLES) as { name: string }[];
+    const present = new Set(rows.map((r) => r.name));
+    const missing = REQUIRED_TABLES.filter((t) => !present.has(t));
+    return {
+      name: "schema_tables_present",
+      ok: missing.length === 0,
+      detail: missing.length ? `missing: ${missing.join(", ")}` : undefined,
+    };
+  } catch (err) {
+    return { name: "schema_tables_present", ok: false, detail: errorMessage(err) };
   }
+}
 
+async function runChecks(): Promise<Check[]> {
+  const checks: Check[] = [];
+
+  checks.push(configCheck());
+
+  const { check: dbCheck, db } = await dbOpenCheck();
+  checks.push(dbCheck);
+
+  checks.push(dataDirWritableCheck());
+  checks.push(await mupdfCheck());
+  checks.push(schemaTablesCheck(db));
   checks.push(skillPackCheck());
 
   return checks;

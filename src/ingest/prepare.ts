@@ -241,6 +241,17 @@ export async function prepareFile(
   }
 
   const requested = opts.pages ?? range(pageCount);
+  const pages = await rasterizePages(unlocked.decrypted, requested, pageCount, outDir, opts.dpi);
+  return { fileId, pageCount, format, pages };
+}
+
+async function rasterizePages(
+  decrypted: Buffer,
+  requested: number[],
+  pageCount: number,
+  outDir: string,
+  dpi?: number,
+): Promise<PreparedPage[]> {
   for (const p of requested) {
     if (p < 0 || p >= pageCount) {
       throw new Error(`page ${p} out of range (0..${pageCount - 1}).`);
@@ -248,12 +259,12 @@ export async function prepareFile(
   }
   const pages: PreparedPage[] = [];
   for (const p of requested) {
-    const png = await rasterizePageN(unlocked.decrypted, p, opts.dpi);
+    const png = await rasterizePageN(decrypted, p, dpi);
     const out = resolve(outDir, `p${p}.png`);
     writeFileSync(out, png, { mode: 0o600 });
     pages.push({ page: p, path: out });
   }
-  return { fileId, pageCount, format, pages };
+  return pages;
 }
 
 export function cleanCache(fileId?: string): { removed: string[] } {

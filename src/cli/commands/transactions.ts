@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type Database from "libsql";
 import { randomUUID } from "crypto";
 import { getDb } from "../../db/connection.js";
 import {
@@ -338,34 +339,29 @@ async function buildRawTransaction(opts: AddTransactionOpts): Promise<RawTransac
   };
 }
 
-async function addTransaction(opts: AddTransactionOpts): Promise<void> {
-  const db = getDb();
-  const raw = await buildRawTransaction(opts);
-
-  if (opts.resolve) {
-    const batchId = `ib:${randomUUID()}`;
-    const ctx: TransactionCommitContext = {
-      batchId,
-      fileId: null,
-      fileHash: null,
-    };
-    const outcome = commitTransaction(db, ctx, raw, defaultTransactionCommitHooks(db, ctx));
-    if (!outcome.ok) {
-      if (outcome.reason === "currency_mismatch") {
-        fail("INVALID", outcome.message, { hint: CURRENCY_MISMATCH_HINT });
-      }
-      fail("INVALID", outcome.message);
+function addViaResolve(db: Database.Database, raw: RawTransactionInput): void {
+  const batchId = `ib:${randomUUID()}`;
+  const ctx: TransactionCommitContext = {
+    batchId,
+    fileId: null,
+    fileHash: null,
+  };
+  const outcome = commitTransaction(db, ctx, raw, defaultTransactionCommitHooks(db, ctx));
+  if (!outcome.ok) {
+    if (outcome.reason === "currency_mismatch") {
+      fail("INVALID", outcome.message, { hint: CURRENCY_MISMATCH_HINT });
     }
-    emit({
-      transaction_id: outcome.transactionId,
-      duplicate: outcome.duplicate,
-      raised_questions: outcome.raisedQuestions,
-      currency_overridden: outcome.currencyOverridden,
-    });
-    return;
+    fail("INVALID", outcome.message);
   }
+  emit({
+    transaction_id: outcome.transactionId,
+    duplicate: outcome.duplicate,
+    raised_questions: outcome.raisedQuestions,
+    currency_overridden: outcome.currencyOverridden,
+  });
+}
 
-  // Strict path: both accounts must already exist.
+function addStrict(db: Database.Database, raw: RawTransactionInput): void {
   if (!raw.debit_account_id || !raw.credit_account_id) {
     fail("USAGE", "debit_account_id and credit_account_id are required");
   }
@@ -382,7 +378,7 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
 
   // Ledger-design §5 currency rule, applied inline: derive currency from the
   // pre-resolved accounts and reject a cross-currency move. The canonical
-  // `currency_mismatch` home is commitTransaction (the --resolve branch above);
+  // `currency_mismatch` home is commitTransaction (the addViaResolve path above);
   // this path stays separate on purpose — it requires both accounts to pre-exist,
   // raises no questions, and emits a self-contained message. Only the shared
   // hint (CURRENCY_MISMATCH_HINT) is single-sourced.
@@ -414,6 +410,14 @@ async function addTransaction(opts: AddTransactionOpts): Promise<void> {
     fail("INVALID", (err as Error).message);
   }
   emit({ transaction_id: result.id, duplicate: result.duplicate });
+}
+
+async function addTransaction(opts: AddTransactionOpts): Promise<void> {
+  const db = getDb();
+  const raw = await buildRawTransaction(opts);
+
+  if (opts.resolve) return addViaResolve(db, raw);
+  return addStrict(db, raw);
 }
 
 const UPDATE_TRANSACTION_SPEC = z.object({

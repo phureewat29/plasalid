@@ -14,7 +14,7 @@ export interface PatchField {
  * into an `UPDATE ... SET` statement, plus `before`/`after` audit snapshots
  * keyed by patch key (not by column).
  */
-export interface PatchResult {
+interface PatchResult {
   sets: string[];
   params: unknown[];
   before: Record<string, unknown>;

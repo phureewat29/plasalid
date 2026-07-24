@@ -160,19 +160,4 @@ function pruneBackups(dbPath: string): void {
   }
 }
 
-// dropAllTables is disabled, not deleted: auto-dropping user data on a schema
-// mismatch is forbidden. The open path now refuses unrecognized shapes instead.
-// function dropAllTables(db: Database.Database): void {
-//   const tables = db
-//     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
-//     .all() as { name: string }[];
-//
-//   db.pragma("foreign_keys = OFF");
-//   try {
-//     for (const { name } of tables) {
-//       db.exec(`DROP TABLE IF EXISTS "${name}"`);
-//     }
-//   } finally {
-//     db.pragma("foreign_keys = ON");
-//   }
-// }
+// dropAllTables was removed: auto-dropping user data on a schema mismatch is forbidden; the open path now refuses unrecognized shapes instead.

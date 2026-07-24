@@ -14,12 +14,12 @@ export interface MerchantRow {
   created_at: string;
 }
 
-export interface MerchantAliasConflict {
+interface MerchantAliasConflict {
   pattern: string;
   held_by: string;
 }
 
-export interface MerchantUpsertResult extends MerchantRow {
+interface MerchantUpsertResult extends MerchantRow {
   /** Present when `input.alias` normalizes to a pattern already claimed by a
    *  different merchant; the alias is left on its current owner. */
   alias_conflict?: MerchantAliasConflict;
@@ -193,7 +193,7 @@ export function clearMerchantDefaultAccount(
   return { before: row.default_account_id };
 }
 
-export interface MergeMerchantsResult {
+interface MergeMerchantsResult {
   moved_transactions: number;
   moved_aliases: number;
   /** Present only when the destination had no default_account_id and the

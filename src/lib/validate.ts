@@ -68,7 +68,7 @@ export function json<T = unknown>() {
   });
 }
 
-export interface ParseOptions {
+interface ParseOptions {
   /** Extra raw-input keys to read per spec key (genuine synonyms). */
   aliases?: Record<string, string[]>;
   /** Override the default `--key-with-dashes` label per spec key. */

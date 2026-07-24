@@ -416,7 +416,7 @@ function stepTransactionsUpdateShow(ctx: Ctx): void {
 /**
  * `transactions add` (strict, existing accounts) + `transactions dedupe --auto-merge`.
  *
- * `autoMergeStrictDuplicateTransactions` (src/ingest/dedup-transactions.ts)
+ * `autoMergeStrictDuplicateTransactions` (src/ingest/dedup.ts)
  * only merges a group whose earliest member has both merchant_id AND
  * source_file_id. A manual `transactions add` row has neither, so it can't
  * strict-match anything — the manual add below only covers the "strict

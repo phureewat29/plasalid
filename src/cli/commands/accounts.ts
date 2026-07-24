@@ -26,9 +26,9 @@ import {
   findAccountById,
 } from "../../accounts/accounts.js";
 import {
-  getAccountBalancesFromTransactions,
-  getRollupBalanceFromTransactions,
-  adjustAccountBalanceViaTransaction,
+  getAccountBalances,
+  getRollupBalance,
+  adjustAccountBalance,
 } from "../../accounts/balances.js";
 import {
   TOP_LEVEL_TYPES,
@@ -95,7 +95,7 @@ function buildAccountTree(
   db: Database.Database,
   type: AccountType | undefined,
 ): AccountTreeNode[] {
-  const rows = getAccountBalancesFromTransactions(db, type ? { type } : {});
+  const rows = getAccountBalances(db, type ? { type } : {});
   const byId = new Map(rows.map((r) => [r.id, r]));
   const childrenMap = new Map<string, AccountBalanceMinor[]>();
   const roots: AccountBalanceMinor[] = [];
@@ -111,7 +111,7 @@ function buildAccountTree(
   // Roll up in one post-order pass instead of a per-node subtree query: sum each
   // subtree's balance_minor by currency, then convert per currency in ascending
   // order and add. Subtrees are single-type by the hierarchy invariant, so this
-  // reproduces getRollupBalanceFromTransactions's GROUP BY (type, currency) ->
+  // reproduces getRollupBalance's GROUP BY (type, currency) ->
   // fromMinorUnits-per-group -> cross-group sum, with no float-order drift.
   const build = (row: AccountBalanceMinor): { node: AccountTreeNode; sums: Map<string, number> } => {
     const sums = new Map<string, number>();
@@ -183,7 +183,7 @@ async function listAccounts(opts: ListAccountsOpts): Promise<void> {
   const db = await openDb();
   const type = parseAccountTypeFilter(opts.type);
   const rows = applyRedaction(
-    getAccountBalancesFromTransactions(db, type ? { type } : {}).map(presentAccount),
+    getAccountBalances(db, type ? { type } : {}).map(presentAccount),
     !!opts.redact,
     ACCOUNT_REDACT_FIELDS,
   );
@@ -215,7 +215,7 @@ async function showAccount(id: string, opts: { redact?: boolean } = {}): Promise
   const db = await openDb();
   const account = findAccountById(db, id);
   if (!account) fail("NOT_FOUND", `account "${id}" not found`);
-  const balances = getAccountBalancesFromTransactions(db, { idOrParent: id });
+  const balances = getAccountBalances(db, { idOrParent: id });
   const self = balances.find((b) => b.id === id);
   const children = balances
     .filter((b) => b.parent_id === id)
@@ -227,7 +227,7 @@ async function showAccount(id: string, opts: { redact?: boolean } = {}): Promise
         balance: self?.balance ?? 0,
         debits_posted: self ? fromMinorUnits(self.debits_posted, self.currency) : 0,
         credits_posted: self ? fromMinorUnits(self.credits_posted, self.currency) : 0,
-        rollup: getRollupBalanceFromTransactions(db, id),
+        rollup: getRollupBalance(db, id),
         children,
       },
       !!opts.redact,
@@ -466,7 +466,7 @@ async function adjustAccount(id: string, opts: Record<string, unknown>): Promise
   const db = await openDb();
   let result;
   try {
-    result = adjustAccountBalanceViaTransaction(db, {
+    result = adjustAccountBalance(db, {
       accountId: id,
       targetAmount: parsed.to,
       reason: parsed.reason,

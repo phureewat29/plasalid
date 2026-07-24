@@ -59,7 +59,7 @@ async function buildReport(): Promise<StatusReport> {
   };
 
   // Deferred so non-db commands skip the libsql cost at startup.
-  const { getNetWorthFromTransactions } = await import("../../accounts/balances.js");
+  const { getNetWorth } = await import("../../accounts/balances.js");
   const { countAccounts } = await import("../../accounts/accounts.js");
   const { countTransactions } = await import("../../db/queries/transactions.js");
   const { countFiles } = await import("../../db/queries/files.js");
@@ -89,7 +89,7 @@ async function buildReport(): Promise<StatusReport> {
   const open = countQuestions(db);
   const total = countQuestions(db, { includeDeferred: true });
   report.questions = { open, deferred: Math.max(0, total - open) };
-  report.net_worth = getNetWorthFromTransactions(db);
+  report.net_worth = getNetWorth(db);
 
   return report;
 }

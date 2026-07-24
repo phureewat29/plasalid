@@ -183,7 +183,7 @@ const ROW_SELECT = `SELECT t.id, t.group_id, t.date, t.description, t.merchant_i
  * Loads one transaction; when grouped, `group` carries every member (self
  * included) ordered by id. Null if the id doesn't exist.
  */
-export function getTransaction(db: Database.Database, id: string): TransactionDetail | null {
+export function findTransactionById(db: Database.Database, id: string): TransactionDetail | null {
   const row = db.prepare(`${ROW_SELECT} WHERE t.id = ?`).get(id) as TransactionRow | undefined;
   if (!row) return null;
   if (!row.group_id) return row;

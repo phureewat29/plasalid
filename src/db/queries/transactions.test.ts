@@ -3,16 +3,16 @@ import Database from "libsql";
 import { migrate } from "../schema.js";
 import { createAccount } from "../../accounts/accounts.js";
 import {
-  getAccountBalancesFromTransactions,
-  getNetWorthFromTransactions,
-  getPeriodTotalsFromTransactions,
-  getRollupBalanceFromTransactions,
+  getAccountBalances,
+  getNetWorth,
+  getPeriodTotals,
+  getRollupBalance,
 } from "../../accounts/balances.js";
 import {
   validateTransaction,
   insertTransaction,
   insertLinkedTransactions,
-  getTransaction,
+  findTransactionById,
   listTransactions,
   deleteTransaction,
   bulkRecategorize,
@@ -94,7 +94,7 @@ describe("insertTransaction", () => {
 
   it("upserts a merchant when supplied", () => {
     insertTransaction(db, tf({ id: "tx:mc", merchant: { canonical_name: "Starbucks" } }));
-    expect(getTransaction(db, "tx:mc")?.merchant_name).toBe("Starbucks");
+    expect(findTransactionById(db, "tx:mc")?.merchant_name).toBe("Starbucks");
   });
 });
 
@@ -109,8 +109,8 @@ describe("insertLinkedTransactions", () => {
     ]);
     expect(res.results.map((r) => r.id)).toEqual(["tx:a", "tx:b"]);
     expect(res.group_id.startsWith("tg:")).toBe(true);
-    expect(getTransaction(db, "tx:a")?.group_id).toBe(res.group_id);
-    expect(getTransaction(db, "tx:b")?.group_id).toBe(res.group_id);
+    expect(findTransactionById(db, "tx:a")?.group_id).toBe(res.group_id);
+    expect(findTransactionById(db, "tx:b")?.group_id).toBe(res.group_id);
   });
 
   it("rolls back every leg when one leg is invalid", () => {
@@ -124,12 +124,12 @@ describe("insertLinkedTransactions", () => {
   });
 });
 
-describe("getTransaction", () => {
+describe("findTransactionById", () => {
   let db: Database.Database;
   beforeEach(() => { db = freshDb(); });
 
   it("returns null for a missing id", () => {
-    expect(getTransaction(db, "tx:nope")).toBeNull();
+    expect(findTransactionById(db, "tx:nope")).toBeNull();
   });
 
   it("joins account + merchant names and carries the full group", () => {
@@ -137,7 +137,7 @@ describe("getTransaction", () => {
       tf({ id: "tx:a" }),
       tf({ id: "tx:b", debit_account_id: "expense:transport" }),
     ]);
-    const detail = getTransaction(db, "tx:a")!;
+    const detail = findTransactionById(db, "tx:a")!;
     expect(detail.debit_account_name).toBe("Food");
     expect(detail.credit_account_name).toBe("Cash");
     expect(detail.group_id).toBe(res.group_id);
@@ -213,11 +213,11 @@ describe("bulkRecategorize", () => {
     const res = bulkRecategorize(db, { accountId: "expense:food" }, { accountId: "expense:transport" });
     expect(res.affected).toBe(2);
     expect(res.skipped_self_transaction).toBe(1);
-    expect(getTransaction(db, "tx:d")?.debit_account_id).toBe("expense:transport");
-    expect(getTransaction(db, "tx:c")?.credit_account_id).toBe("expense:transport");
+    expect(findTransactionById(db, "tx:d")?.debit_account_id).toBe("expense:transport");
+    expect(findTransactionById(db, "tx:c")?.credit_account_id).toBe("expense:transport");
     // The self-transaction candidate is untouched.
-    expect(getTransaction(db, "tx:self")?.debit_account_id).toBe("expense:food");
-    expect(getTransaction(db, "tx:self")?.credit_account_id).toBe("expense:transport");
+    expect(findTransactionById(db, "tx:self")?.debit_account_id).toBe("expense:food");
+    expect(findTransactionById(db, "tx:self")?.credit_account_id).toBe("expense:transport");
   });
 
   it("throws when the target account does not exist", () => {
@@ -282,7 +282,7 @@ describe("counts + updateTransactionMeta", () => {
   it("edits mutable metadata only", () => {
     insertTransaction(db, tf({ id: "tx:m" }));
     expect(updateTransactionMeta(db, "tx:m", { description: "Latte", source_page: 3 })).toBe(1);
-    const r = getTransaction(db, "tx:m")!;
+    const r = findTransactionById(db, "tx:m")!;
     expect(r.description).toBe("Latte");
     expect(r.source_page).toBe(3);
     expect(updateTransactionMeta(db, "tx:m", {})).toBe(0);
@@ -299,7 +299,7 @@ describe("voidTransactionAsMirror", () => {
 
   it("voids from into to and records the surviving twin", () => {
     expect(voidTransactionAsMirror(db, "tx:b", "tx:a")).toEqual({ alreadyVoid: false });
-    const row = getTransaction(db, "tx:b")!;
+    const row = findTransactionById(db, "tx:b")!;
     expect(row.void_of).toBe("tx:a");
   });
 
@@ -344,7 +344,7 @@ describe("void excludes rows from balance derivation", () => {
   });
 
   const balanceOf = (id: string): number =>
-    getAccountBalancesFromTransactions(db).find((b) => b.id === id)!.balance;
+    getAccountBalances(db).find((b) => b.id === id)!.balance;
 
   it("double-counts before void, counts once after", () => {
     expect(balanceOf("asset:cash")).toBe(-300);
@@ -358,9 +358,9 @@ describe("void excludes rows from balance derivation", () => {
 
   it("also excludes void from net worth, period totals, and rollup", () => {
     voidTransactionAsMirror(db, "tx:mirror", "tx:orig");
-    expect(getNetWorthFromTransactions(db).net_worth).toBe(-150);
-    expect(getPeriodTotalsFromTransactions(db, "2026-01-01", "2026-12-31").expenses).toBe(150);
-    expect(getRollupBalanceFromTransactions(db, "expense")).toBe(150);
+    expect(getNetWorth(db).net_worth).toBe(-150);
+    expect(getPeriodTotals(db, "2026-01-01", "2026-12-31").expenses).toBe(150);
+    expect(getRollupBalance(db, "expense")).toBe(150);
   });
 });
 
@@ -375,7 +375,7 @@ describe("void survives re-insert (ON CONFLICT)", () => {
     // NOTHING must leave the void intact rather than resurrecting the mirror.
     const res = insertTransaction(db, tf({ id: "tx:dup", amount: 15000 }));
     expect(res.duplicate).toBe(true);
-    const row = getTransaction(db, "tx:dup")!;
+    const row = findTransactionById(db, "tx:dup")!;
     expect(row.void_of).toBe("tx:orig");
   });
 });

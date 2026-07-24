@@ -6,7 +6,7 @@ import type {
   RawTransactionInput,
   LinkedTransactionHeader,
   LinkedTransactionLeg,
-} from "../../ingest/commit-transaction.js";
+} from "../../ingest/commit.js";
 import { EXIT, asRecord, currentMode, emit, emitObject, emitSummary, fail, readStdinBatch } from "../output.js";
 import { openDb } from "../db.js";
 import { newBatchId } from "../../lib/ids.js";
@@ -156,9 +156,9 @@ interface Counters {
 // capture no loop-scoped state.
 interface RowCommitDeps {
   db: Database.Database;
-  commitTransaction: (typeof import("../../ingest/commit-transaction.js"))["commitTransaction"];
-  commitLinkedTransactions: (typeof import("../../ingest/commit-transaction.js"))["commitLinkedTransactions"];
-  getTransaction: (typeof import("../../db/queries/transactions.js"))["getTransaction"];
+  commitTransaction: (typeof import("../../ingest/commit.js"))["commitTransaction"];
+  commitLinkedTransactions: (typeof import("../../ingest/commit.js"))["commitLinkedTransactions"];
+  findTransactionById: (typeof import("../../db/queries/transactions.js"))["findTransactionById"];
   accountExists: (id: string) => boolean;
   counters: Counters;
 }
@@ -251,7 +251,7 @@ function commitCompoundRow(
     duplicate: allDuplicate,
     raised_questions: outcome.raisedQuestions,
     merchant: classifyMerchant(parsedHeader.value, row.events, () =>
-      deps.getTransaction(deps.db, outcome.results[0]?.id)?.merchant_id,
+      deps.findTransactionById(deps.db, outcome.results[0]?.id)?.merchant_id,
     ),
   };
 }
@@ -294,7 +294,7 @@ function commitStandaloneRow(deps: RowCommitDeps, row: RowContext): Record<strin
     duplicate: outcome.duplicate,
     raised_questions: outcome.raisedQuestions,
     merchant: classifyMerchant(parsed.value, row.events, () =>
-      deps.getTransaction(deps.db, outcome.transactionId)?.merchant_id,
+      deps.findTransactionById(deps.db, outcome.transactionId)?.merchant_id,
     ),
     sides: [
       {
@@ -317,9 +317,9 @@ export async function commitIngest(opts: CommitIngestOpts): Promise<void> {
 
   const db = await openDb();
   const { commitTransaction, commitLinkedTransactions, defaultTransactionCommitHooks } = await import(
-    "../../ingest/commit-transaction.js"
+    "../../ingest/commit.js"
   );
-  const { getTransaction } = await import("../../db/queries/transactions.js");
+  const { findTransactionById } = await import("../../db/queries/transactions.js");
   const { findAccountById } = await import("../../accounts/accounts.js");
   const { findFileById } = await import("../../db/queries/files.js");
   const accountExists = (id: string): boolean => !!findAccountById(db, id);
@@ -333,7 +333,7 @@ export async function commitIngest(opts: CommitIngestOpts): Promise<void> {
     db,
     commitTransaction,
     commitLinkedTransactions,
-    getTransaction,
+    findTransactionById,
     accountExists,
     counters,
   };

@@ -10,7 +10,7 @@ import {
   ensureTopLevelRoot,
   repointTransactions,
 } from "./accounts.js";
-import { insertTransaction, getTransaction, type TransactionInput } from "../db/queries/transactions.js";
+import { insertTransaction, findTransactionById, type TransactionInput } from "../db/queries/transactions.js";
 
 function freshDb() {
   const db = new Database(":memory:");
@@ -237,9 +237,9 @@ describe("repointTransactions", () => {
     const res = repointTransactions(db, "expense:food", "expense:food:dining");
     expect(res.deletedSelfTransactions).toBe(1);
     expect(res.moved).toBe(2);
-    expect(getTransaction(db, "tx:1")?.debit_account_id).toBe("expense:food:dining");
-    expect(getTransaction(db, "tx:2")?.credit_account_id).toBe("expense:food:dining");
-    expect(getTransaction(db, "tx:self")).toBeNull();
+    expect(findTransactionById(db, "tx:1")?.debit_account_id).toBe("expense:food:dining");
+    expect(findTransactionById(db, "tx:2")?.credit_account_id).toBe("expense:food:dining");
+    expect(findTransactionById(db, "tx:self")).toBeNull();
   });
 
   it("refuses re-pointing an account to itself", () => {

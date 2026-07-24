@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "libsql";
 import { migrate } from "../db/schema.js";
 import { createAccount, findAccountById } from "../accounts/accounts.js";
-import { getAccountBalancesFromTransactions } from "../accounts/balances.js";
-import { countTransactions, getTransaction } from "../db/queries/transactions.js";
+import { getAccountBalances } from "../accounts/balances.js";
+import { countTransactions, findTransactionById } from "../db/queries/transactions.js";
 import { deriveTransactionId, deriveGroupId } from "../lib/ids.js";
 import { listQuestions, countQuestions } from "../db/queries/questions.js";
 import {
@@ -11,7 +11,7 @@ import {
   commitLinkedTransactions,
   type TransactionCommitContext,
   type RawTransactionInput,
-} from "./commit-transaction.js";
+} from "./commit.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
@@ -65,7 +65,7 @@ describe("commitTransaction", () => {
     expect(out.raisedQuestions).toBe(0);
     expect(out.transactionId).toBe(deriveTransactionId("hashABC", 1, 0));
 
-    const row = getTransaction(db, out.transactionId)!;
+    const row = findTransactionById(db, out.transactionId)!;
     expect(row.amount).toBe(13500); // 135.00 THB -> minor units
     expect(row.debit_account_id).toBe("expense:food");
     expect(countQuestions(db)).toBe(0);
@@ -82,7 +82,7 @@ describe("commitTransaction", () => {
     expect(out.raisedQuestions).toBe(0);
     expect(countQuestions(db)).toBe(0);
 
-    const row = getTransaction(db, out.transactionId)!;
+    const row = findTransactionById(db, out.transactionId)!;
     expect(row.debit_account_id).toBe("expense:subscriptions:news");
     const created = findAccountById(db, "expense:subscriptions:news")!;
     expect(created).toBeTruthy();
@@ -108,7 +108,7 @@ describe("commitTransaction", () => {
     const ctx = JSON.parse(qs[0].context_json!);
     expect(ctx.side).toBe("debit");
     expect(ctx.placeholder_id).toBe("expense:uncategorized");
-    expect(getTransaction(db, out.transactionId)!.debit_account_id).toBe("expense:uncategorized");
+    expect(findTransactionById(db, out.transactionId)!.debit_account_id).toBe("expense:uncategorized");
     expect(countTransactions(db)).toBe(1);
   });
 
@@ -123,7 +123,7 @@ describe("commitTransaction", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.raisedQuestions).toBe(1);
-    expect(getTransaction(db, out.transactionId)!.debit_account_id).toBe("expense:food");
+    expect(findTransactionById(db, out.transactionId)!.debit_account_id).toBe("expense:food");
 
     const qs = listQuestions(db);
     expect(qs).toHaveLength(1);
@@ -197,7 +197,7 @@ describe("commitTransaction", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
 
-    const row = getTransaction(db, out.transactionId)!;
+    const row = findTransactionById(db, out.transactionId)!;
     // The debit side was NOT collapsed onto the credit account: it landed on
     // a freshly created placeholder using the original requested id.
     expect(row.debit_account_id).toBe("asset:bank:ttb");
@@ -249,12 +249,12 @@ describe("commitLinkedTransactions", () => {
     expect(countTransactions(db)).toBe(3);
 
     // income:salary is credited by all three legs: 60000 THB gross.
-    const salary = getAccountBalancesFromTransactions(db).find((b) => b.id === "income:salary")!;
+    const salary = getAccountBalances(db).find((b) => b.id === "income:salary")!;
     expect(salary.credits_posted).toBe(6_000_000); // minor units
     expect(salary.balance).toBe(60000); // decimal, credit-normal
 
     for (const r of out.results) {
-      expect(getTransaction(db, r.id)?.group_id).toBe(out.group_id);
+      expect(findTransactionById(db, r.id)?.group_id).toBe(out.group_id);
     }
   });
 

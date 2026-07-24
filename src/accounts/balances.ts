@@ -36,7 +36,7 @@ const TRANSACTION_LEGS = `SELECT debit_account_id  AS acct, amount, date, 'D' AS
        SELECT credit_account_id AS acct, amount, date, 'C' AS side FROM transactions WHERE void_of IS NULL`;
 
 /** Per-account balance from the `transactions` table (normal-balance rule above). */
-export function getAccountBalancesFromTransactions(
+export function getAccountBalances(
   db: Database.Database,
   opts: { type?: AccountType; idOrParent?: string } = {},
 ): AccountBalanceMinor[] {
@@ -79,8 +79,8 @@ export function getAccountBalancesFromTransactions(
   });
 }
 
-export function getNetWorthFromTransactions(db: Database.Database): NetWorth {
-  const balances = getAccountBalancesFromTransactions(db);
+export function getNetWorth(db: Database.Database): NetWorth {
+  const balances = getAccountBalances(db);
   let assets = 0;
   let liabilities = 0;
   for (const b of balances) {
@@ -94,7 +94,7 @@ export function getNetWorthFromTransactions(db: Database.Database): NetWorth {
  * Income (credits − debits) and expenses (debits − credits) over a date range.
  * Grouped by (type, currency) so each currency converts with its own exponent.
  */
-export function getPeriodTotalsFromTransactions(
+export function getPeriodTotals(
   db: Database.Database,
   from: string,
   to: string,
@@ -120,7 +120,7 @@ export function getPeriodTotalsFromTransactions(
 }
 
 /** Subtree balance (root inclusive), grouped by (type, currency) for correct conversion. */
-export function getRollupBalanceFromTransactions(db: Database.Database, rootId: string): number {
+export function getRollupBalance(db: Database.Database, rootId: string): number {
   const subtree = getAccountSubtree(db, rootId);
   if (subtree.length === 0) return 0;
   const ids = subtree.map((a) => a.id);
@@ -149,7 +149,7 @@ export function getRollupBalanceFromTransactions(db: Database.Database, rootId: 
 
 const EQUITY_ADJUST_ID = "equity:adjustments";
 
-interface AdjustViaTransactionOpts {
+interface AdjustAccountBalanceOpts {
   accountId: string;
   /** New desired balance in the account's currency, decimal, natural sign. */
   targetAmount: number;
@@ -158,7 +158,7 @@ interface AdjustViaTransactionOpts {
   date?: string;
 }
 
-interface AdjustViaTransactionResult {
+interface AdjustAccountBalanceResult {
   /** Id of the balancing transaction, or null when already at target (no-op). */
   transactionId: string | null;
   /** target − current, decimal, natural sign. 0 on no-op. */
@@ -170,10 +170,10 @@ interface AdjustViaTransactionResult {
  * against `equity:adjustments`. Delta math is integer minor units (no float
  * drift); a zero delta is a no-op.
  */
-export function adjustAccountBalanceViaTransaction(
+export function adjustAccountBalance(
   db: Database.Database,
-  opts: AdjustViaTransactionOpts,
-): AdjustViaTransactionResult {
+  opts: AdjustAccountBalanceOpts,
+): AdjustAccountBalanceResult {
   const account = findAccountById(db, opts.accountId);
   if (!account) throw new Error(`Account "${opts.accountId}" not found.`);
 
@@ -184,7 +184,7 @@ export function adjustAccountBalanceViaTransaction(
 
   const currency = account.currency || config.displayCurrency;
   const currentMinor =
-    getAccountBalancesFromTransactions(db, { idOrParent: account.id }).find((b) => b.id === account.id)
+    getAccountBalances(db, { idOrParent: account.id }).find((b) => b.id === account.id)
       ?.balance_minor ?? 0;
   const targetMinor = toMinorUnits(target, currency);
   const deltaMinor = targetMinor - currentMinor;

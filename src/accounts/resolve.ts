@@ -8,7 +8,7 @@ import {
 import { TOP_LEVEL_TYPES, type AccountType } from "./types.js";
 import { findAccountsByFuzzyName } from "./matching.js";
 
-// Shared account/merchant resolution used by the commit pipeline (`commit-transaction.ts`).
+// Shared account/merchant resolution used by the commit pipeline (`commit.ts`).
 
 export interface ResolvedMerchant {
   readonly merchantId: string | null;

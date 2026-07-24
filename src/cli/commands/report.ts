@@ -18,9 +18,9 @@ async function showReport(opts: ShowReportOpts): Promise<void> {
     fail("USAGE", `--to must be an ISO date (YYYY-MM-DD), got "${opts.to}"`);
   }
 
-  const { getPeriodTotalsFromTransactions } = await import("../../accounts/balances.js");
+  const { getPeriodTotals } = await import("../../accounts/balances.js");
   const db = await openDb();
-  const totals = getPeriodTotalsFromTransactions(db, opts.from, opts.to);
+  const totals = getPeriodTotals(db, opts.from, opts.to);
   const result = {
     from: opts.from,
     to: opts.to,

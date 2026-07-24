@@ -21,7 +21,7 @@ import {
   listTransactions as queryTransactions,
   countTransactions,
   clampListLimit,
-  getTransaction,
+  findTransactionById,
   voidTransactionAsMirror,
   type BulkRecategorizeFilter,
   type UpdateTransactionMetaFields,
@@ -41,8 +41,8 @@ import {
   CURRENCY_MISMATCH_HINT,
   type TransactionCommitContext,
   type RawTransactionInput,
-} from "../../ingest/commit-transaction.js";
-import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup-transactions.js";
+} from "../../ingest/commit.js";
+import { autoMergeStrictDuplicateTransactions } from "../../ingest/dedup.js";
 import { fromMinorUnits, toMinorUnits } from "../../lib/money.js";
 import { getDisplayCurrency } from "../currency.js";
 import { newBatchId } from "../../lib/ids.js";
@@ -155,7 +155,7 @@ function emitClusters(clusters: TransactionCluster[], redact: boolean): void {
 
 async function showTransaction(id: string, opts: { redact?: boolean }): Promise<void> {
   const db = await openDb();
-  const detail = getTransaction(db, id);
+  const detail = findTransactionById(db, id);
   if (!detail) fail("NOT_FOUND", `transaction "${id}" not found`);
 
   const view: Record<string, unknown> = presentTransaction(detail);

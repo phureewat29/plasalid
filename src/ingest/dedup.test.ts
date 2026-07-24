@@ -4,7 +4,7 @@ import { migrate } from "../db/schema.js";
 import { createAccount } from "../accounts/accounts.js";
 import { upsertMerchant } from "../db/queries/merchants.js";
 import { insertTransaction, countTransactions, type TransactionInput } from "../db/queries/transactions.js";
-import { autoMergeStrictDuplicateTransactions } from "./dedup-transactions.js";
+import { autoMergeStrictDuplicateTransactions } from "./dedup.js";
 
 function freshDb(): Database.Database {
   const db = new Database(":memory:");
